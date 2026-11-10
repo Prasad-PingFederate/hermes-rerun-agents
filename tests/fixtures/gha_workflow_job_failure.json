@@ -1,0 +1,26 @@
+{
+  "action": "completed",
+  "workflow_job": {
+    "id": 42781081370,
+    "run_id": 42781081370,
+    "workflow_name": "Role-Based Stage Preview Pipeline",
+    "name": "rolebased-subscribers / Breakglass_Responder_Signup_Stage_Playwright.py",
+    "head_branch": "fix/financial-retirement-text",
+    "conclusion": "failure",
+    "status": "completed",
+    "steps": [
+      {
+        "name": "Set up Python 3.10",
+        "status": "completed",
+        "conclusion": "success",
+        "number": 1
+      },
+      {
+        "name": "Run tests/Breakglass_Responder_Signup_Stage_Playwright.py",
+        "status": "completed",
+        "conclusion": "failure",
+        "number": 2
+      }
+    ]
+  }
+}
