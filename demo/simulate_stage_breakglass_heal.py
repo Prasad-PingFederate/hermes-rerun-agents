@@ -1,6 +1,7 @@
 """
 End-to-End Demonstration:
 Autonomous Detection & Healing of a Stage-style Breakglass 'QR Expired' Failure.
+Enforces Pytest Preflight Check and Approval Write-Gate.
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from agents.test_healer_agent import TestHealerAgent
+from core.sandbox.runner import SandboxRunner
 from core.time_machine.engine import TimeMachineEngine
 
 
@@ -26,10 +28,16 @@ def run_demo():
     print("🚀 [DEMO] Hermes + Rerun Autonomous Bug Detection & Healing Demonstration")
     print("=" * 70)
 
+    # Preflight: Verify pytest is available before proceeding
+    if not SandboxRunner.is_pytest_available():
+        print("\n[SANDBOX] pytest is not installed in the active Python environment.")
+        print("Demo cannot run without pytest. Please install pytest (`pip install pytest`) and retry.\n")
+        sys.exit(1)
+
     # 1. Create a simulated sandbox workspace
     with tempfile.TemporaryDirectory() as temp_dir:
         workspace = Path(temp_dir).resolve()
-        print(f"[DEMO] 📁 Created isolated demo sandbox: {workspace}")
+        print(f"[DEMO] 📁 Created isolated demo workspace: {workspace}")
 
         # Initialize git repo in sandbox
         subprocess.run(["git", "init"], cwd=str(workspace), capture_output=True, check=True)
@@ -38,8 +46,7 @@ def run_demo():
 
         # 2. Create a test file representing the Breakglass Preview test BEFORE the fix
         test_file = workspace / "test_breakglass_responder.py"
-        initial_test_code = """
-import pytest
+        initial_test_code = """import pytest
 
 BASE_URL = "https://www.stage.b4igo.com"
 
@@ -90,14 +97,14 @@ def test_breakglass_responder_full_flow():
             "no registration link is ever rendered."
         )
 """
-        test_file.write_text(initial_test_code.strip(), encoding="utf-8")
+        test_file.write_text(initial_test_code.strip() + "\n", encoding="utf-8")
         subprocess.run(["git", "add", "."], cwd=str(workspace), check=True)
         subprocess.run(["git", "commit", "-m", "Initial test before fix"], cwd=str(workspace), check=True)
 
-        # 3. Instantiate the Autonomous Test Healer Agent in this sandbox
+        # 3. Instantiate the Autonomous Test Healer Agent in this workspace
         agent = TestHealerAgent(workspace_path=workspace)
 
-        # 4. Run the autonomous healing pipeline
+        # 4. Run the autonomous healing pipeline (executed in temporary sandbox copy)
         print("\n--- [STEP 1] Agent executes test and observes failure ---")
         result = agent.run_and_heal(
             test_file="test_breakglass_responder.py",
@@ -108,18 +115,26 @@ def test_breakglass_responder_full_flow():
         print("\n--- [STEP 2] Results Evaluation ---")
         print(f"Status:             {result['status']}")
         print(f"Baseline Snapshot:  {result.get('baseline_snapshot')}")
-        print(f"Verified Snapshot:  {result.get('verified_snapshot')}")
         print(f"Diagnosis Category: {result.get('diagnosis', {}).get('category')}")
 
-        # 5. Verify the healed code
-        healed_content = test_file.read_text(encoding="utf-8")
-        assert "owner_user_id" in healed_content, "Failed: owner_user_id was not captured"
-        assert "sessionStorage.setItem('responderSignupCallback'" in healed_content, "Failed: canonical fallback was not added"
         assert result["status"] == "HEALED_VERIFIED", f"Expected HEALED_VERIFIED, got {result['status']}"
 
-        print("\n--- [STEP 3] Testing Safety Rollback ---")
-        tm = TimeMachineEngine(workspace)
-        tm.restore_snapshot(result["baseline_snapshot"])
+        # Write Gate Verification: Caller workspace must remain untouched while fix is only proposed!
+        caller_content_pre_approval = test_file.read_text(encoding="utf-8")
+        assert "owner_user_id" not in caller_content_pre_approval, "Write gate failed: Caller workspace modified before approval!"
+        print("✅ Write Gate verified: Caller workspace untouched while fix is AWAITING_APPROVAL.")
+
+        # Human Approval Gate: Approve and promote verified fix
+        print("\n--- [STEP 3] Human Approval Gate: Approving and Promoting Fix ---")
+        agent.approve_task(result["task_id"])
+        healed_content = test_file.read_text(encoding="utf-8")
+        assert "owner_user_id" in healed_content, "Failed: owner_user_id was not written on approval"
+        assert "sessionStorage.setItem('responderSignupCallback'" in healed_content, "Failed: canonical fallback was not written on approval"
+        print("✅ Approval Gate verified: Verified fix successfully written to workspace.")
+
+        # Safety Rollback Verification
+        print("\n--- [STEP 4] Testing Safety Rollback ---")
+        agent.rollback_task(result["task_id"])
         rolled_back_content = test_file.read_text(encoding="utf-8")
         assert "owner_user_id" not in rolled_back_content, "Failed: rollback did not restore original code"
         print("✅ Safety Rollback verified: File reverted 100% to baseline state with zero code damage.")

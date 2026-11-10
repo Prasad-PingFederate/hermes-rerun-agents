@@ -26,6 +26,7 @@ playwright-report/
 
 # Hermes Time Machine Snapshots & Internal State
 .tm_snapshots/
+.rerun_tasks/
 .hermes/
 
 # IDE & OS

@@ -1,30 +1,9 @@
-# ==============================================================================
-# Hermes + Rerun Autonomous AI Agent Platform Requirements
-# ==============================================================================
-
-# Core AI & LLM Engine (Free-tier Google Gemini Flash & Ollama/OpenAI API)
-google-generativeai>=0.8.0
-openai>=1.40.0
-requests>=2.31.0
-httpx>=0.27.0
-
-# Agent Orchestration, Webhooks & Rerun Bridge
+# Core Framework & Server
 fastapi>=0.112.0
 uvicorn[standard]>=0.30.0
 pydantic>=2.8.0
 python-dotenv>=1.0.1
-rich>=13.7.1
+requests>=2.31.0
 
-# Browser Automation & Testing
-playwright>=1.46.0
-pytest>=8.3.0
-pytest-playwright>=0.5.0
-pytest-asyncio>=0.23.0
-pytest-html>=4.1.0
-pytest-xdist>=3.6.0
-faker>=27.0.0
-
-# Time Machine Git & Workspace Tracking
-GitPython>=3.1.43
-watchdog>=4.0.1
-pillow>=10.4.0
+# Testing Harness
+pytest>=8.0.0
