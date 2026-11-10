@@ -1,5 +1,6 @@
 """
 Hermes Time Machine Engine: Deterministic Workspace Snapshotting, Surgical Restore & Rollback
+Safe, non-destructive file-tree snapshots with zero git reset --hard or git clean.
 """
 
 from __future__ import annotations
@@ -28,12 +29,20 @@ class Snapshot:
 
 
 class TimeMachineEngine:
-    """Manages workspace snapshots, surgical per-file restores, and rollback safety nets."""
+    """Manages workspace snapshots, surgical per-file restores, and rollback safety nets without destructive git resets."""
 
-    def __init__(self, workspace_path: Optional[Path | str] = None):
+    def __init__(self, workspace_path: Optional[Path | str] = None, require_git: bool = True):
         self.workspace_path = (
             Path(workspace_path).resolve() if workspace_path else Path.cwd().resolve()
         )
+        if not self.workspace_path.is_dir():
+            raise ValueError(f"Workspace path does not exist or is not a directory: {self.workspace_path}")
+
+        if require_git:
+            git_dir = self.workspace_path / ".git"
+            if not git_dir.exists():
+                raise ValueError(f"Workspace is not a valid git repository: {self.workspace_path}")
+
         self.tm_dir = self.workspace_path / ".tm_snapshots"
         self.ledger_file = self.tm_dir / "ledger.json"
         self.snapshots_store = self.tm_dir / "store"
@@ -66,13 +75,33 @@ class TimeMachineEngine:
             check=False,
         )
 
+    def _get_project_files(self) -> List[str]:
+        """List all tracked and non-ignored untracked project files."""
+        tracked_proc = self._run_git(["ls-files"])
+        tracked = [f.strip() for f in tracked_proc.stdout.splitlines() if f.strip()]
+
+        untracked_proc = self._run_git(["ls-files", "--others", "--exclude-standard"])
+        untracked = [f.strip() for f in untracked_proc.stdout.splitlines() if f.strip()]
+
+        all_files: List[str] = []
+        for rel in sorted(set(tracked + untracked)):
+            normalized = rel.replace("\\", "/")
+            if (
+                normalized.startswith(".tm_snapshots/")
+                or normalized.startswith(".rerun_tasks/")
+                or normalized.startswith(".git/")
+            ):
+                continue
+            all_files.append(rel)
+        return all_files
+
     def create_snapshot(
         self,
         label: str,
         description: str = "",
         metadata: Optional[Dict[str, Any]] = None,
     ) -> Snapshot:
-        """Create a deterministic snapshot of the workspace."""
+        """Create a deterministic snapshot of all project files without modifying git index."""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:19]
         sanitized_label = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in label)
         snap_id = f"snap_{timestamp}_{sanitized_label}"
@@ -84,13 +113,8 @@ class TimeMachineEngine:
         branch_proc = self._run_git(["branch", "--show-current"])
         branch = branch_proc.stdout.strip() if branch_proc.returncode == 0 else "detached"
 
-        # List modified/staged/untracked files
-        status_proc = self._run_git(["status", "--porcelain"])
-        modified_files = []
-        if status_proc.returncode == 0 and status_proc.stdout:
-            for line in status_proc.stdout.splitlines():
-                if len(line) > 3:
-                    modified_files.append(line[3:].strip())
+        # Discover all project files (tracked + non-ignored untracked)
+        files_to_save = self._get_project_files()
 
         # Capture working tree and staged diffs
         diff_proc = self._run_git(["diff", "HEAD"])
@@ -102,16 +126,19 @@ class TimeMachineEngine:
             if diff_proc.stdout:
                 f.write(diff_proc.stdout)
 
-        # Store backup copies of currently modified files for surgical restores
-        snap_backup_dir = self.snapshots_store / snap_id
-        snap_backup_dir.mkdir(parents=True, exist_ok=True)
-        for rel_file in modified_files:
+        # Store full file copies in isolated snapshot store
+        snap_tree_dir = self.snapshots_store / snap_id / "tree"
+        snap_tree_dir.mkdir(parents=True, exist_ok=True)
+        saved_files: List[str] = []
+
+        for rel_file in files_to_save:
             src_f = self.workspace_path / rel_file
             if src_f.is_file():
-                dest_f = snap_backup_dir / rel_file
+                dest_f = snap_tree_dir / rel_file
                 dest_f.parent.mkdir(parents=True, exist_ok=True)
                 try:
                     shutil.copy2(src_f, dest_f)
+                    saved_files.append(rel_file)
                 except Exception:
                     pass
 
@@ -123,7 +150,7 @@ class TimeMachineEngine:
             branch=branch,
             description=description,
             metadata=metadata or {},
-            files_tracked=modified_files,
+            files_tracked=saved_files,
         )
 
         ledger = self._read_ledger()
@@ -133,6 +160,7 @@ class TimeMachineEngine:
             "snapshot_id": snap_id,
             "timestamp": snapshot.created_at,
             "label": label,
+            "file_count": len(saved_files),
         })
         self._write_ledger(ledger)
 
@@ -152,72 +180,114 @@ class TimeMachineEngine:
                 return Snapshot(**item)
         return None
 
-    def restore_snapshot(self, snapshot_id: str, create_safety_snapshot: bool = True) -> bool:
-        """Roll back workspace to a specific snapshot with safety-snapshot protection."""
+    def restore_snapshot(
+        self,
+        snapshot_id: str,
+        create_safety_snapshot: bool = True,
+        dry_run: bool = False,
+    ) -> Dict[str, Any]:
+        """Roll back workspace to a specific snapshot safely.
+
+        Restores all files present in the snapshot.
+        Does NOT execute 'git reset --hard' or 'git clean', so unrelated untracked
+        files created after the snapshot survive intact.
+        """
         target = self.get_snapshot(snapshot_id)
         if not target:
             raise ValueError(f"Snapshot not found: {snapshot_id}")
 
+        snap_tree_dir = self.snapshots_store / snapshot_id / "tree"
+        if not snap_tree_dir.is_dir():
+            # Check legacy location
+            snap_tree_dir = self.snapshots_store / snapshot_id
+            if not snap_tree_dir.is_dir():
+                raise FileNotFoundError(f"Snapshot data store missing for {snapshot_id}")
+
+        # Find all files in the snapshot store
+        files_to_restore = []
+        for root, _, files in os.walk(snap_tree_dir):
+            for f in files:
+                backup_f = Path(root) / f
+                rel_p = str(backup_f.relative_to(snap_tree_dir)).replace("\\", "/")
+                files_to_restore.append(rel_p)
+
+        if dry_run:
+            return {
+                "dry_run": True,
+                "snapshot_id": snapshot_id,
+                "files_to_restore": files_to_restore,
+                "safety_snapshot_would_be_created": create_safety_snapshot,
+            }
+
         # Safety-net: snapshot current state before rolling back ("rollback-of-a-rollback")
+        safety_snap_id = None
         if create_safety_snapshot:
             safety_label = f"pre_rollback_from_{target.label}"
-            self.create_snapshot(
+            safety_snap = self.create_snapshot(
                 label=safety_label,
                 description=f"Automated safety snapshot taken immediately before rolling back to {snapshot_id}",
                 metadata={"target_restored": snapshot_id},
             )
+            safety_snap_id = safety_snap.id
 
-        # Reset unstaged and staged changes back to target commit, protecting snapshots
-        if target.commit_hash != "unknown":
-            self._run_git(["reset", "--hard", target.commit_hash])
-            self._run_git(["clean", "-fd", "-e", ".tm_snapshots", "-e", ".rerun_tasks"])
-
-        # If full file backups exist, restore them
-        snap_backup_dir = self.snapshots_store / snapshot_id
-        if snap_backup_dir.is_dir():
-            for root, _, files in os.walk(snap_backup_dir):
-                for f in files:
-                    backup_f = Path(root) / f
-                    rel_p = backup_f.relative_to(snap_backup_dir)
-                    target_dest = self.workspace_path / rel_p
-                    target_dest.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(backup_f, target_dest)
-        else:
-            # Fallback to patch apply
-            patch_file = self.snapshots_store / f"{snapshot_id}.patch"
-            if patch_file.exists() and patch_file.stat().st_size > 0:
-                self._run_git(["apply", "--whitespace=nowarn", str(patch_file)])
+        # Restore all snapshot files by copying from store (safe file overwrite)
+        restored_files = []
+        for rel_file in files_to_restore:
+            source_file = snap_tree_dir / rel_file
+            dest_file = self.workspace_path / rel_file
+            dest_file.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source_file, dest_file)
+            restored_files.append(rel_file)
 
         # Log restoration in history
         ledger = self._read_ledger()
         ledger["history"].append({
             "action": "restore",
             "snapshot_id": snapshot_id,
+            "safety_snapshot_id": safety_snap_id,
             "timestamp": datetime.now().isoformat(),
+            "restored_count": len(restored_files),
         })
         self._write_ledger(ledger)
 
-        return True
+        return {
+            "success": True,
+            "snapshot_id": snapshot_id,
+            "safety_snapshot_id": safety_snap_id,
+            "restored_files": restored_files,
+        }
 
-    def restore_file(self, snapshot_id: str, relative_file_path: str) -> bool:
+    def restore_file(
+        self,
+        snapshot_id: str,
+        relative_file_path: str,
+        dry_run: bool = False,
+    ) -> Dict[str, Any]:
         """Surgically restore only a single file to its snapshot state without touching other files."""
         target = self.get_snapshot(snapshot_id)
         if not target:
             raise ValueError(f"Snapshot not found: {snapshot_id}")
 
-        snap_backup_dir = self.snapshots_store / snapshot_id
-        source_backup = snap_backup_dir / relative_file_path
+        snap_tree_dir = self.snapshots_store / snapshot_id / "tree"
+        source_backup = snap_tree_dir / relative_file_path
+        if not source_backup.is_file():
+            # Legacy fallback
+            source_backup = self.snapshots_store / snapshot_id / relative_file_path
+            if not source_backup.is_file():
+                raise FileNotFoundError(f"File {relative_file_path} not found in snapshot {snapshot_id}")
+
         target_path = self.workspace_path / relative_file_path
 
-        if source_backup.is_file():
-            target_path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source_backup, target_path)
-        else:
-            # If not in backups, restore from commit
-            if target.commit_hash != "unknown":
-                res = self._run_git(["checkout", target.commit_hash, "--", relative_file_path])
-                if res.returncode != 0:
-                    raise FileNotFoundError(f"File {relative_file_path} not found in snapshot {snapshot_id}")
+        if dry_run:
+            return {
+                "dry_run": True,
+                "snapshot_id": snapshot_id,
+                "file": relative_file_path,
+                "target_exists": target_path.exists(),
+            }
+
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source_backup, target_path)
 
         ledger = self._read_ledger()
         ledger["history"].append({
@@ -227,7 +297,12 @@ class TimeMachineEngine:
             "timestamp": datetime.now().isoformat(),
         })
         self._write_ledger(ledger)
-        return True
+
+        return {
+            "success": True,
+            "snapshot_id": snapshot_id,
+            "file": relative_file_path,
+        }
 
     def get_diff(self, snapshot_id_a: str, snapshot_id_b: Optional[str] = None) -> str:
         """Get diff between two snapshots or between a snapshot and the current working tree."""
