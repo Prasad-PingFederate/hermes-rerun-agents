@@ -1,19 +1,18 @@
 """
 Preflight Syntax Guard: Enforces strict Python 3.10 syntax compatibility across the repository.
+Detects backslashes inside f-string expressions without relying on Python 3.12+ tokenize.FSTRING_* tokens.
 """
 
 from __future__ import annotations
 
 import ast
-import io
 import os
 import sys
-import tokenize
 from pathlib import Path
 from typing import List, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SKIP_DIRS = {".git", ".venv", "venv", "__pycache__", ".pytest_cache", ".tm_snapshots", "reports"}
+SKIP_DIRS = {".git", ".venv", "venv", "__pycache__", ".pytest_cache", ".tm_snapshots", "reports", ".rerun_tasks"}
 
 
 def check_py310_compatibility(file_path: Path) -> List[Tuple[int, str]]:
@@ -23,27 +22,25 @@ def check_py310_compatibility(file_path: Path) -> List[Tuple[int, str]]:
 
     # 1. Standard ast parse with feature_version=(3, 10)
     try:
-        ast.parse(src, feature_version=(3, 10))
+        tree = ast.parse(src, feature_version=(3, 10))
     except SyntaxError as e:
         errors.append((e.lineno or 0, f"SyntaxError under Python 3.10: {e.msg}"))
         return errors
 
-    # 2. Tokenize check for PEP 701 backslash in f-strings
-    stack = []
-    try:
-        tokens = tokenize.generate_tokens(io.StringIO(src).readline)
-        for t in tokens:
-            if t.type == tokenize.FSTRING_START:
-                q = t.string.lstrip("fFrRbBuU")
-                stack.append(q[:1])
-            elif t.type == tokenize.FSTRING_END:
-                if stack:
-                    stack.pop()
-            elif stack and t.type != tokenize.FSTRING_MIDDLE:
-                if "\\" in t.string:
-                    errors.append((t.start[0], "Backslash inside f-string expression (disallowed in Python 3.10)"))
-    except Exception:
-        pass
+    # 2. Walk AST to detect PEP 701 backslashes inside f-string expressions on any Python runtime
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FormattedValue):
+            segment = ast.get_source_segment(src, node.value)
+            if segment and "\\" in segment:
+                errors.append(
+                    (node.lineno, "Backslash inside f-string expression (disallowed in Python 3.10)")
+                )
+            if node.format_spec:
+                spec_segment = ast.get_source_segment(src, node.format_spec)
+                if spec_segment and "\\" in spec_segment:
+                    errors.append(
+                        (node.lineno, "Backslash inside f-string format_spec (disallowed in Python 3.10)")
+                    )
 
     return errors
 

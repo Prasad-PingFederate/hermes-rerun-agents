@@ -1,0 +1,6 @@
+# Fixture with an f-string expression containing a backslash (illegal in Python 3.10)
+# This file must be caught by scripts/syntax_guard.py.
+
+lines = ["alpha", "beta"]
+report = f"Summary: {'\n'.join(lines)}"
+print(report)
