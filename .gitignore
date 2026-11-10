@@ -1,0 +1,35 @@
+# Python & Environments
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+env/
+venv/
+ENV/
+
+# Secrets & Environment Configurations
+.env
+.env.local
+*.key
+
+# Pytest & Automation Artifacts
+.pytest_cache/
+reports/
+test-results/
+playwright-report/
+*.png
+*.jpg
+*.jpeg
+*.zip
+
+# Hermes Time Machine Snapshots & Internal State
+.tm_snapshots/
+.hermes/
+
+# IDE & OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
