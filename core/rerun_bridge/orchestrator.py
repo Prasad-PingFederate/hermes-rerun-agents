@@ -48,7 +48,8 @@ class RerunOrchestrator:
             json.dump({"tasks": tasks}, f, indent=2, ensure_ascii=False)
 
     def create_task(self, title: str, details: Dict[str, Any], approval_needed: bool = True) -> AgentTask:
-        task_id = f"task_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{len(self._read_tasks()) + 1}"
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        task_id = f"task_{timestamp}_{len(self._read_tasks()) + 1}"
         task = AgentTask(
             id=task_id,
             title=title,
@@ -62,14 +63,29 @@ class RerunOrchestrator:
         self._write_tasks(tasks)
         return task
 
-    def update_task_status(self, task_id: str, status: str, proposed_patch: Optional[str] = None) -> bool:
+    def get_task(self, task_id: str) -> Optional[AgentTask]:
+        tasks = self._read_tasks()
+        for t in tasks:
+            if t.get("id") == task_id:
+                return AgentTask(**t)
+        return None
+
+    def update_task_status(
+        self,
+        task_id: str,
+        status: str,
+        proposed_patch: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> bool:
         tasks = self._read_tasks()
         found = False
         for t in tasks:
             if t["id"] == task_id:
                 t["status"] = status
-                if proposed_patch:
+                if proposed_patch is not None:
                     t["proposed_patch"] = proposed_patch
+                if details:
+                    t.setdefault("details", {}).update(details)
                 found = True
                 break
         if found:

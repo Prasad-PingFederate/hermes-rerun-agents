@@ -1,11 +1,13 @@
 """
 Multimodal Failure Diagnostician & Healer Engine
 Supports Google Gemini Flash (Free Tier) and Local Ollama Models with Offline Heuristic Fallbacks.
+Enforces JSON responses with unified diff file changes.
 """
 
 from __future__ import annotations
 
 import base64
+import json
 import os
 import re
 from pathlib import Path
@@ -44,7 +46,7 @@ class GeminiFlashHealer:
         console_errors: Optional[List[str]] = None,
         recent_diff: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Diagnose failure across multimodal inputs and propose minimal patch."""
+        """Diagnose failure across multimodal inputs and propose minimal patch in JSON format."""
         # Check domain-specific patterns first (e.g. Breakglass QR Expired preview bug)
         specialized_analysis = self._detect_domain_patterns(
             test_name=test_name,
@@ -105,7 +107,7 @@ class GeminiFlashHealer:
         combined_text = f"{test_name} {error_message} {dom_snippet} {traceback_str}".lower()
 
         # 1. Breakglass / Responder Preview SIWE Handshake ("QR Expired" failure)
-        if "click here" in combined_text and ("breakglass" in combined_text or "qr expired" in combined_text or "infonote" in combined_text):
+        if "click here" in combined_text and ("breakglass" in combined_text or "qr expired" in combined_text or "responder" in combined_text):
             return {
                 "test_name": test_name,
                 "engine": "Domain Rule Engine (Breakglass Skill)",
@@ -121,16 +123,8 @@ class GeminiFlashHealer:
                     "f\"{BASE_URL}/register?type=responder&userId={owner_user_id}\" "
                     "and store 'responderSignupCallback' in sessionStorage."
                 ),
-                "proposed_patch": (
-                    "# Auto-detect QR Expired\n"
-                    "if _is_visible(resp_page.locator(\"text='QR Expired'\").first, 3000):\n"
-                    "    resp_page.reload(wait_until='domcontentloaded')\n\n"
-                    "# Direct Canonical Fallback\n"
-                    "elif owner_user_id:\n"
-                    "    reg_target = f\"{BASE_URL}/register?type=responder&userId={owner_user_id}\"\n"
-                    "    resp_page.evaluate('(target) => sessionStorage.setItem(\"responderSignupCallback\", target)', resp_page.url)\n"
-                    "    resp_page.goto(reg_target, wait_until='domcontentloaded')\n"
-                ),
+                "files": [],
+                "use_breakglass_skill": True,
                 "ai_powered": True,
             }
 
@@ -142,7 +136,7 @@ class GeminiFlashHealer:
                 "category": "Python 3.10 Syntax Incompatibility",
                 "root_cause": "F-string expression part contains a backslash, which is unsupported on Python 3.10 (PEP 701 is 3.12+ only).",
                 "remediation": "Move backslashes or formatting out of f-strings, or use a plain string template with .replace().",
-                "proposed_patch": "template = '...\\n...'.replace('{placeholder}', value)",
+                "files": [],
                 "ai_powered": True,
             }
 
@@ -163,8 +157,8 @@ class GeminiFlashHealer:
         net_str = nl.join(network_errors[:5]) if network_errors else "None"
         con_str = nl.join(console_errors[:5]) if console_errors else "None"
 
-        return f"""You are an expert Playwright automation engineer and test self-healer.
-Analyze the following test failure and provide a root cause diagnosis and resilient fix.
+        return f"""You are an expert Playwright automation engineer and automated test healer.
+Analyze the following test failure and propose an exact code fix.
 
 ### Test Name:
 `{test_name}`
@@ -198,12 +192,40 @@ Analyze the following test failure and provide a root cause diagnosis and resili
 {recent_diff}
 ```
 
-Return:
-1. Root Cause Summary
-2. Category: [Locator Drift, Modal Obstruction, Network/Handshake Lag, State Desync, App Bug, Syntax Error]
-3. Resilient Playwright Remediation
-4. Replacement Code Patch
+CRITICAL INSTRUCTION:
+You MUST respond with a valid JSON object ONLY. No conversational introduction or markdown outside the JSON.
+Follow this exact JSON structure:
+{{
+  "category": "<Locator Drift | Modal Obstruction | Network Lag | State Desync | App Bug>",
+  "root_cause": "<1-2 sentence explanation of why the test failed>",
+  "files": [
+    {{
+      "path": "{test_name}",
+      "unified_diff": "<the exact code patch or corrected content to apply>"
+    }}
+  ]
+}}
 """
+
+    def _parse_json_response(self, raw_text: str) -> Optional[Dict[str, Any]]:
+        """Extract and parse JSON object from model output."""
+        text = raw_text.strip()
+        if "```json" in text:
+            match = re.search(r"```json\s*(.*?)\s*```", text, re.DOTALL)
+            if match:
+                text = match.group(1).strip()
+        elif "```" in text:
+            match = re.search(r"```\s*(.*?)\s*```", text, re.DOTALL)
+            if match:
+                text = match.group(1).strip()
+
+        try:
+            data = json.loads(text)
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            pass
+        return None
 
     def _diagnose_with_gemini(
         self,
@@ -259,11 +281,19 @@ Return:
                     candidates = data.get("candidates", [])
                     if candidates:
                         text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "")
-                        if text:
+                        parsed = self._parse_json_response(text)
+                        if parsed:
+                            parsed["test_name"] = test_name
+                            parsed["engine"] = f"Google {model} (Multimodal)"
+                            parsed["ai_powered"] = True
+                            return parsed
+                        elif text:
                             return {
                                 "test_name": test_name,
                                 "engine": f"Google {model} (Multimodal)",
-                                "analysis": text,
+                                "category": "AI Diagnosed",
+                                "root_cause": text[:300],
+                                "files": [],
                                 "ai_powered": True,
                             }
             except Exception:
@@ -296,7 +326,7 @@ Return:
         payload = {
             "model": self.ollama_model,
             "messages": [
-                {"role": "system", "content": "You are an automated Playwright testing diagnostician."},
+                {"role": "system", "content": "You are an automated Playwright testing diagnostician. Always reply with valid JSON only."},
                 {"role": "user", "content": prompt},
             ],
             "temperature": 0.2,
@@ -307,13 +337,12 @@ Return:
             if resp.status_code == 200:
                 res_data = resp.json()
                 content = res_data.get("choices", [{}])[0].get("message", {}).get("content", "")
-                if content:
-                    return {
-                        "test_name": test_name,
-                        "engine": f"Local Ollama ({self.ollama_model})",
-                        "analysis": content,
-                        "ai_powered": True,
-                    }
+                parsed = self._parse_json_response(content)
+                if parsed:
+                    parsed["test_name"] = test_name
+                    parsed["engine"] = f"Local Ollama ({self.ollama_model})"
+                    parsed["ai_powered"] = True
+                    return parsed
         except Exception:
             pass
         return None
@@ -326,22 +355,28 @@ Return:
         dom_snippet: str,
     ) -> Dict[str, Any]:
         category = "Unknown / General Failure"
+        root_cause = "Inspect failure logs and DOM snapshot."
         remediation = "Inspect failure logs and DOM snapshot."
 
         if "Timeout" in error_message or "waiting for locator" in error_message:
             category = "Locator Drift / Timing Race"
+            root_cause = "Playwright exceeded timeout waiting for dynamic locator to become visible."
             remediation = "Replace fixed wait with expect(locator).to_be_visible(timeout=15000)."
         elif "AssertionError" in error_message:
             category = "Assertion Mismatch"
+            root_cause = "Assertion condition failed against current page state."
             remediation = "Verify API payload vs DOM representation."
         elif "strict mode violation" in error_message:
             category = "Ambiguous Multiple Locators"
+            root_cause = "Selector resolved to multiple elements in strict mode."
             remediation = "Use .first, exact=True, or filter(has_text=...) to disambiguate target."
 
         return {
             "test_name": test_name,
             "engine": "Heuristic Engine (Free Tier)",
             "category": category,
+            "root_cause": root_cause,
             "remediation": remediation,
+            "files": [],
             "ai_powered": False,
         }

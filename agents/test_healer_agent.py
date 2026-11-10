@@ -1,9 +1,12 @@
 """
 Autonomous Test Failure Healer Agent with Time Machine Safety Guardrail
+Executes tests in isolated sandbox copies to enforce human approval before modifying caller workspace.
 """
 
 from __future__ import annotations
 
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -36,9 +39,20 @@ class TestHealerAgent:
         auto_apply_fix: bool = True,
     ) -> Dict[str, Any]:
         """Execute a test; if it fails, diagnose and safely attempt remediation with rollback protection."""
+        # Preflight: Verify pytest is available
+        if not self.sandbox.is_pytest_available():
+            err_msg = "[SANDBOX] pytest is not installed in the active Python environment."
+            print(f"[AGENT] ⚠️ {err_msg}")
+            return {
+                "status": "TOOL_MISSING",
+                "error": err_msg,
+                "is_tool_missing": True,
+            }
+
+        stem = Path(test_file).stem
         print(f"[AGENT] 📸 Taking baseline Time Machine snapshot before running: {test_file}")
         baseline_snap = self.tm.create_snapshot(
-            label=f"pre_test_{Path(test_file).stem}",
+            label=f"pre_test_{stem}",
             description=f"Baseline state before executing {test_file}",
         )
 
@@ -46,13 +60,18 @@ class TestHealerAgent:
             title=f"Test & Heal: {test_file}",
             details={"test_file": test_file, "baseline_snapshot": baseline_snap.id},
         )
+        self.orchestrator.update_task_status(task.id, "RUNNING")
 
-        # 1. Execute test in sandbox
-        print(f"[AGENT] 🧪 Executing test in sandbox harness: {test_file} ...")
-        res1 = self.sandbox.execute_test(test_file)
+        # Create isolated workspace copy for safe execution and patching
+        sandbox_dir = self.sandbox.create_isolated_copy()
+
+        # 1. Execute initial test inside isolated sandbox copy
+        print(f"[AGENT] 🧪 Executing test in sandbox copy: {test_file} ...")
+        res1 = self.sandbox.execute_test(test_file, target_dir=sandbox_dir)
 
         if res1.passed:
             print("[AGENT] ✅ Test passed cleanly on first attempt.")
+            shutil.rmtree(sandbox_dir, ignore_errors=True)
             self.orchestrator.update_task_status(task.id, "COMPLETED")
             return {
                 "status": "PASSED",
@@ -61,21 +80,23 @@ class TestHealerAgent:
                 "duration": res1.duration_seconds,
             }
 
-        # 2. Test failed - extract context & diagnose
+        # 2. Test failed - extract failure context
         print(f"[AGENT] ❌ Test failed (code {res1.returncode}). Initiating Failure Diagnosis...")
-        target_path = self.workspace_path / test_file
+        target_in_sandbox = sandbox_dir / test_file
         code_snippet = ""
-        if target_path.is_file():
+        if target_in_sandbox.is_file():
             try:
-                code_snippet = target_path.read_text(encoding="utf-8", errors="replace")[:1500]
+                code_snippet = target_in_sandbox.read_text(encoding="utf-8", errors="replace")[:1500]
             except Exception:
                 pass
 
-        # Check domain-specific skill first (e.g. Breakglass QR Expired preview bug)
         applied_skill = False
+        diagnosis: Dict[str, Any] = {}
+
+        # Check domain-specific skill first (e.g. Breakglass QR Expired preview bug)
         if BreakglassResponderHealerSkill.is_matching_failure(test_file, res1.stderr or res1.stdout, res1.stdout):
-            print("[AGENT] 💡 Breakglass Preview Handshake / QR Expired pattern detected! Applying specialized skill...")
-            ok, msg = BreakglassResponderHealerSkill.apply_recovery_patch(target_path)
+            print("[AGENT] 💡 Breakglass Preview Handshake / QR Expired pattern detected! Applying specialized skill in sandbox copy...")
+            ok, msg = BreakglassResponderHealerSkill.apply_recovery_patch(target_in_sandbox)
             applied_skill = ok
             diagnosis = {
                 "engine": "Breakglass Skill",
@@ -83,13 +104,25 @@ class TestHealerAgent:
                 "root_cause": msg,
             }
         else:
+            err_snip = res1.stderr or res1.stdout[-400:]
             diagnosis = self.healer.diagnose_failure(
                 test_name=test_file,
-                error_message=res1.stderr or res1.stdout[-400:],
+                error_message=err_snip,
                 traceback_str=res1.stdout,
                 code_snippet=code_snippet,
                 screenshot_path=res1.screenshot_path,
             )
+            # If model returned files with diffs, apply them inside the sandbox copy
+            if auto_apply_fix and diagnosis.get("files"):
+                applied_any = False
+                for f_entry in diagnosis["files"]:
+                    p_path = f_entry.get("path") or test_file
+                    diff_text = f_entry.get("unified_diff")
+                    if diff_text:
+                        ok, _ = self.sandbox.apply_patch_in_copy(sandbox_dir, p_path, diff_text)
+                        if ok:
+                            applied_any = True
+                applied_skill = applied_any
 
         print("\n" + "=" * 60)
         print("🤖 [AI DIAGNOSIS RESULT]")
@@ -101,41 +134,116 @@ class TestHealerAgent:
             print(f"Root Cause: {diagnosis.get('root_cause')}")
         print("=" * 60 + "\n")
 
-        # 3. If a patch was applied, re-verify in sandbox
+        # 3. If a patch was applied, re-verify in sandbox copy
         if applied_skill:
-            print("[AGENT] 🔄 Re-executing test in sandbox to verify patch...")
-            res2 = self.sandbox.execute_test(test_file)
+            print("[AGENT] 🔄 Re-executing test in sandbox copy to verify patch...")
+            res2 = self.sandbox.execute_test(test_file, target_dir=sandbox_dir)
             if res2.passed:
-                print("[AGENT] 🏆 Patch verified! Test is now PASSING 100%.")
-                verified_snap = self.tm.create_snapshot(
-                    label=f"verified_{Path(test_file).stem}",
-                    description=f"Verified working fix for {test_file}",
+                print("[AGENT] 🏆 Patch verified! Test passed in sandbox copy. Holding for Human Approval.")
+                diff_proc = subprocess.run(
+                    ["git", "diff", "HEAD"],
+                    cwd=str(sandbox_dir),
+                    capture_output=True,
+                    text=True,
                 )
+                patch_content = diff_proc.stdout
+
                 self.orchestrator.update_task_status(
                     task.id,
                     "AWAITING_APPROVAL",
-                    proposed_patch=self.tm.get_diff(baseline_snap.id),
+                    proposed_patch=patch_content,
+                    details={
+                        "test_file": test_file,
+                        "baseline_snapshot": baseline_snap.id,
+                        "sandbox_copy": str(sandbox_dir),
+                        "diagnosis": diagnosis,
+                    },
                 )
                 return {
                     "status": "HEALED_VERIFIED",
                     "baseline_snapshot": baseline_snap.id,
-                    "verified_snapshot": verified_snap.id,
                     "task_id": task.id,
                     "diagnosis": diagnosis,
+                    "proposed_patch": patch_content,
+                    "sandbox_copy": str(sandbox_dir),
                 }
             else:
                 print(f"[AGENT] ⚠️ Patch did not resolve the failure. Return code {res2.returncode}.\nOutput:\n{res2.stdout}\n{res2.stderr}")
 
-        # 4. Safe rollback if still failing
+        # Discard sandbox copy on failure
+        shutil.rmtree(sandbox_dir, ignore_errors=True)
+        self.orchestrator.update_task_status(task.id, "FAILED")
+
+        # Safe rollback check if caller workspace had changes
         if auto_rollback_on_failure:
-            print(f"[AGENT] 🛡️ Safety Guardrail Triggered: Rolling back workspace to {baseline_snap.id}...")
+            print(f"[AGENT] 🛡️ Safety Guardrail Triggered: Ensuring workspace remains at baseline {baseline_snap.id}...")
             self.tm.restore_snapshot(baseline_snap.id)
-            print("[AGENT] ✅ Workspace restored cleanly. Zero code damage.")
-            self.orchestrator.update_task_status(task.id, "ROLLED_BACK")
 
         return {
             "status": "FAILED_DIAGNOSED",
             "snapshot_id": baseline_snap.id,
             "task_id": task.id,
             "diagnosis": diagnosis,
+        }
+
+    def approve_task(self, task_id: str) -> Dict[str, Any]:
+        """Human approval write-gate: Promotes verified fix to caller workspace and marks COMPLETED."""
+        task = self.orchestrator.get_task(task_id)
+        if not task:
+            raise ValueError(f"Task not found: {task_id}")
+        if task.status != "AWAITING_APPROVAL":
+            raise ValueError(f"Cannot approve task in state '{task.status}'. Task must be in AWAITING_APPROVAL.")
+
+        sandbox_copy = task.details.get("sandbox_copy")
+        promoted = False
+        if sandbox_copy and Path(sandbox_copy).is_dir():
+            self.sandbox.promote_copy(Path(sandbox_copy))
+            promoted = True
+            shutil.rmtree(sandbox_copy, ignore_errors=True)
+        elif task.proposed_patch:
+            patch_file = self.workspace_path / "_temp_approval.patch"
+            patch_file.write_text(task.proposed_patch, encoding="utf-8")
+            res = subprocess.run(
+                ["git", "apply", "--whitespace=nowarn", str(patch_file)],
+                cwd=str(self.workspace_path),
+                capture_output=True,
+                text=True,
+            )
+            try:
+                patch_file.unlink(missing_ok=True)
+            except Exception:
+                pass
+            promoted = (res.returncode == 0)
+
+        approved_snap = self.tm.create_snapshot(
+            label=f"approved_{task_id}",
+            description=f"Approved fix for task {task_id}",
+        )
+        self.orchestrator.update_task_status(task_id, "COMPLETED")
+        return {
+            "status": "COMPLETED",
+            "task_id": task_id,
+            "promoted": promoted,
+            "approved_snapshot": approved_snap.id,
+        }
+
+    def rollback_task(self, task_id: str) -> Dict[str, Any]:
+        """Human rejection: Restores workspace to baseline snapshot and marks ROLLED_BACK."""
+        task = self.orchestrator.get_task(task_id)
+        if not task:
+            raise ValueError(f"Task not found: {task_id}")
+
+        sandbox_copy = task.details.get("sandbox_copy")
+        if sandbox_copy and Path(sandbox_copy).is_dir():
+            shutil.rmtree(sandbox_copy, ignore_errors=True)
+
+        baseline_id = task.details.get("baseline_snapshot")
+        if baseline_id:
+            self.tm.restore_snapshot(baseline_id, create_safety_snapshot=True)
+
+        self.orchestrator.update_task_status(task_id, "ROLLED_BACK")
+        return {
+            "status": "ROLLED_BACK",
+            "task_id": task_id,
+            "restored_snapshot": baseline_id,
         }
