@@ -9,6 +9,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -31,6 +32,8 @@ tm = TimeMachineEngine(WORKSPACE)
 orchestrator = RerunOrchestrator(WORKSPACE / ".rerun_tasks")
 healer_agent = TestHealerAgent(WORKSPACE)
 
+TASK_ID_REGEX = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
+
 
 class HealRequest(BaseModel):
     test_file: str
@@ -42,32 +45,69 @@ class ApprovalRequest(BaseModel):
     comment: str = ""
 
 
+def validate_task_id(task_id: str) -> str:
+    """Validate task_id with strict regex ^[a-zA-Z0-9_-]{1,64}$ to prevent traversal."""
+    if not task_id or not TASK_ID_REGEX.match(task_id):
+        raise HTTPException(status_code=400, detail="Invalid task_id format")
+    return task_id
+
+
 def validate_test_file_path(workspace: Path, test_file: str) -> Path:
-    """Reject absolute paths, '..', and any resolved path outside the workspace."""
-    if not test_file or not test_file.strip():
+    """Reject paths starting with '-', '..', absolute paths, protected directories, and symlinks."""
+    if not test_file or not str(test_file).strip():
         raise HTTPException(status_code=400, detail="test_file cannot be empty")
-    if os.path.isabs(test_file):
+    rel_str = str(test_file).strip()
+
+    if rel_str.startswith("-"):
+        raise HTTPException(status_code=400, detail="Paths starting with '-' are rejected")
+
+    if os.path.isabs(rel_str):
         raise HTTPException(status_code=400, detail="Absolute paths are rejected")
-    norm = Path(test_file)
+
+    norm = Path(rel_str)
+    if any(part.startswith("-") for part in norm.parts):
+        raise HTTPException(status_code=400, detail="Path segments starting with '-' are rejected")
+
     if ".." in norm.parts:
         raise HTTPException(status_code=400, detail="Path traversal '..' is rejected")
+
+    # Reject protected directories (.git, .tm_snapshots, .rerun_tasks, .env*)
+    protected_names = {".git", ".tm_snapshots", ".rerun_tasks", ".env"}
+    for part in norm.parts:
+        if part in protected_names or part.startswith(".env."):
+            raise HTTPException(status_code=400, detail=f"Access to protected path '{part}' is rejected")
+
+    # Walk from workspace down and reject symlinks
+    workspace_root = workspace.resolve()
+    current = workspace_root
+    for part in norm.parts:
+        current = current / part
+        if current.is_symlink() or os.path.islink(str(current)):
+            raise HTTPException(status_code=400, detail=f"Symlinks are rejected: {part}")
+
     resolved = (workspace / norm).resolve()
     try:
-        resolved.relative_to(workspace)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Resolved path escapes workspace")
-    return resolved
+        if not resolved.is_relative_to(workspace_root):
+            raise HTTPException(status_code=400, detail="Resolved path escapes workspace")
+    except AttributeError:
+        try:
+            resolved.relative_to(workspace_root)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Resolved path escapes workspace")
+
+    return (workspace / norm)
 
 
 async def verify_hermes_token(request: Request):
-    """Require a shared token from the environment on every API request."""
-    expected_token = (
+    """Require a non-whitespace shared token from environment on all protected endpoints."""
+    raw_token = (
         os.environ.get("HERMES_API_TOKEN")
         or os.environ.get("RERUN_AUTH_TOKEN")
         or os.environ.get("SHARED_TOKEN")
     )
-    if not expected_token:
+    if not raw_token or not raw_token.strip():
         raise HTTPException(status_code=401, detail="Unauthorized: shared token not configured in environment")
+    expected_token = raw_token.strip()
 
     provided_token = request.headers.get("X-Hermes-Token") or request.headers.get("X-Auth-Token")
     if not provided_token:
@@ -75,8 +115,11 @@ async def verify_hermes_token(request: Request):
         if auth_header.startswith("Bearer "):
             provided_token = auth_header[7:].strip()
 
-    if not provided_token or not hmac.compare_digest(provided_token, expected_token):
-        raise HTTPException(status_code=401, detail="Unauthorized: invalid or missing token")
+    if not provided_token:
+        raise HTTPException(status_code=401, detail="Unauthorized: missing authentication token")
+
+    if not hmac.compare_digest(provided_token.strip(), expected_token):
+        raise HTTPException(status_code=401, detail="Unauthorized: invalid token")
 
 
 @app.get("/health")
@@ -101,7 +144,7 @@ async def github_actions_webhook(request: Request):
 
     # Webhook signature verification: verify when secret configured, reject when not
     webhook_secret = os.environ.get("WEBHOOK_SECRET")
-    if not webhook_secret:
+    if not webhook_secret or not webhook_secret.strip():
         raise HTTPException(status_code=401, detail="Webhook secret not configured in environment")
 
     sig_header = request.headers.get("X-Hub-Signature-256")
@@ -109,7 +152,7 @@ async def github_actions_webhook(request: Request):
         raise HTTPException(status_code=401, detail="Missing X-Hub-Signature-256 header")
 
     expected_sig = "sha256=" + hmac.new(
-        webhook_secret.encode("utf-8"),
+        webhook_secret.strip().encode("utf-8"),
         raw_body,
         hashlib.sha256,
     ).hexdigest()
@@ -180,9 +223,20 @@ def list_tasks():
     }
 
 
+@app.get("/api/tasks/{task_id}", dependencies=[Depends(verify_hermes_token)])
+def get_task(task_id: str):
+    """Get single task details."""
+    validate_task_id(task_id)
+    task = orchestrator.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return {"task": task}
+
+
 @app.post("/api/tasks/{task_id}/approve", dependencies=[Depends(verify_hermes_token)])
-def approve_task(task_id: str, req: ApprovalRequest):
-    """Human approval: Only marks task COMPLETED; must not write files."""
+def approve_task(task_id: str, req: ApprovalRequest = ApprovalRequest()):
+    """Human approval: Transitions task from AWAITING_APPROVAL -> APPROVED; must not write files."""
+    validate_task_id(task_id)
     task = orchestrator.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -193,24 +247,33 @@ def approve_task(task_id: str, req: ApprovalRequest):
         )
 
     res = healer_agent.approve_task(task_id)
-    return {"status": "approved", "task_id": task_id, "comment": req.comment, "result": res}
+    return {
+        "status": "approved",
+        "task_id": task_id,
+        "task_status": "APPROVED",
+        "comment": req.comment,
+        "result": res,
+    }
 
 
 @app.post("/api/tasks/{task_id}/apply", dependencies=[Depends(verify_hermes_token)])
 def apply_task(task_id: str):
-    """Explicit apply endpoint: Applies proposed patch only after task is AWAITING_APPROVAL."""
+    """Explicit apply endpoint: Applies proposed patch only after task is AWAITING_APPROVAL or APPROVED."""
+    validate_task_id(task_id)
     task = orchestrator.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-    if task.status not in ("AWAITING_APPROVAL", "COMPLETED"):
+    if task.status not in ("AWAITING_APPROVAL", "APPROVED"):
         raise HTTPException(
             status_code=400,
-            detail=f"Cannot apply task in status '{task.status}'. Task must be in AWAITING_APPROVAL.",
+            detail=f"Cannot apply task in status '{task.status}'. Task must be in AWAITING_APPROVAL or APPROVED.",
         )
 
     try:
         res = healer_agent.apply_task(task_id)
-        return {"status": "applied", "task_id": task_id, "result": res}
+        return {"status": "applied", "task_id": task_id, "task_status": "COMPLETED", "result": res}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -218,6 +281,7 @@ def apply_task(task_id: str):
 @app.post("/api/tasks/{task_id}/rollback", dependencies=[Depends(verify_hermes_token)])
 def rollback_task(task_id: str):
     """Human-in-the-loop rejection: rollback workspace to baseline snapshot."""
+    validate_task_id(task_id)
     task = orchestrator.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -230,9 +294,17 @@ def rollback_task(task_id: str):
 
 
 @app.get("/api/time-machine/snapshots", dependencies=[Depends(verify_hermes_token)])
+@app.get("/api/time-machine/snapshot", dependencies=[Depends(verify_hermes_token)])
 def list_snapshots(limit: int = 50):
     """List snapshots in the ledger."""
     return {"snapshots": tm.list_snapshots(limit=limit)}
+
+
+@app.post("/api/time-machine/snapshot", dependencies=[Depends(verify_hermes_token)])
+def create_snapshot(label: str = "manual_snapshot"):
+    """Create a new snapshot."""
+    snap = tm.create_snapshot(label)
+    return {"snapshot": snap}
 
 
 @app.post("/api/time-machine/restore/{snapshot_id}", dependencies=[Depends(verify_hermes_token)])

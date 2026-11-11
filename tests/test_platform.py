@@ -14,8 +14,8 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from unittest import mock
 from pathlib import Path
+from unittest import mock
 
 # Add repo root to path
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -29,7 +29,15 @@ from core.healer.gemini_flash import GeminiFlashHealer
 from core.rerun_bridge.orchestrator import RerunOrchestrator
 from core.time_machine.engine import TimeMachineEngine
 from scripts.syntax_guard import check_py310_compatibility
-from server import github_actions_webhook, validate_test_file_path, verify_hermes_token
+from server import (
+    app,
+    apply_task,
+    approve_task,
+    github_actions_webhook,
+    validate_task_id,
+    validate_test_file_path,
+    verify_hermes_token,
+)
 
 
 class MockRequest:
@@ -221,7 +229,6 @@ class TestHermesRerunPlatform(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     tm.create_snapshot("snap_with_escaping_symlink")
             except OSError:
-                # Some Windows environments without symlink permission
                 pass
             finally:
                 if symlink_target.is_symlink() or symlink_target.exists():
@@ -333,14 +340,14 @@ class TestHermesRerunPlatform(unittest.TestCase):
         # Write Gate Check: caller workspace must NOT have the fix yet
         self.assertEqual(test_file.read_text(encoding="utf-8"), initial_content)
 
-        # Human Approval: Only marks task COMPLETED; must not write files
+        # Human Approval: Transitions to APPROVED; must not write files
         app_res = agent.approve_task(result["task_id"])
-        self.assertEqual(app_res["status"], "COMPLETED")
+        self.assertEqual(app_res["status"], "APPROVED")
         self.assertEqual(test_file.read_text(encoding="utf-8"), initial_content, "Approve must not write files!")
 
-        # Explicit Apply: applies patch to workspace
+        # Explicit Apply: applies patch to workspace and marks COMPLETED
         apply_res = agent.apply_task(result["task_id"])
-        self.assertEqual(apply_res["status"], "APPLIED")
+        self.assertEqual(apply_res["status"], "COMPLETED")
         self.assertIn("owner_user_id", test_file.read_text(encoding="utf-8"))
 
         # Rejection / Rollback: restores workspace to baseline
@@ -446,6 +453,183 @@ class TestHermesRerunPlatform(unittest.TestCase):
         # Valid token -> succeeds
         req_good = MockRequest(b"", {"X-Hermes-Token": "secure_token_abc"})
         asyncio.run(verify_hermes_token(req_good))
+
+    # --------------------------------------------------------------------------
+    # 3. New Security, State-Machine & Filesystem Regression Tests
+    # --------------------------------------------------------------------------
+
+    def test_snapshot_skips_venv_and_dotenv_variants(self):
+        """Verify .venv with external symlink and .env.local do not crash create_snapshot and are excluded."""
+        tm = TimeMachineEngine(self.workspace)
+
+        main_py = self.workspace / "main.py"
+        main_py.write_text("print('hello')\n", encoding="utf-8")
+
+        env_local = self.workspace / ".env.local"
+        env_local.write_text("SECRET=12345\n", encoding="utf-8")
+
+        # Create .venv directory
+        venv_dir = self.workspace / ".venv"
+        venv_bin = venv_dir / "bin"
+        venv_bin.mkdir(parents=True, exist_ok=True)
+        py_symlink = venv_bin / "python"
+
+        with tempfile.TemporaryDirectory() as outside_dir:
+            outside_py = Path(outside_dir) / "python_sys"
+            outside_py.write_text("#!/bin/sh\n", encoding="utf-8")
+            try:
+                py_symlink.symlink_to(outside_py)
+            except OSError:
+                py_symlink.write_text("dummy", encoding="utf-8")
+
+            # Must not crash with ValueError on .venv or symlink
+            snap = tm.create_snapshot("test_ignore_venv")
+            self.assertTrue(snap.id.startswith("snap_"))
+
+            snap_dir = tm.snapshots_store / snap.id
+            manifest_file = snap_dir / "manifest.json"
+            self.assertTrue(manifest_file.is_file(), "manifest.json was not created in snapshot store!")
+
+            with open(manifest_file, "r", encoding="utf-8") as f:
+                manifest_data = json.load(f)
+            files = manifest_data.get("files", [])
+            self.assertIn("main.py", files)
+            for f_rel in files:
+                self.assertFalse(f_rel.startswith(".env"), f"Found env file in snapshot: {f_rel}")
+                self.assertFalse(f_rel.startswith(".venv"), f"Found .venv file in snapshot: {f_rel}")
+
+            self.assertFalse((snap_dir / ".env.local").exists())
+            self.assertFalse((snap_dir / ".venv").exists())
+
+    def test_restore_unlinks_destination_symlink_escape(self):
+        """Verify restore unlinks destination symlink without modifying external target file."""
+        tm = TimeMachineEngine(self.workspace)
+        tracked = self.workspace / "config.json"
+        tracked.write_text('{"safe": true}', encoding="utf-8")
+        snap = tm.create_snapshot("before_symlink_attack")
+
+        with tempfile.TemporaryDirectory() as outside_dir:
+            outside_target = Path(outside_dir) / "victim_host_file.txt"
+            outside_target.write_text("HOST_CRITICAL_DATA", encoding="utf-8")
+
+            # Replace tracked file in workspace with symlink pointing to outside_target
+            tracked.unlink()
+            try:
+                tracked.symlink_to(outside_target)
+            except OSError:
+                # Symlink creation not supported in this environment
+                return
+
+            self.assertTrue(tracked.is_symlink())
+
+            # restore_snapshot should safely unlink destination without modifying outside file
+            res = tm.restore_snapshot(snap.id, create_safety_snapshot=False)
+            self.assertTrue(res["success"])
+
+            # Outside target must be 100% untouched
+            self.assertEqual(outside_target.read_text(encoding="utf-8"), "HOST_CRITICAL_DATA")
+
+            # Workspace file must be restored and no longer a symlink
+            self.assertFalse(tracked.is_symlink())
+            self.assertEqual(tracked.read_text(encoding="utf-8"), '{"safe": true}')
+
+    def test_delete_files_rejects_traversal_and_protected_paths(self):
+        """Verify passing '../outside.txt' or '.git/HEAD' in delete_files raises ValueError."""
+        tm = TimeMachineEngine(self.workspace)
+        dummy = self.workspace / "dummy.txt"
+        dummy.write_text("hello\n", encoding="utf-8")
+        snap = tm.create_snapshot("snap_for_delete_check")
+
+        # 1. Traversal in delete_files
+        with self.assertRaises(ValueError):
+            tm.restore_snapshot(snap.id, delete_files=["../outside.txt"])
+
+        # 2. Protected top-level path (.git) in delete_files
+        with self.assertRaises(ValueError):
+            tm.restore_snapshot(snap.id, delete_files=[".git/HEAD"])
+
+        # 3. Protected .env in delete_files
+        with self.assertRaises(ValueError):
+            tm.restore_snapshot(snap.id, delete_files=[".env"])
+
+        # 4. Path starting with '-'
+        with self.assertRaises(ValueError):
+            tm.restore_snapshot(snap.id, delete_files=["-rf"])
+
+    def test_approve_then_apply_workflow(self):
+        """Verify /approve transitions to APPROVED, and subsequently /apply succeeds and transitions to COMPLETED."""
+        orch = RerunOrchestrator(self.workspace / ".rerun_tasks")
+        target_file = self.workspace / "app_code.py"
+        target_file.write_text("def run(): return 1\n", encoding="utf-8")
+
+        # Simulate sandbox copy with verified fix
+        sandbox_dir = self.workspace / "_sandbox_test_app"
+        sandbox_dir.mkdir(parents=True, exist_ok=True)
+        (sandbox_dir / "app_code.py").write_text("def run(): return 42\n", encoding="utf-8")
+
+        task = orch.create_task(
+            title="Fix app code",
+            details={
+                "sandbox_copy": str(sandbox_dir),
+                "target_file": "app_code.py",
+            },
+        )
+        orch.update_task_status(task.id, "AWAITING_APPROVAL", proposed_patch="diff --git ...")
+
+        agent = TestHealerAgent(workspace_path=self.workspace)
+        with mock.patch("server.orchestrator", agent.orchestrator), mock.patch("server.healer_agent", agent):
+            # 1. Call approve_task -> transitions to APPROVED, does not write files
+            app_res = approve_task(task.id)
+            self.assertEqual(app_res["status"], "approved")
+            self.assertEqual(app_res["task_status"], "APPROVED")
+            self.assertEqual(target_file.read_text(encoding="utf-8"), "def run(): return 1\n")
+
+            # 2. Call apply_task -> transitions to COMPLETED, writes changes
+            apply_res = apply_task(task.id)
+            self.assertEqual(apply_res["status"], "applied")
+            self.assertEqual(apply_res["task_status"], "COMPLETED")
+            self.assertEqual(target_file.read_text(encoding="utf-8"), "def run(): return 42\n")
+
+            t_after = agent.orchestrator.get_task(task.id)
+            self.assertEqual(t_after.status, "COMPLETED")
+
+    def test_all_task_and_tm_endpoints_require_auth(self):
+        """Verify /api/tasks/{id}/approve, /api/tasks/{id}/apply, and /api/time-machine/snapshot require valid token."""
+        from fastapi import HTTPException
+
+        os.environ["HERMES_API_TOKEN"] = "secure_token_123"
+
+        # Missing token -> 401
+        req_no_auth = MockRequest(b"", {})
+        with self.assertRaises(HTTPException) as ctx1:
+            asyncio.run(verify_hermes_token(req_no_auth))
+        self.assertEqual(ctx1.exception.status_code, 401)
+
+        # Whitespace-only token in environment -> 401
+        os.environ["HERMES_API_TOKEN"] = "   "
+        with self.assertRaises(HTTPException) as ctx2:
+            asyncio.run(verify_hermes_token(req_no_auth))
+        self.assertEqual(ctx2.exception.status_code, 401)
+
+        os.environ["HERMES_API_TOKEN"] = "secure_token_123"
+
+        # Check route dependencies on app
+        protected_paths = {
+            "/api/tasks/{task_id}/approve",
+            "/api/tasks/{task_id}/apply",
+            "/api/time-machine/snapshot",
+            "/api/time-machine/snapshots",
+            "/api/tasks",
+            "/api/heal",
+        }
+        for route in app.routes:
+            if hasattr(route, "path") and route.path in protected_paths:
+                deps = [d.dependency for d in route.dependencies]
+                self.assertIn(
+                    verify_hermes_token,
+                    deps,
+                    f"Route {route.path} missing verify_hermes_token dependency!",
+                )
 
 
 if __name__ == "__main__":

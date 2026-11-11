@@ -5,6 +5,7 @@ Executes tests in isolated sandbox copies to enforce human approval before modif
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -187,43 +188,139 @@ class TestHealerAgent:
         }
 
     def approve_task(self, task_id: str) -> Dict[str, Any]:
-        """Human approval write-gate: Only marks task COMPLETED; must not write files."""
+        """Human approval write-gate: Transitions task from AWAITING_APPROVAL to APPROVED without writing files."""
         task = self.orchestrator.get_task(task_id)
         if not task:
             raise ValueError(f"Task not found: {task_id}")
         if task.status != "AWAITING_APPROVAL":
             raise ValueError(f"Cannot approve task in state '{task.status}'. Task must be in AWAITING_APPROVAL.")
 
-        self.orchestrator.update_task_status(task_id, "COMPLETED")
+        self.orchestrator.update_task_status(task_id, "APPROVED")
         return {
-            "status": "COMPLETED",
+            "status": "APPROVED",
             "task_id": task_id,
         }
 
     def apply_task(self, task_id: str) -> Dict[str, Any]:
-        """Explicit apply: Applies proposed patch to workspace only after task is AWAITING_APPROVAL."""
+        """Explicit apply: Applies proposed patch to workspace only after task is AWAITING_APPROVAL or APPROVED."""
         task = self.orchestrator.get_task(task_id)
         if not task:
             raise ValueError(f"Task not found: {task_id}")
-        if task.status not in ("AWAITING_APPROVAL", "COMPLETED"):
-            raise ValueError(f"Cannot apply task in state '{task.status}'. Task must be in AWAITING_APPROVAL.")
+        if task.status not in ("AWAITING_APPROVAL", "APPROVED"):
+            raise ValueError(f"Cannot apply task in state '{task.status}'. Task must be in AWAITING_APPROVAL or APPROVED.")
 
         sandbox_copy = task.details.get("sandbox_copy")
-        promoted = False
+        proposed_patch = task.proposed_patch
+
+        if not sandbox_copy and not proposed_patch:
+            raise ValueError("Task has no proposed changes or patch to apply")
+
+        files_to_apply: List[str] = []
         if sandbox_copy and Path(sandbox_copy).is_dir():
-            self.sandbox.promote_copy(Path(sandbox_copy))
-            promoted = True
+            copy_dir = Path(sandbox_copy)
+            if (copy_dir / ".git").is_dir():
+                diff_proc = subprocess.run(
+                    ["git", "diff", "--name-only", "HEAD"],
+                    cwd=str(copy_dir),
+                    capture_output=True,
+                    text=True,
+                )
+                if diff_proc.returncode == 0:
+                    for line in diff_proc.stdout.splitlines():
+                        line = line.strip()
+                        if line:
+                            files_to_apply.append(line.replace("\\", "/"))
+
+                untracked_proc = subprocess.run(
+                    ["git", "ls-files", "--others", "--exclude-standard"],
+                    cwd=str(copy_dir),
+                    capture_output=True,
+                    text=True,
+                )
+                if untracked_proc.returncode == 0:
+                    for line in untracked_proc.stdout.splitlines():
+                        line = line.strip()
+                        if line:
+                            files_to_apply.append(line.replace("\\", "/"))
+
+            # Fallback or supplementary walk if git returned no files
+            if not files_to_apply:
+                for root, dirs, files in os.walk(copy_dir):
+                    dirs[:] = [
+                        d for d in dirs
+                        if d not in self.tm.SKIP_DIRS
+                        and not d.startswith(".env.")
+                        and d != ".env"
+                    ]
+                    for f in files:
+                        if f in self.tm.SKIP_FILES or f == ".env" or f.startswith(".env.") or f in self.tm.SKIP_DIRS:
+                            continue
+                        full_p = Path(root) / f
+                        rel_p = str(full_p.relative_to(copy_dir)).replace("\\", "/")
+                        files_to_apply.append(rel_p)
+        elif proposed_patch:
+            target_f = task.details.get("target_file")
+            if target_f:
+                files_to_apply.append(target_f)
+
+        # Sanitize and ensure no protected path is ever included
+        safe_files_to_apply = []
+        for rel_f in files_to_apply:
+            parts = Path(rel_f).parts
+            if any(part in self.tm.SKIP_DIRS or part == ".env" or part.startswith(".env.") for part in parts):
+                continue
+            if rel_f not in safe_files_to_apply:
+                safe_files_to_apply.append(rel_f)
+        files_to_apply = safe_files_to_apply
+
+        if not files_to_apply:
+            raise ValueError("Task has no proposed file changes to apply")
+
+        # Validate every target file path in proposed changes using workspace path validator
+        for rel_file in files_to_apply:
+            self.tm._validate_safe_workspace_path(rel_file, allow_missing=True)
+
+        # Take a snapshot via TimeMachine before writing files
+        pre_apply_snap = self.tm.create_snapshot(
+            label=f"pre_apply_{task_id}",
+            description=f"Snapshot before applying patch for task {task_id}",
+        )
+
+        created_files = []
+        modified_files = []
+
+        # Write changes safely
+        for rel_file in files_to_apply:
+            dest = self.workspace_path / rel_file
+            if dest.exists():
+                modified_files.append(rel_file)
+            else:
+                created_files.append(rel_file)
+
+            if sandbox_copy:
+                src = Path(sandbox_copy) / rel_file
+                if not src.is_file():
+                    continue
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                if dest.is_symlink() or os.path.islink(str(dest)) or dest.is_file():
+                    dest.unlink()
+                shutil.copy2(src, dest)
+
+        if sandbox_copy and Path(sandbox_copy).is_dir():
             shutil.rmtree(sandbox_copy, ignore_errors=True)
 
-        approved_snap = self.tm.create_snapshot(
-            label=f"applied_{task_id}",
-            description=f"Applied patch for task {task_id}",
-        )
+        task.details["created_files"] = created_files
+        task.details["modified_files"] = modified_files
+        task.details["applied_snapshot"] = pre_apply_snap.id
+
+        # Only then set status to COMPLETED
+        self.orchestrator.update_task_status(task_id, "COMPLETED")
         return {
-            "status": "APPLIED",
+            "status": "COMPLETED",
             "task_id": task_id,
-            "promoted": promoted,
-            "applied_snapshot": approved_snap.id,
+            "created_files": created_files,
+            "modified_files": modified_files,
+            "applied_snapshot": pre_apply_snap.id,
         }
 
     def rollback_task(self, task_id: str) -> Dict[str, Any]:
