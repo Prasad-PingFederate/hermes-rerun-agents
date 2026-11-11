@@ -28,12 +28,18 @@ from agents.test_healer_agent import TestHealerAgent
 from core.healer.gemini_flash import GeminiFlashHealer
 from core.rerun_bridge.orchestrator import RerunOrchestrator
 from core.time_machine.engine import TimeMachineEngine
+from core.time_machine.patch_guard import analyze_proposed_changes
 from scripts.syntax_guard import check_py310_compatibility
 from server import (
+    ApplyRequest,
+    PruneRequest,
     app,
     apply_task,
     approve_task,
     github_actions_webhook,
+    prune_snapshots_endpoint,
+    rollback_task,
+    snapshot_diff_endpoint,
     validate_task_id,
     validate_test_file_path,
     verify_hermes_token,
@@ -617,8 +623,11 @@ class TestHermesRerunPlatform(unittest.TestCase):
         protected_paths = {
             "/api/tasks/{task_id}/approve",
             "/api/tasks/{task_id}/apply",
+            "/api/tasks/{task_id}/rollback",
             "/api/time-machine/snapshot",
             "/api/time-machine/snapshots",
+            "/api/time-machine/snapshots/{snapshot_id}/diff",
+            "/api/time-machine/prune",
             "/api/tasks",
             "/api/heal",
         }
@@ -630,6 +639,203 @@ class TestHermesRerunPlatform(unittest.TestCase):
                     deps,
                     f"Route {route.path} missing verify_hermes_token dependency!",
                 )
+
+    def test_snapshot_sha256_integrity_and_diff(self):
+        """diff_snapshot detects added, modified, deleted files with unified diffs, and corruption raises ValueError on restore."""
+        tm = TimeMachineEngine(self.workspace)
+        f1 = self.workspace / "file1.txt"
+        f1.write_text("hello\n", encoding="utf-8")
+        f2 = self.workspace / "file2.txt"
+        f2.write_text("original content\n", encoding="utf-8")
+
+        snap = tm.create_snapshot("base_for_diff")
+
+        # Verify manifest has SHA-256 and size
+        manifest_file = tm.snapshots_store / snap.id / "manifest.json"
+        self.assertTrue(manifest_file.is_file())
+        with open(manifest_file, "r", encoding="utf-8") as mf:
+            mdata = json.load(mf)
+        self.assertIn("file1.txt", mdata["files"])
+        self.assertIn("sha256", mdata["files"]["file1.txt"])
+        self.assertIn("size", mdata["files"]["file1.txt"])
+
+        # Live changes: modify f1, delete f2, add f3
+        f1.write_text("hello world\n", encoding="utf-8")
+        f2.unlink()
+        f3 = self.workspace / "file3.txt"
+        f3.write_text("brand new\n", encoding="utf-8")
+
+        # Run diff_snapshot
+        diff = tm.diff_snapshot(snap.id)
+        self.assertIn("file3.txt", diff["added"])
+        self.assertIn("file1.txt", diff["modified"])
+        self.assertIn("file2.txt", diff["deleted"])
+        self.assertIn("file1.txt", diff["patches"])
+        self.assertIn("+hello world", diff["patches"]["file1.txt"])
+
+        # Corrupt file in snapshot store to trigger integrity check failure
+        stored_f1 = tm.snapshots_store / snap.id / "file1.txt"
+        stored_f1.write_text("tampered bytes\n", encoding="utf-8")
+
+        with self.assertRaises(ValueError) as ctx:
+            tm.restore_snapshot(snap.id)
+        self.assertIn("Snapshot integrity check failed", str(ctx.exception))
+
+    def test_patch_guard_blocks_syntax_error_and_test_tampering(self):
+        """Applying a patch with SyntaxError or test tampering is rejected by /apply."""
+        # 1. Direct analyze_proposed_changes checks
+        with self.assertRaises(ValueError) as ctx:
+            analyze_proposed_changes(self.workspace, {"broken.py": "def test_broken(:\n    pass\n"})
+        self.assertIn("Syntax error", str(ctx.exception))
+
+        test_file = self.workspace / "test_sample.py"
+        test_file.write_text(
+            "def test_one():\n    assert 1 == 1\n\ndef test_two():\n    assert 2 == 2\n",
+            encoding="utf-8",
+        )
+
+        # Deleting test_two
+        rep1 = analyze_proposed_changes(self.workspace, {"test_sample.py": "def test_one():\n    assert 1 == 1\n"})
+        self.assertTrue(rep1["tampering_detected"])
+        self.assertFalse(rep1["valid"])
+
+        # Adding skip
+        rep2 = analyze_proposed_changes(
+            self.workspace,
+            {"test_sample.py": "import unittest\n@unittest.skip('skip')\ndef test_one():\n    assert 1 == 1\ndef test_two():\n    assert 2 == 2\n"},
+        )
+        self.assertTrue(rep2["tampering_detected"])
+
+        # Weakened assertion to assert True
+        rep3 = analyze_proposed_changes(
+            self.workspace,
+            {"test_sample.py": "def test_one():\n    assert True\ndef test_two():\n    assert 2 == 2\n"},
+        )
+        self.assertTrue(rep3["tampering_detected"])
+
+        # 2. Test rejection via apply_task
+        orch = RerunOrchestrator(self.workspace / ".rerun_tasks")
+        agent = TestHealerAgent(workspace_path=self.workspace)
+
+        # Task with syntax error
+        bad_task = orch.create_task("Bad task", details={"target_file": "app.py"})
+        orch.update_task_status(bad_task.id, "AWAITING_APPROVAL", proposed_patch="def broken(:\n")
+        with mock.patch("server.orchestrator", orch), mock.patch("server.healer_agent", agent), mock.patch("server.WORKSPACE", self.workspace):
+            from fastapi import HTTPException
+            with self.assertRaises(HTTPException) as err1:
+                apply_task(bad_task.id)
+            self.assertEqual(err1.exception.status_code, 400)
+
+        # Task with test tampering (delete test_two)
+        tamper_task = orch.create_task("Tamper task", details={"target_file": "test_sample.py"})
+        orch.update_task_status(tamper_task.id, "AWAITING_APPROVAL", proposed_patch="def test_one():\n    assert 1 == 1\n")
+        with mock.patch("server.orchestrator", orch), mock.patch("server.healer_agent", agent), mock.patch("server.WORKSPACE", self.workspace):
+            with self.assertRaises(HTTPException) as err2:
+                apply_task(tamper_task.id, ApplyRequest(allow_test_modification=False))
+            self.assertEqual(err2.exception.status_code, 400)
+            self.assertIn("Test tampering detected", err2.exception.detail)
+
+    def test_task_apply_and_surgical_rollback(self):
+        """Applying a task then calling rollback restores modified files, deletes created patch files, and leaves untracked files intact."""
+        orch = RerunOrchestrator(self.workspace / ".rerun_tasks")
+        agent = TestHealerAgent(workspace_path=self.workspace)
+        existing_file = self.workspace / "existing_app.py"
+        existing_file.write_text("VERSION = '1.0'\n", encoding="utf-8")
+        untracked_file = self.workspace / "untracked_persist.txt"
+        untracked_file.write_text("DO_NOT_DELETE\n", encoding="utf-8")
+
+        # Create sandbox copy with changes
+        sandbox_dir = self.workspace / "_sandbox_rollback_test"
+        sandbox_dir.mkdir(parents=True, exist_ok=True)
+        (sandbox_dir / "existing_app.py").write_text("VERSION = '2.0'\n", encoding="utf-8")
+        (sandbox_dir / "new_created.py").write_text("def new_feature(): pass\n", encoding="utf-8")
+
+        task = orch.create_task(
+            title="Update app",
+            details={
+                "sandbox_copy": str(sandbox_dir),
+            },
+        )
+        orch.update_task_status(task.id, "AWAITING_APPROVAL")
+
+        with mock.patch("server.orchestrator", orch), mock.patch("server.healer_agent", agent), mock.patch("server.tm", agent.tm), mock.patch("server.WORKSPACE", self.workspace):
+            # Apply task
+            apply_res = apply_task(task.id)
+            self.assertEqual(apply_res["task_status"], "COMPLETED")
+            self.assertEqual(existing_file.read_text(encoding="utf-8"), "VERSION = '2.0'\n")
+            new_file = self.workspace / "new_created.py"
+            self.assertTrue(new_file.is_file())
+            self.assertEqual(untracked_file.read_text(encoding="utf-8"), "DO_NOT_DELETE\n")
+
+            # Surgical Rollback
+            rb_res = rollback_task(task.id)
+            self.assertEqual(rb_res["status"], "rolled_back")
+            self.assertEqual(existing_file.read_text(encoding="utf-8"), "VERSION = '1.0'\n")
+            self.assertFalse(new_file.exists(), "Newly created file must be deleted on surgical rollback!")
+            self.assertEqual(untracked_file.read_text(encoding="utf-8"), "DO_NOT_DELETE\n")
+            t_after = orch.get_task(task.id)
+            self.assertEqual(t_after.status, "ROLLED_BACK")
+            self.assertIn("rolled_back_at", t_after.details)
+
+    def test_webhook_deduplicates_identical_failures(self):
+        """Sending the same CI failure webhook twice increments occurrence_count on the existing task."""
+        orch = RerunOrchestrator(self.workspace / ".rerun_tasks")
+        os.environ["WEBHOOK_SECRET"] = "secret123"
+
+        fixture_path = REPO_ROOT / "tests" / "fixtures" / "gha_workflow_job_failure.json"
+        raw_body = fixture_path.read_bytes()
+        valid_sig = "sha256=" + hmac.new(b"secret123", raw_body, hashlib.sha256).hexdigest()
+
+        with mock.patch("server.orchestrator", orch):
+            # 1. First webhook event
+            req1 = MockRequest(raw_body, {"X-Hub-Signature-256": valid_sig})
+            res1 = asyncio.run(github_actions_webhook(req1))
+            self.assertEqual(res1["status"], "triaged")
+            self.assertTrue(res1["triaged"])
+            task_id = res1["task_id"]
+            task1 = orch.get_task(task_id)
+            self.assertEqual(task1.details.get("occurrence_count"), 1)
+
+            # 2. Second identical webhook event -> deduplicated
+            req2 = MockRequest(raw_body, {"X-Hub-Signature-256": valid_sig})
+            res2 = asyncio.run(github_actions_webhook(req2))
+            self.assertTrue(res2.get("deduplicated"))
+            self.assertEqual(res2["task_id"], task_id)
+            self.assertEqual(res2["occurrence_count"], 2)
+
+            # Ensure no second task was created
+            all_tasks = orch._read_tasks()
+            self.assertEqual(len(all_tasks), 1)
+
+    def test_prune_snapshots_preserves_pinned_task_snapshots(self):
+        """Pruning with keep_last=1 deletes old unreferenced snapshots while preserving pinned snapshots."""
+        tm = TimeMachineEngine(self.workspace)
+        orch = RerunOrchestrator(self.workspace / ".rerun_tasks")
+
+        f = self.workspace / "test.txt"
+        f.write_text("v1\n", encoding="utf-8")
+        s1 = tm.create_snapshot("snap1")
+
+        f.write_text("v2\n", encoding="utf-8")
+        s2 = tm.create_snapshot("snap2")
+
+        f.write_text("v3\n", encoding="utf-8")
+        s3 = tm.create_snapshot("snap3")
+
+        # Pin s1 to a task
+        task = orch.create_task("Test task", details={"pre_apply_snapshot_id": s1.id})
+
+        with mock.patch("server.orchestrator", orch), mock.patch("server.tm", tm):
+            res = prune_snapshots_endpoint(PruneRequest(keep_last=1))
+            self.assertEqual(res["status"], "pruned")
+            self.assertIn(s3.id, res["kept"])
+            self.assertIn(s1.id, res["kept"])
+            self.assertIn(s2.id, res["deleted"])
+
+            # Verify on filesystem
+            self.assertTrue((tm.snapshots_store / s1.id).is_dir(), "Pinned snapshot s1 must be preserved!")
+            self.assertFalse((tm.snapshots_store / s2.id).is_dir(), "Unpinned old snapshot s2 must be deleted!")
+            self.assertTrue((tm.snapshots_store / s3.id).is_dir(), "Newest snapshot s3 must be preserved!")
 
 
 if __name__ == "__main__":

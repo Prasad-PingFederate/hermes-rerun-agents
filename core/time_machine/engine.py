@@ -5,6 +5,8 @@ Safe, non-destructive file-tree snapshots with zero git reset --hard, git clean,
 
 from __future__ import annotations
 
+import difflib
+import hashlib
 import json
 import os
 import shutil
@@ -13,6 +15,15 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
+
+
+def _compute_sha256(file_path: Path) -> str:
+    """Compute SHA-256 hex digest of a file in binary chunks."""
+    hasher = hashlib.sha256()
+    with open(file_path, "rb") as f:
+        while chunk := f.read(65536):
+            hasher.update(chunk)
+    return hasher.hexdigest()
 
 
 @dataclass
@@ -259,6 +270,7 @@ class TimeMachineEngine:
         snap_dir = self.snapshots_store / snap_id
         snap_dir.mkdir(parents=True, exist_ok=True)
         saved_files: List[str] = []
+        files_manifest: Dict[str, Dict[str, Any]] = {}
 
         for rel_file in files_to_save:
             src_f = self.workspace_path / rel_file
@@ -266,7 +278,13 @@ class TimeMachineEngine:
                 dest_f = snap_dir / rel_file
                 dest_f.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(src_f, dest_f)
+                f_sha = _compute_sha256(dest_f)
+                f_size = dest_f.stat().st_size
                 saved_files.append(rel_file)
+                files_manifest[rel_file] = {
+                    "sha256": f_sha,
+                    "size": f_size,
+                }
 
         snapshot = Snapshot(
             id=snap_id,
@@ -286,7 +304,7 @@ class TimeMachineEngine:
                 "snapshot_id": snap_id,
                 "label": label,
                 "created_at": snapshot.created_at,
-                "files": saved_files,
+                "files": files_manifest,
             }, f, indent=2)
 
         ledger = self._read_ledger()
@@ -340,15 +358,22 @@ class TimeMachineEngine:
 
         # Prefer reading from manifest.json if present
         manifest_file = snap_dir / "manifest.json"
+        manifest_files_map: Dict[str, Dict[str, Any]] = {}
+        files_to_restore = []
         if manifest_file.is_file():
             try:
                 with open(manifest_file, "r", encoding="utf-8") as f:
                     manifest_data = json.load(f)
-                    files_to_restore = manifest_data.get("files", [])
+                    raw_files = manifest_data.get("files", {})
+                    if isinstance(raw_files, dict):
+                        manifest_files_map = raw_files
+                        files_to_restore = list(raw_files.keys())
+                    elif isinstance(raw_files, list):
+                        manifest_files_map = {f: {} for f in raw_files}
+                        files_to_restore = raw_files
             except Exception:
                 files_to_restore = []
-        else:
-            files_to_restore = []
+        if not files_to_restore:
             for root, _, files in os.walk(data_dir):
                 for f in files:
                     if f.endswith(".patch") or f in ("metadata.json", "manifest.json"):
@@ -356,6 +381,18 @@ class TimeMachineEngine:
                     backup_f = Path(root) / f
                     rel_p = str(backup_f.relative_to(data_dir)).replace("\\", "/")
                     files_to_restore.append(rel_p)
+
+        # Verify SHA-256 integrity of all files to restore before modifying workspace
+        for rel_file in files_to_restore:
+            source_file = data_dir / rel_file
+            if not source_file.is_file():
+                continue
+            meta = manifest_files_map.get(rel_file)
+            if meta and isinstance(meta, dict) and "sha256" in meta:
+                expected_sha = meta["sha256"]
+                actual_sha = _compute_sha256(source_file)
+                if actual_sha != expected_sha:
+                    raise ValueError(f"Snapshot integrity check failed: SHA-256 mismatch for {rel_file}")
 
         if dry_run:
             return {
@@ -453,6 +490,25 @@ class TimeMachineEngine:
         # Validate target path: reject absolute paths, "..", protected paths, and symlink parents
         target_path = self._validate_safe_workspace_path(relative_file_path, allow_missing=True)
 
+        # Verify SHA-256 integrity if recorded in manifest
+        manifest_file = snap_dir / "manifest.json"
+        if manifest_file.is_file():
+            try:
+                with open(manifest_file, "r", encoding="utf-8") as f:
+                    manifest_data = json.load(f)
+                    raw_files = manifest_data.get("files", {})
+                    if isinstance(raw_files, dict) and relative_file_path in raw_files:
+                        meta = raw_files[relative_file_path]
+                        if isinstance(meta, dict) and "sha256" in meta:
+                            expected_sha = meta["sha256"]
+                            actual_sha = _compute_sha256(source_backup)
+                            if actual_sha != expected_sha:
+                                raise ValueError(f"Snapshot integrity check failed: SHA-256 mismatch for {relative_file_path}")
+            except ValueError:
+                raise
+            except Exception:
+                pass
+
         if dry_run:
             return {
                 "dry_run": True,
@@ -479,6 +535,156 @@ class TimeMachineEngine:
             "success": True,
             "snapshot_id": snapshot_id,
             "file": relative_file_path,
+        }
+
+    def diff_snapshot(self, snapshot_id: str) -> Dict[str, Any]:
+        """Compares the live workspace against a snapshot using difflib without invoking git.
+
+        Returns:
+            {"snapshot_id": id, "added": [...], "modified": [...], "deleted": [...], "patches": {rel_path: unified_diff_str}}
+        """
+        target = self.get_snapshot(snapshot_id)
+        if not target:
+            raise ValueError(f"Snapshot not found: {snapshot_id}")
+
+        snap_dir = self.snapshots_store / snapshot_id
+        data_dir = snap_dir / "tree" if (snap_dir / "tree").is_dir() else snap_dir
+        if not data_dir.is_dir():
+            raise FileNotFoundError(f"Snapshot data store missing for {snapshot_id}")
+
+        manifest_file = snap_dir / "manifest.json"
+        manifest_files: Set[str] = set()
+        if manifest_file.is_file():
+            try:
+                with open(manifest_file, "r", encoding="utf-8") as f:
+                    mdata = json.load(f)
+                    raw = mdata.get("files", {})
+                    if isinstance(raw, dict):
+                        manifest_files = set(raw.keys())
+                    elif isinstance(raw, list):
+                        manifest_files = set(raw)
+            except Exception:
+                pass
+
+        if not manifest_files:
+            for root, _, files in os.walk(data_dir):
+                for f in files:
+                    if f.endswith(".patch") or f in ("metadata.json", "manifest.json"):
+                        continue
+                    backup_f = Path(root) / f
+                    rel_p = str(backup_f.relative_to(data_dir)).replace("\\", "/")
+                    manifest_files.add(rel_p)
+
+        live_files_list = self._collect_workspace_files()
+        live_files: Set[str] = set(live_files_list)
+
+        added = sorted(list(live_files - manifest_files))
+        deleted = sorted(list(manifest_files - live_files))
+        common = sorted(list(live_files & manifest_files))
+
+        modified: List[str] = []
+        patches: Dict[str, str] = {}
+
+        for rel_p in common:
+            snap_f = data_dir / rel_p
+            live_f = self.workspace_path / rel_p
+            if not snap_f.is_file() or not live_f.is_file():
+                continue
+
+            snap_bytes = snap_f.read_bytes()
+            live_bytes = live_f.read_bytes()
+            if snap_bytes != live_bytes:
+                modified.append(rel_p)
+                snap_lines = snap_bytes.decode("utf-8", errors="replace").splitlines(keepends=True)
+                live_lines = live_bytes.decode("utf-8", errors="replace").splitlines(keepends=True)
+                diff_text = "".join(difflib.unified_diff(
+                    snap_lines,
+                    live_lines,
+                    fromfile=f"a/{rel_p}",
+                    tofile=f"b/{rel_p}",
+                ))
+                patches[rel_p] = diff_text
+
+        for rel_p in added:
+            live_f = self.workspace_path / rel_p
+            if live_f.is_file():
+                live_lines = live_f.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
+                diff_text = "".join(difflib.unified_diff(
+                    [],
+                    live_lines,
+                    fromfile="/dev/null",
+                    tofile=f"b/{rel_p}",
+                ))
+                patches[rel_p] = diff_text
+
+        for rel_p in deleted:
+            snap_f = data_dir / rel_p
+            if snap_f.is_file():
+                snap_lines = snap_f.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
+                diff_text = "".join(difflib.unified_diff(
+                    snap_lines,
+                    [],
+                    fromfile=f"a/{rel_p}",
+                    tofile="/dev/null",
+                ))
+                patches[rel_p] = diff_text
+
+        return {
+            "snapshot_id": snapshot_id,
+            "added": added,
+            "modified": sorted(modified),
+            "deleted": deleted,
+            "patches": patches,
+        }
+
+    def prune_snapshots(
+        self,
+        keep_last: int = 10,
+        pinned_ids: Optional[Set[str]] = None,
+    ) -> Dict[str, Any]:
+        """Prunes oldest snapshots beyond keep_last while preserving any in pinned_ids."""
+        pinned = pinned_ids or set()
+        ledger = self._read_ledger()
+        all_snaps = ledger.get("snapshots", [])
+
+        total = len(all_snaps)
+        cutoff_index = max(0, total - keep_last)
+
+        candidates = all_snaps[:cutoff_index]
+        keep_candidates = all_snaps[cutoff_index:]
+
+        kept_ids: List[str] = [s["id"] for s in keep_candidates]
+        deleted_ids: List[str] = []
+        new_snapshots_list: List[Dict[str, Any]] = []
+
+        for snap_item in candidates:
+            s_id = snap_item.get("id")
+            if not s_id:
+                continue
+            if s_id in pinned:
+                kept_ids.append(s_id)
+                new_snapshots_list.append(snap_item)
+            else:
+                s_dir = self.snapshots_store / s_id
+                if s_dir.is_dir():
+                    shutil.rmtree(s_dir, ignore_errors=True)
+                deleted_ids.append(s_id)
+
+        new_snapshots_list.extend(keep_candidates)
+        ledger["snapshots"] = new_snapshots_list
+
+        ledger.setdefault("history", []).append({
+            "action": "prune",
+            "timestamp": datetime.now().isoformat(),
+            "keep_last": keep_last,
+            "deleted_count": len(deleted_ids),
+            "deleted_ids": deleted_ids,
+        })
+        self._write_ledger(ledger)
+
+        return {
+            "kept": kept_ids,
+            "deleted": deleted_ids,
         }
 
     def get_diff(self, snapshot_id_a: str, snapshot_id_b: Optional[str] = None) -> str:

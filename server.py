@@ -11,7 +11,7 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
 from pydantic import BaseModel
@@ -20,6 +20,7 @@ from agents.ci_detective import CIDetectiveAgent
 from agents.test_healer_agent import TestHealerAgent
 from core.rerun_bridge.orchestrator import RerunOrchestrator
 from core.time_machine.engine import TimeMachineEngine
+from core.time_machine.patch_guard import analyze_proposed_changes
 
 app = FastAPI(
     title="Hermes + Rerun Autonomous AI Platform",
@@ -43,6 +44,25 @@ class HealRequest(BaseModel):
 class ApprovalRequest(BaseModel):
     approved_by: str = "Admin"
     comment: str = ""
+
+
+class ApplyRequest(BaseModel):
+    verify_test: bool = False
+    allow_test_modification: bool = False
+
+
+class PruneRequest(BaseModel):
+    keep_last: int = 10
+
+
+def compute_failure_fingerprint(
+    repo_or_branch: str,
+    test_or_workflow: str,
+    error_summary: str,
+) -> str:
+    """Compute a deterministic SHA-256 failure fingerprint from normalized failure metadata."""
+    norm = f"{str(repo_or_branch).strip().lower()}:{str(test_or_workflow).strip().lower()}:{str(error_summary).strip().lower()}"
+    return hashlib.sha256(norm.encode("utf-8")).hexdigest()
 
 
 def validate_task_id(task_id: str) -> str:
@@ -178,6 +198,41 @@ async def github_actions_webhook(request: Request):
 
     routing = CIDetectiveAgent.get_recommended_ci_routing(Path(event.failing_test).name)
 
+    repo_branch = (
+        payload.get("repository", {}).get("full_name")
+        or payload.get("repository", {}).get("name")
+        or payload.get("workflow_run", {}).get("head_branch")
+        or "default_repo"
+    )
+    test_or_wf = event.failing_test
+    err_summary = getattr(event, "error_snippet", "") or getattr(event, "conclusion", "") or ""
+    fingerprint = compute_failure_fingerprint(str(repo_branch), str(test_or_wf), str(err_summary))
+
+    # Check for existing matching task in AWAITING_APPROVAL or APPROVED
+    for t in orchestrator._read_tasks():
+        if t.get("status") in ("AWAITING_APPROVAL", "APPROVED"):
+            t_details = t.get("details", {})
+            if t_details.get("failure_fingerprint") == fingerprint:
+                current_count = t_details.get("occurrence_count", 1) + 1
+                orchestrator.update_task_status(
+                    t["id"],
+                    t["status"],
+                    details={"occurrence_count": current_count},
+                )
+                return {
+                    "status": "triaged",
+                    "triaged": True,
+                    "deduplicated": True,
+                    "task_id": t["id"],
+                    "occurrence_count": current_count,
+                    "event": {
+                        "run_id": event.run_id,
+                        "failing_test": event.failing_test,
+                        "recommended_job": routing["target_job"],
+                        "continue_on_error": routing["continue_on_error"],
+                    },
+                }
+
     # Create task in AWAITING_APPROVAL and return task id without editing repo
     task = orchestrator.create_task(
         title=f"CI Failure: {Path(event.failing_test).name}",
@@ -186,6 +241,8 @@ async def github_actions_webhook(request: Request):
             "failing_test": event.failing_test,
             "recommended_job": routing["target_job"],
             "continue_on_error": routing["continue_on_error"],
+            "failure_fingerprint": fingerprint,
+            "occurrence_count": 1,
         },
     )
     orchestrator.update_task_status(task.id, "AWAITING_APPROVAL")
@@ -257,7 +314,7 @@ def approve_task(task_id: str, req: ApprovalRequest = ApprovalRequest()):
 
 
 @app.post("/api/tasks/{task_id}/apply", dependencies=[Depends(verify_hermes_token)])
-def apply_task(task_id: str):
+def apply_task(task_id: str, req: ApplyRequest = ApplyRequest()):
     """Explicit apply endpoint: Applies proposed patch only after task is AWAITING_APPROVAL or APPROVED."""
     validate_task_id(task_id)
     task = orchestrator.get_task(task_id)
@@ -269,9 +326,94 @@ def apply_task(task_id: str):
             detail=f"Cannot apply task in status '{task.status}'. Task must be in AWAITING_APPROVAL or APPROVED.",
         )
 
+    # 1. Collect proposed file changes
+    sandbox_copy = task.details.get("sandbox_copy")
+    proposed_patch = task.proposed_patch
+    if not sandbox_copy and not proposed_patch:
+        raise HTTPException(status_code=400, detail="Task has no proposed changes or patch to apply")
+
+    proposed_changes: Dict[str, str] = {}
+    if sandbox_copy and Path(sandbox_copy).is_dir():
+        copy_dir = Path(sandbox_copy)
+        for root, dirs, files in os.walk(copy_dir):
+            dirs[:] = [
+                d for d in dirs
+                if d not in tm.SKIP_DIRS
+                and not d.startswith(".env.")
+                and d != ".env"
+            ]
+            for f in files:
+                if f in tm.SKIP_FILES or f == ".env" or f.startswith(".env.") or f in tm.SKIP_DIRS:
+                    continue
+                full_p = Path(root) / f
+                rel_p = str(full_p.relative_to(copy_dir)).replace("\\", "/")
+                try:
+                    proposed_changes[rel_p] = full_p.read_text(encoding="utf-8", errors="replace")
+                except Exception:
+                    pass
+    elif proposed_patch:
+        target_f = task.details.get("target_file")
+        if target_f:
+            proposed_changes[target_f] = proposed_patch
+
+    # 2. Run AST Test-Tampering Guard & Blast-Radius Analyzer
+    if proposed_changes:
+        try:
+            report = analyze_proposed_changes(
+                workspace_root=WORKSPACE,
+                proposed_changes=proposed_changes,
+                allow_test_modification=req.allow_test_modification,
+            )
+            if not report.get("valid", True):
+                reasons = report.get("tampering_reasons", [])
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Test tampering detected: {'; '.join(reasons)}",
+                )
+            task.details["blast_radius"] = report.get("blast_radius", {})
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    # 3. Apply changes safely
     try:
         res = healer_agent.apply_task(task_id)
+        if "blast_radius" in task.details:
+            orchestrator.update_task_status(
+                task_id,
+                "COMPLETED",
+                details={"blast_radius": task.details["blast_radius"]},
+            )
+            res["blast_radius"] = task.details["blast_radius"]
+
+        # 4. Optional Post-Apply Verification
+        if req.verify_test:
+            test_target = task.details.get("test_file") or task.details.get("failing_test")
+            if test_target:
+                exec_res = healer_agent.sandbox.execute_test(test_target)
+                if not exec_res.passed:
+                    snap_id = res.get("applied_snapshot") or res.get("pre_apply_snapshot_id")
+                    created = res.get("created_files", [])
+                    if snap_id:
+                        tm.restore_snapshot(snap_id, delete_files=created)
+                    orchestrator.update_task_status(
+                        task_id,
+                        "VERIFY_FAILED_ROLLED_BACK",
+                        details={"verification": {"passed": False, "returncode": exec_res.returncode, "stderr": exec_res.stderr}},
+                    )
+                    return {
+                        "status": "VERIFY_FAILED_ROLLED_BACK",
+                        "task_id": task_id,
+                        "verification": {
+                            "passed": False,
+                            "returncode": exec_res.returncode,
+                            "stdout": exec_res.stdout,
+                            "stderr": exec_res.stderr,
+                        },
+                    }
+
         return {"status": "applied", "task_id": task_id, "task_status": "COMPLETED", "result": res}
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -280,15 +422,43 @@ def apply_task(task_id: str):
 
 @app.post("/api/tasks/{task_id}/rollback", dependencies=[Depends(verify_hermes_token)])
 def rollback_task(task_id: str):
-    """Human-in-the-loop rejection: rollback workspace to baseline snapshot."""
+    """Surgical task rollback: Restores pre_apply_snapshot_id and deletes created files."""
     validate_task_id(task_id)
     task = orchestrator.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
+    if task.status != "COMPLETED":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot rollback task in status '{task.status}'. Task must be COMPLETED.",
+        )
+
+    snap_id = (
+        task.details.get("pre_apply_snapshot_id")
+        or task.details.get("applied_snapshot")
+        or task.details.get("baseline_snapshot")
+    )
+    if not snap_id:
+        raise HTTPException(status_code=400, detail="No snapshot found on task to roll back to.")
+
+    created_files = task.details.get("created_files", [])
     try:
-        res = healer_agent.rollback_task(task_id)
-        return {"status": "rolled_back", "task_id": task_id, "result": res}
+        res = tm.restore_snapshot(snap_id, delete_files=created_files)
+        from datetime import datetime
+        rolled_back_at = datetime.now().isoformat()
+        orchestrator.update_task_status(
+            task_id,
+            "ROLLED_BACK",
+            details={"rolled_back_at": rolled_back_at},
+        )
+        return {
+            "status": "rolled_back",
+            "task_id": task_id,
+            "restored_snapshot": snap_id,
+            "rolled_back_at": rolled_back_at,
+            "details": res,
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -307,6 +477,18 @@ def create_snapshot(label: str = "manual_snapshot"):
     return {"snapshot": snap}
 
 
+@app.get("/api/time-machine/snapshots/{snapshot_id}/diff", dependencies=[Depends(verify_hermes_token)])
+def snapshot_diff_endpoint(snapshot_id: str):
+    """Diff live workspace against snapshot without git."""
+    try:
+        res = tm.diff_snapshot(snapshot_id)
+        return res
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/api/time-machine/restore/{snapshot_id}", dependencies=[Depends(verify_hermes_token)])
 def restore_snapshot(snapshot_id: str):
     """Restore workspace to any snapshot."""
@@ -315,6 +497,28 @@ def restore_snapshot(snapshot_id: str):
         return {"status": "restored", "snapshot_id": snapshot_id, "details": res}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/time-machine/prune", dependencies=[Depends(verify_hermes_token)])
+def prune_snapshots_endpoint(req: PruneRequest = PruneRequest()):
+    """Prunes old snapshots while protecting snapshots pinned by any task in .rerun_tasks/."""
+    tasks = orchestrator._read_tasks()
+    pinned_ids: Set[str] = set()
+    for t in tasks:
+        td = t.get("details", {})
+        for key in ("pre_apply_snapshot_id", "applied_snapshot", "baseline_snapshot"):
+            sid = td.get(key)
+            if sid:
+                pinned_ids.add(sid)
+
+    res = tm.prune_snapshots(keep_last=req.keep_last, pinned_ids=pinned_ids)
+    return {
+        "status": "pruned",
+        "keep_last": req.keep_last,
+        "kept": res["kept"],
+        "deleted": res["deleted"],
+        "pinned_ids": list(pinned_ids),
+    }
 
 
 if __name__ == "__main__":

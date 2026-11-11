@@ -305,6 +305,11 @@ class TestHealerAgent:
                 if dest.is_symlink() or os.path.islink(str(dest)) or dest.is_file():
                     dest.unlink()
                 shutil.copy2(src, dest)
+            elif proposed_patch and not proposed_patch.startswith("diff --git") and not proposed_patch.startswith("---"):
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                if dest.is_symlink() or os.path.islink(str(dest)) or dest.is_file():
+                    dest.unlink()
+                dest.write_text(proposed_patch, encoding="utf-8")
 
         if sandbox_copy and Path(sandbox_copy).is_dir():
             shutil.rmtree(sandbox_copy, ignore_errors=True)
@@ -312,19 +317,30 @@ class TestHealerAgent:
         task.details["created_files"] = created_files
         task.details["modified_files"] = modified_files
         task.details["applied_snapshot"] = pre_apply_snap.id
+        task.details["pre_apply_snapshot_id"] = pre_apply_snap.id
 
         # Only then set status to COMPLETED
-        self.orchestrator.update_task_status(task_id, "COMPLETED")
+        self.orchestrator.update_task_status(
+            task_id,
+            "COMPLETED",
+            details={
+                "created_files": created_files,
+                "modified_files": modified_files,
+                "applied_snapshot": pre_apply_snap.id,
+                "pre_apply_snapshot_id": pre_apply_snap.id,
+            },
+        )
         return {
             "status": "COMPLETED",
             "task_id": task_id,
             "created_files": created_files,
             "modified_files": modified_files,
             "applied_snapshot": pre_apply_snap.id,
+            "pre_apply_snapshot_id": pre_apply_snap.id,
         }
 
     def rollback_task(self, task_id: str) -> Dict[str, Any]:
-        """Human rejection: Restores workspace to baseline snapshot and marks ROLLED_BACK."""
+        """Restores workspace to pre-apply/baseline snapshot and marks ROLLED_BACK."""
         task = self.orchestrator.get_task(task_id)
         if not task:
             raise ValueError(f"Task not found: {task_id}")
@@ -333,13 +349,25 @@ class TestHealerAgent:
         if sandbox_copy and Path(sandbox_copy).is_dir():
             shutil.rmtree(sandbox_copy, ignore_errors=True)
 
-        baseline_id = task.details.get("baseline_snapshot")
-        if baseline_id:
-            self.tm.restore_snapshot(baseline_id, create_safety_snapshot=True)
+        target_snap_id = (
+            task.details.get("pre_apply_snapshot_id")
+            or task.details.get("applied_snapshot")
+            or task.details.get("baseline_snapshot")
+        )
+        created_files = task.details.get("created_files", [])
+        if target_snap_id:
+            self.tm.restore_snapshot(target_snap_id, create_safety_snapshot=True, delete_files=created_files)
 
-        self.orchestrator.update_task_status(task_id, "ROLLED_BACK")
+        from datetime import datetime
+        rolled_back_at = datetime.now().isoformat()
+        self.orchestrator.update_task_status(
+            task_id,
+            "ROLLED_BACK",
+            details={"rolled_back_at": rolled_back_at},
+        )
         return {
             "status": "ROLLED_BACK",
             "task_id": task_id,
-            "restored_snapshot": baseline_id,
+            "restored_snapshot": target_snap_id,
+            "rolled_back_at": rolled_back_at,
         }
