@@ -51,6 +51,11 @@ class ApplyRequest(BaseModel):
     allow_test_modification: bool = False
 
 
+class SprintPlanRequest(BaseModel):
+    tickets: Optional[List[Dict[str, Any]]] = None
+    allowed_files: Optional[List[str]] = None
+
+
 class PruneRequest(BaseModel):
     keep_last: int = 10
 
@@ -313,6 +318,54 @@ def approve_task(task_id: str, req: ApprovalRequest = ApprovalRequest()):
     }
 
 
+@app.post("/api/tasks/{task_id}/sprint-plan", dependencies=[Depends(verify_hermes_token)])
+def create_task_sprint_plan(task_id: str, req: SprintPlanRequest = SprintPlanRequest()):
+    """Decompose failure into hierarchical sprint plan with tiered SWE routing and telemetry."""
+    validate_task_id(task_id)
+    task = orchestrator.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    try:
+        if hasattr(req, "model_dump"):
+            plan_context = req.model_dump(exclude_none=True)
+        elif hasattr(req, "dict"):
+            plan_context = req.dict(exclude_none=True)
+        else:
+            plan_context = {}
+        sprint_plan = healer_agent.create_sprint_plan(task_id, plan_context)
+        return {
+            "status": "sprint_plan_created",
+            "task_id": task_id,
+            "sprint_plan": sprint_plan,
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/tasks/{task_id}/sprint-board", dependencies=[Depends(verify_hermes_token)])
+def get_task_sprint_board(task_id: str):
+    """Get sprint board, tickets, attempt/escalation history, and cost telemetry."""
+    validate_task_id(task_id)
+    task = orchestrator.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    try:
+        board = healer_agent.get_sprint_board(task_id)
+        return {
+            "status": "success",
+            "task_id": task_id,
+            "sprint_board": board,
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/api/tasks/{task_id}/apply", dependencies=[Depends(verify_hermes_token)])
 def apply_task(task_id: str, req: ApplyRequest = ApplyRequest()):
     """Explicit apply endpoint: Applies proposed patch only after task is AWAITING_APPROVAL or APPROVED."""
@@ -356,7 +409,27 @@ def apply_task(task_id: str, req: ApplyRequest = ApplyRequest()):
         if target_f:
             proposed_changes[target_f] = proposed_patch
 
-    # 2. Run AST Test-Tampering Guard & Blast-Radius Analyzer
+    # 2. Scope Gate: Enforce allowed_files from sprint_plan if present
+    sprint_plan = task.details.get("sprint_plan")
+    if sprint_plan:
+        allowed_set: Set[str] = set()
+        for t in sprint_plan.get("tickets", []):
+            for af in t.get("allowed_files", []):
+                allowed_set.add(af.replace("\\", "/"))
+
+        if allowed_set:
+            violating = set()
+            for p_file in proposed_changes.keys():
+                norm_p = p_file.replace("\\", "/")
+                if norm_p not in allowed_set:
+                    violating.add(norm_p)
+            if violating:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Sprint scope violation: proposed changes modify files outside allowed_files: {sorted(list(violating))}. Allowed files: {sorted(list(allowed_set))}",
+                )
+
+    # 3. Run AST Test-Tampering Guard & Blast-Radius Analyzer
     if proposed_changes:
         try:
             report = analyze_proposed_changes(

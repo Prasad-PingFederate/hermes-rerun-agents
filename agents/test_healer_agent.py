@@ -13,6 +13,7 @@ from typing import Any, Dict, Optional
 
 from agents.breakglass_responder_healer import BreakglassResponderHealerSkill
 from core.healer.gemini_flash import GeminiFlashHealer
+from core.orchestrator.scrum_hierarchy import ScrumMasterOrchestrator
 from core.rerun_bridge.orchestrator import RerunOrchestrator
 from core.sandbox.runner import SandboxRunner
 from core.time_machine.engine import TimeMachineEngine
@@ -32,6 +33,7 @@ class TestHealerAgent:
         self.healer = GeminiFlashHealer(api_key=gemini_api_key, ollama_base_url=ollama_base_url)
         self.sandbox = SandboxRunner(self.workspace_path)
         self.orchestrator = RerunOrchestrator(self.workspace_path / ".rerun_tasks")
+        self.scrum = ScrumMasterOrchestrator(self.workspace_path, tm_engine=self.tm)
 
     def run_and_heal(
         self,
@@ -371,3 +373,36 @@ class TestHealerAgent:
             "restored_snapshot": target_snap_id,
             "rolled_back_at": rolled_back_at,
         }
+
+    def create_sprint_plan(
+        self,
+        task_id: str,
+        plan_context: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Generate Tech Lead sprint plan for a task, routing sub-tasks to model tiers."""
+        task = self.orchestrator.get_task(task_id)
+        if not task:
+            raise ValueError(f"Task not found: {task_id}")
+
+        failure_context = dict(task.details)
+        if plan_context:
+            failure_context.update(plan_context)
+
+        sprint_plan = self.scrum.create_sprint_plan(failure_context)
+        task.details["sprint_plan"] = sprint_plan
+        self.orchestrator.update_task_status(
+            task_id,
+            task.status,
+            details={"sprint_plan": sprint_plan},
+        )
+        return sprint_plan
+
+    def get_sprint_board(self, task_id: str) -> Dict[str, Any]:
+        """Retrieve the sprint board, tickets, and telemetry for a task."""
+        task = self.orchestrator.get_task(task_id)
+        if not task:
+            raise ValueError(f"Task not found: {task_id}")
+        sprint_plan = task.details.get("sprint_plan")
+        if not sprint_plan:
+            return self.create_sprint_plan(task_id)
+        return sprint_plan

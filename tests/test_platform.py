@@ -17,6 +17,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from fastapi import HTTPException
+
 # Add repo root to path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
@@ -26,6 +28,11 @@ from agents.breakglass_responder_healer import BreakglassResponderHealerSkill
 from agents.ci_detective import CIDetectiveAgent
 from agents.test_healer_agent import TestHealerAgent
 from core.healer.gemini_flash import GeminiFlashHealer
+from core.orchestrator.scrum_hierarchy import (
+    ModelTier,
+    ScrumMasterOrchestrator,
+    SubTaskTicket,
+)
 from core.rerun_bridge.orchestrator import RerunOrchestrator
 from core.time_machine.engine import TimeMachineEngine
 from core.time_machine.patch_guard import analyze_proposed_changes
@@ -33,9 +40,12 @@ from scripts.syntax_guard import check_py310_compatibility
 from server import (
     ApplyRequest,
     PruneRequest,
+    SprintPlanRequest,
     app,
     apply_task,
     approve_task,
+    create_task_sprint_plan,
+    get_task_sprint_board,
     github_actions_webhook,
     prune_snapshots_endpoint,
     rollback_task,
@@ -624,6 +634,8 @@ class TestHermesRerunPlatform(unittest.TestCase):
             "/api/tasks/{task_id}/approve",
             "/api/tasks/{task_id}/apply",
             "/api/tasks/{task_id}/rollback",
+            "/api/tasks/{task_id}/sprint-plan",
+            "/api/tasks/{task_id}/sprint-board",
             "/api/time-machine/snapshot",
             "/api/time-machine/snapshots",
             "/api/time-machine/snapshots/{snapshot_id}/diff",
@@ -836,6 +848,148 @@ class TestHermesRerunPlatform(unittest.TestCase):
             self.assertTrue((tm.snapshots_store / s1.id).is_dir(), "Pinned snapshot s1 must be preserved!")
             self.assertFalse((tm.snapshots_store / s2.id).is_dir(), "Unpinned old snapshot s2 must be deleted!")
             self.assertTrue((tm.snapshots_store / s3.id).is_dir(), "Newest snapshot s3 must be preserved!")
+
+    def test_scrum_master_routes_tickets_by_complexity(self):
+        """Complexity 1-2 routes to TIER_3_JUNIOR_SWE, 3-4 routes to TIER_2_SENIOR_SWE, and 5 routes to TIER_1_TECH_LEAD."""
+        orch = ScrumMasterOrchestrator(self.workspace)
+        plan = orch.create_sprint_plan({
+            "tickets": [
+                {"title": "Simple fix", "complexity": 1, "allowed_files": ["simple.py"]},
+                {"title": "Minor tweak", "complexity": 2, "allowed_files": ["minor.py"]},
+                {"title": "Refactor auth", "complexity": 3, "allowed_files": ["auth.py"]},
+                {"title": "Database schema", "complexity": 4, "allowed_files": ["db.py"]},
+                {"title": "Core architecture", "complexity": 5, "allowed_files": ["core.py"]},
+            ]
+        })
+        tickets = plan["tickets"]
+        self.assertEqual(len(tickets), 5)
+        self.assertEqual(tickets[0]["assigned_tier"], ModelTier.TIER_3_JUNIOR_SWE.value)
+        self.assertEqual(tickets[1]["assigned_tier"], ModelTier.TIER_3_JUNIOR_SWE.value)
+        self.assertEqual(tickets[2]["assigned_tier"], ModelTier.TIER_2_SENIOR_SWE.value)
+        self.assertEqual(tickets[3]["assigned_tier"], ModelTier.TIER_2_SENIOR_SWE.value)
+        self.assertEqual(tickets[4]["assigned_tier"], ModelTier.TIER_1_TECH_LEAD.value)
+
+        # Telemetry verification
+        telemetry = plan["telemetry"]
+        self.assertEqual(telemetry["total_tickets"], 5)
+        self.assertEqual(telemetry["tier_distribution"][ModelTier.TIER_3_JUNIOR_SWE.value], 2)
+        self.assertEqual(telemetry["tier_distribution"][ModelTier.TIER_2_SENIOR_SWE.value], 2)
+        self.assertEqual(telemetry["tier_distribution"][ModelTier.TIER_1_TECH_LEAD.value], 1)
+        self.assertGreater(telemetry["estimated_cost_savings_pct"], 0.0)
+
+    def test_worker_scope_violation_rejected_and_escalated(self):
+        """When a TIER_3_JUNIOR_SWE worker modifies an unauthorized file, QA critic rejects and escalates to TIER_2_SENIOR_SWE which succeeds."""
+        orch = ScrumMasterOrchestrator(self.workspace)
+        ticket = SubTaskTicket(
+            ticket_id="TICK-SCOPE-001",
+            title="Update service",
+            complexity=2,
+            assigned_tier=ModelTier.TIER_3_JUNIOR_SWE.value,
+            allowed_files=["service.py"],
+        )
+
+        def mock_worker(tick: SubTaskTicket, tier: ModelTier) -> dict:
+            if tier == ModelTier.TIER_3_JUNIOR_SWE:
+                # Violates scope by modifying unauthorized file
+                return {
+                    "service.py": "def serve(): pass\n",
+                    "unauthorized.py": "def hacked(): pass\n",
+                }
+            elif tier == ModelTier.TIER_2_SENIOR_SWE:
+                # Adheres strictly to scope
+                return {
+                    "service.py": "def serve(): return True\n",
+                }
+            return {}
+
+        res_ticket = orch.execute_ticket_with_escalation(ticket, mock_worker)
+        self.assertEqual(res_ticket.status, "DONE")
+        self.assertEqual(res_ticket.assigned_tier, ModelTier.TIER_2_SENIOR_SWE.value)
+        self.assertEqual(len(res_ticket.attempt_history), 2)
+        self.assertEqual(res_ticket.attempt_history[0]["status"], "REJECTED")
+        self.assertIn("Scope violation", res_ticket.attempt_history[0]["rejection_reason"])
+        self.assertEqual(res_ticket.attempt_history[1]["status"], "APPROVED")
+
+    def test_junior_worker_test_tampering_escalates_to_higher_tier(self):
+        """A worker attempt that deletes a def test_* function is caught by QA Critic's patch_guard and escalated."""
+        test_file = self.workspace / "test_calculator.py"
+        test_file.write_text(
+            "def test_add():\n    assert 1 + 1 == 2\n\ndef test_sub():\n    assert 2 - 1 == 1\n",
+            encoding="utf-8",
+        )
+
+        orch = ScrumMasterOrchestrator(self.workspace)
+        ticket = SubTaskTicket(
+            ticket_id="TICK-TAMPER-001",
+            title="Fix calculator tests",
+            complexity=1,
+            assigned_tier=ModelTier.TIER_3_JUNIOR_SWE.value,
+            allowed_files=["test_calculator.py"],
+        )
+
+        def mock_worker(tick: SubTaskTicket, tier: ModelTier) -> dict:
+            if tier == ModelTier.TIER_3_JUNIOR_SWE:
+                # Tampers by deleting test_sub
+                return {
+                    "test_calculator.py": "def test_add():\n    assert 1 + 1 == 2\n",
+                }
+            else:
+                # Clean fix preserving both tests
+                return {
+                    "test_calculator.py": "def test_add():\n    assert 1 + 1 == 2\n\ndef test_sub():\n    assert 2 - 1 == 1\n",
+                }
+
+        res_ticket = orch.execute_ticket_with_escalation(ticket, mock_worker, allow_test_modification=False)
+        self.assertEqual(res_ticket.status, "DONE")
+        self.assertEqual(len(res_ticket.attempt_history), 2)
+        self.assertEqual(res_ticket.attempt_history[0]["status"], "REJECTED")
+        self.assertIn("Deleted test function", res_ticket.attempt_history[0]["rejection_reason"])
+        self.assertEqual(res_ticket.attempt_history[1]["status"], "APPROVED")
+
+    def test_sprint_plan_and_board_endpoints(self):
+        """POST /api/tasks/{id}/sprint-plan and GET /api/tasks/{id}/sprint-board require auth, persist board, and enforce allowed_files during /apply."""
+        orch = RerunOrchestrator(self.workspace / ".rerun_tasks")
+        agent = TestHealerAgent(workspace_path=self.workspace)
+        task = orch.create_task("Sprint test task", details={"test_file": "app.py"})
+        orch.update_task_status(task.id, "AWAITING_APPROVAL")
+
+        # 1. Auth check
+        os.environ["HERMES_API_TOKEN"] = "secure123"
+        req_unauth = MockRequest(b"{}", {})
+        with self.assertRaises(HTTPException) as auth_err:
+            asyncio.run(verify_hermes_token(req_unauth))
+        self.assertEqual(auth_err.exception.status_code, 401)
+
+        with mock.patch("server.orchestrator", orch), mock.patch("server.healer_agent", agent), mock.patch("server.WORKSPACE", self.workspace):
+            # 2. Call create_task_sprint_plan with custom allowed_files
+            plan_res = create_task_sprint_plan(
+                task.id,
+                SprintPlanRequest(
+                    tickets=[
+                        {"title": "Fix app", "complexity": 2, "allowed_files": ["app.py"]}
+                    ]
+                ),
+            )
+            self.assertEqual(plan_res["status"], "sprint_plan_created")
+            self.assertEqual(len(plan_res["sprint_plan"]["tickets"]), 1)
+            self.assertEqual(plan_res["sprint_plan"]["tickets"][0]["allowed_files"], ["app.py"])
+
+            # 3. Call get_task_sprint_board
+            board_res = get_task_sprint_board(task.id)
+            self.assertEqual(board_res["status"], "success")
+            self.assertIn("tickets", board_res["sprint_board"])
+            self.assertIn("telemetry", board_res["sprint_board"])
+
+            # 4. Enforce allowed_files during /apply
+            # Proposed patch touching unauthorized file "unauthorized.py" -> should fail with 400
+            task.proposed_patch = "def evil(): pass"
+            task.details["target_file"] = "unauthorized.py"
+            orch.update_task_status(task.id, "AWAITING_APPROVAL", proposed_patch="def evil(): pass", details={"target_file": "unauthorized.py"})
+
+            with self.assertRaises(HTTPException) as scope_err:
+                apply_task(task.id)
+            self.assertEqual(scope_err.exception.status_code, 400)
+            self.assertIn("Sprint scope violation", scope_err.exception.detail)
 
 
 if __name__ == "__main__":
