@@ -1,12 +1,14 @@
-# 🕰️ Hermes Time Machine + 🤖 Rerun Autonomous AI Agents
+# 🤖 Hermes + Rerun Healer Agents
 
-> **Production-Grade Autonomous Bug Detection, Multimodal Self-Healing & Time Machine Rollback Safety Platform**
+> **Local Healer Experiment**
 
 [![Tests](https://img.shields.io/badge/tests-passing-brightgreen.svg)]()
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)]()
 [![License](https://img.shields.io/badge/license-AGPL--3.0-orange.svg)](LICENSE)
 
-An open-source platform uniting **[Rerun](https://rerun.build)** task coordination patterns with **Hermes Time Machine** (deterministic snapshotting, visual regression diagnosis, and zero-risk rollback engine) powered by **Google Gemini Flash (Free Tier)** and local **Ollama** models.
+This repository is a local healer experiment with its own `.tm_snapshots` store, separate from the Hermes catalog plugin `time-machine`. It explores automated failure triage, multimodal diagnosis, and non-destructive snapshot/rollback mechanisms.
+
+> **Notice**: This is an experimental local project and is completely separate from the approved Hermes catalog plugin `time-machine` (and `ddaikodaiko/hermes-time-machine`).
 
 > **Note on Rerun Orchestration**: By default, task state and human approval gates are managed locally via a lightweight, deterministic JSON-backed orchestrator stored in `.rerun_tasks/tasks.json`. External Rerun servers are only queried if `RERUN_SERVER_URL` is explicitly configured.
 
@@ -15,9 +17,9 @@ An open-source platform uniting **[Rerun](https://rerun.build)** task coordinati
 ## 🎯 The Core Problem & Solution
 
 * **The Problem with Autonomous AI Agents**: When AI agents are given freedom to write code, edit tests, or execute terminal commands, they can introduce silent regressions, syntax breakages, line-ending corruption, or infinite retry loops.
-* **The Hermes + Rerun Solution**: 
+* **The Solution**: 
   1. **Orchestrator & Human Write Gate**: Tasks advance through explicit states (`PENDING -> RUNNING -> AWAITING_APPROVAL -> COMPLETED / ROLLED_BACK`). **Patches are never written to the caller's working tree while a fix is only proposed.** Changes are tested strictly inside an isolated sandbox copy, holding for human approval before promotion.
-  2. **Hermes Time Machine**: Deterministic, non-destructive file tree snapshots before every mutating action. Does not execute destructive `git reset --hard` or `git clean`. If an attempted fix fails or regresses the codebase, Hermes executes an instant, safe rollback (`/tm restore <snapshot_id>`), including an automated "rollback-of-a-rollback" safety snapshot.
+  2. **Local Time Machine Engine**: Deterministic, non-destructive file tree snapshots stored in `.tm_snapshots/store/<id>/` before every mutating action. Does not execute destructive `git reset --hard` or `git clean`. If an attempted fix fails or regresses the codebase, the engine executes a safe rollback by copying snapshot files back, including an automated "rollback-of-a-rollback" safety snapshot.
   3. **Multimodal Failure Diagnosis**: Accepts screenshots, DOM state, traceback logs, and code context to diagnose root causes and propose minimal unified diffs via Google Gemini Flash (using direct REST API calls) or local Ollama models.
 
 ---
@@ -131,7 +133,8 @@ API endpoints available at `http://127.0.0.1:8000`:
 * `POST /api/webhook/github-actions` - Webhook receiver (verifies `X-Hub-Signature-256` HMAC SHA256)
 * `POST /api/heal` - Trigger healing on a test file (requires `X-Hermes-Token`)
 * `GET /api/tasks` - List tasks and pending human approvals (requires `X-Hermes-Token`)
-* `POST /api/tasks/{task_id}/approve` - Human write gate: Promotes verified fix to workspace (requires `X-Hermes-Token`)
+* `POST /api/tasks/{task_id}/approve` - Human approval: Marks task COMPLETED (requires `X-Hermes-Token`)
+* `POST /api/tasks/{task_id}/apply` - Explicit apply: Promotes verified fix to workspace (requires `X-Hermes-Token`)
 * `POST /api/tasks/{task_id}/rollback` - Human rejection: Restores workspace to baseline snapshot (requires `X-Hermes-Token`)
 * `GET /api/time-machine/snapshots` - Query snapshots in ledger (requires `X-Hermes-Token`)
 

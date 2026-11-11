@@ -35,7 +35,7 @@ class TestHealerAgent:
     def run_and_heal(
         self,
         test_file: str,
-        auto_rollback_on_failure: bool = True,
+        auto_rollback_on_failure: bool = False,
         auto_apply_fix: bool = True,
     ) -> Dict[str, Any]:
         """Execute a test; if it fails, diagnose and safely attempt remediation with rollback protection."""
@@ -187,12 +187,26 @@ class TestHealerAgent:
         }
 
     def approve_task(self, task_id: str) -> Dict[str, Any]:
-        """Human approval write-gate: Promotes verified fix to caller workspace and marks COMPLETED."""
+        """Human approval write-gate: Only marks task COMPLETED; must not write files."""
         task = self.orchestrator.get_task(task_id)
         if not task:
             raise ValueError(f"Task not found: {task_id}")
         if task.status != "AWAITING_APPROVAL":
             raise ValueError(f"Cannot approve task in state '{task.status}'. Task must be in AWAITING_APPROVAL.")
+
+        self.orchestrator.update_task_status(task_id, "COMPLETED")
+        return {
+            "status": "COMPLETED",
+            "task_id": task_id,
+        }
+
+    def apply_task(self, task_id: str) -> Dict[str, Any]:
+        """Explicit apply: Applies proposed patch to workspace only after task is AWAITING_APPROVAL."""
+        task = self.orchestrator.get_task(task_id)
+        if not task:
+            raise ValueError(f"Task not found: {task_id}")
+        if task.status not in ("AWAITING_APPROVAL", "COMPLETED"):
+            raise ValueError(f"Cannot apply task in state '{task.status}'. Task must be in AWAITING_APPROVAL.")
 
         sandbox_copy = task.details.get("sandbox_copy")
         promoted = False
@@ -200,31 +214,16 @@ class TestHealerAgent:
             self.sandbox.promote_copy(Path(sandbox_copy))
             promoted = True
             shutil.rmtree(sandbox_copy, ignore_errors=True)
-        elif task.proposed_patch:
-            patch_file = self.workspace_path / "_temp_approval.patch"
-            patch_file.write_text(task.proposed_patch, encoding="utf-8")
-            res = subprocess.run(
-                ["git", "apply", "--whitespace=nowarn", str(patch_file)],
-                cwd=str(self.workspace_path),
-                capture_output=True,
-                text=True,
-            )
-            try:
-                patch_file.unlink(missing_ok=True)
-            except Exception:
-                pass
-            promoted = (res.returncode == 0)
 
         approved_snap = self.tm.create_snapshot(
-            label=f"approved_{task_id}",
-            description=f"Approved fix for task {task_id}",
+            label=f"applied_{task_id}",
+            description=f"Applied patch for task {task_id}",
         )
-        self.orchestrator.update_task_status(task_id, "COMPLETED")
         return {
-            "status": "COMPLETED",
+            "status": "APPLIED",
             "task_id": task_id,
             "promoted": promoted,
-            "approved_snapshot": approved_snap.id,
+            "applied_snapshot": approved_snap.id,
         }
 
     def rollback_task(self, task_id: str) -> Dict[str, Any]:

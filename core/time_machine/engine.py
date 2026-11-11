@@ -1,6 +1,6 @@
 """
 Hermes Time Machine Engine: Deterministic Workspace Snapshotting, Surgical Restore & Rollback
-Safe, non-destructive file-tree snapshots with zero git reset --hard or git clean.
+Safe, non-destructive file-tree snapshots with zero git reset --hard, git clean, or git apply.
 """
 
 from __future__ import annotations
@@ -8,12 +8,11 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import subprocess
 import time
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 
 @dataclass
@@ -29,9 +28,18 @@ class Snapshot:
 
 
 class TimeMachineEngine:
-    """Manages workspace snapshots, surgical per-file restores, and rollback safety nets without destructive git resets."""
+    """Manages workspace snapshots, surgical per-file restores, and rollback safety nets without destructive git calls."""
 
-    def __init__(self, workspace_path: Optional[Path | str] = None, require_git: bool = True):
+    SKIP_DIRS: Set[str] = {
+        ".git",
+        ".tm_snapshots",
+        ".rerun_tasks",
+        "node_modules",
+        "__pycache__",
+    }
+    SKIP_FILES: Set[str] = {".env"}
+
+    def __init__(self, workspace_path: Optional[Path | str] = None, require_git: bool = False):
         self.workspace_path = (
             Path(workspace_path).resolve() if workspace_path else Path.cwd().resolve()
         )
@@ -66,34 +74,104 @@ class TimeMachineEngine:
         with open(self.ledger_file, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
 
-    def _run_git(self, args: List[str]) -> subprocess.CompletedProcess:
-        return subprocess.run(
-            ["git"] + args,
-            cwd=str(self.workspace_path),
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+    def _read_git_head(self) -> tuple[str, str]:
+        """Read commit hash and branch directly from .git metadata without running git subprocess."""
+        git_dir = self.workspace_path / ".git"
+        if not git_dir.is_dir():
+            return "unknown", "detached"
+        head_file = git_dir / "HEAD"
+        if not head_file.is_file():
+            return "unknown", "detached"
+        try:
+            content = head_file.read_text(encoding="utf-8").strip()
+            if content.startswith("ref: refs/heads/"):
+                branch = content[len("ref: refs/heads/"):].strip()
+                ref_path = git_dir / "refs" / "heads" / branch
+                if ref_path.is_file():
+                    commit_hash = ref_path.read_text(encoding="utf-8").strip()
+                else:
+                    commit_hash = "unknown"
+                    packed = git_dir / "packed-refs"
+                    if packed.is_file():
+                        for line in packed.read_text(encoding="utf-8").splitlines():
+                            if line and not line.startswith("#") and not line.startswith("^"):
+                                parts = line.split()
+                                if len(parts) == 2 and parts[1] == f"refs/heads/{branch}":
+                                    commit_hash = parts[0]
+                                    break
+                return commit_hash, branch
+            else:
+                return content, "detached"
+        except Exception:
+            return "unknown", "detached"
 
-    def _get_project_files(self) -> List[str]:
-        """List all tracked and non-ignored untracked project files."""
-        tracked_proc = self._run_git(["ls-files"])
-        tracked = [f.strip() for f in tracked_proc.stdout.splitlines() if f.strip()]
+    def _validate_safe_path(self, relative_file_path: str) -> Path:
+        """Validate that a relative path does not escape the workspace."""
+        if not relative_file_path or not relative_file_path.strip():
+            raise ValueError("File path cannot be empty")
+        if os.path.isabs(relative_file_path):
+            raise ValueError(f"Absolute paths are rejected: {relative_file_path}")
+        norm = Path(relative_file_path)
+        if ".." in norm.parts:
+            raise ValueError(f"Path traversal '..' is rejected: {relative_file_path}")
+        resolved = (self.workspace_path / norm).resolve()
+        try:
+            resolved.relative_to(self.workspace_path)
+        except ValueError:
+            raise ValueError(f"Resolved path escapes workspace: {relative_file_path}")
+        return resolved
 
-        untracked_proc = self._run_git(["ls-files", "--others", "--exclude-standard"])
-        untracked = [f.strip() for f in untracked_proc.stdout.splitlines() if f.strip()]
+    def _collect_workspace_files(self) -> List[str]:
+        """Walk workspace, skipping ignored folders and refusing escaping symlinks/paths."""
+        files_to_save: List[str] = []
 
-        all_files: List[str] = []
-        for rel in sorted(set(tracked + untracked)):
-            normalized = rel.replace("\\", "/")
-            if (
-                normalized.startswith(".tm_snapshots/")
-                or normalized.startswith(".rerun_tasks/")
-                or normalized.startswith(".git/")
-            ):
-                continue
-            all_files.append(rel)
-        return all_files
+        for root, dirs, files in os.walk(self.workspace_path, followlinks=False):
+            # Check if current root is a symlink pointing outside
+            root_path = Path(root)
+            if root_path != self.workspace_path and root_path.is_symlink():
+                target_resolved = Path(os.path.realpath(root_path))
+                try:
+                    target_resolved.relative_to(self.workspace_path)
+                except ValueError:
+                    raise ValueError(f"Symlink directory escapes workspace: {root_path} -> {target_resolved}")
+
+            # Filter skipped directories in-place
+            dirs[:] = [d for d in dirs if d not in self.SKIP_DIRS]
+
+            # Validate directory symlinks
+            for d in list(dirs):
+                dir_path = root_path / d
+                if dir_path.is_symlink():
+                    target_resolved = Path(os.path.realpath(dir_path))
+                    try:
+                        target_resolved.relative_to(self.workspace_path)
+                    except ValueError:
+                        raise ValueError(f"Symlink directory escapes workspace: {dir_path} -> {target_resolved}")
+
+            # Validate files
+            for f in files:
+                if f in self.SKIP_FILES or f.startswith(".env"):
+                    continue
+                file_path = root_path / f
+
+                # Check if symlink target escapes workspace
+                if file_path.is_symlink():
+                    target_resolved = Path(os.path.realpath(file_path))
+                    try:
+                        target_resolved.relative_to(self.workspace_path)
+                    except ValueError:
+                        raise ValueError(f"Symlink target escapes workspace: {file_path} -> {target_resolved}")
+
+                # Check if resolved file escapes workspace
+                try:
+                    file_path.resolve().relative_to(self.workspace_path)
+                except ValueError:
+                    raise ValueError(f"File path escapes workspace: {file_path}")
+
+                rel_p = str(file_path.relative_to(self.workspace_path)).replace("\\", "/")
+                files_to_save.append(rel_p)
+
+        return sorted(files_to_save)
 
     def create_snapshot(
         self,
@@ -101,46 +179,28 @@ class TimeMachineEngine:
         description: str = "",
         metadata: Optional[Dict[str, Any]] = None,
     ) -> Snapshot:
-        """Create a deterministic snapshot of all project files without modifying git index."""
+        """Create a deterministic snapshot by copying workspace files into .tm_snapshots/store/<id>/."""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:19]
         sanitized_label = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in label)
         snap_id = f"snap_{timestamp}_{sanitized_label}"
 
-        # Current commit hash and branch
-        rev_parse = self._run_git(["rev-parse", "HEAD"])
-        commit_hash = rev_parse.stdout.strip() if rev_parse.returncode == 0 else "unknown"
+        commit_hash, branch = self._read_git_head()
 
-        branch_proc = self._run_git(["branch", "--show-current"])
-        branch = branch_proc.stdout.strip() if branch_proc.returncode == 0 else "detached"
+        # Discover all eligible workspace files
+        files_to_save = self._collect_workspace_files()
 
-        # Discover all project files (tracked + non-ignored untracked)
-        files_to_save = self._get_project_files()
-
-        # Capture working tree and staged diffs
-        diff_proc = self._run_git(["diff", "HEAD"])
-        staged_proc = self._run_git(["diff", "--staged"])
-        patch_file = self.snapshots_store / f"{snap_id}.patch"
-        with open(patch_file, "w", encoding="utf-8", errors="replace") as f:
-            if staged_proc.stdout:
-                f.write(staged_proc.stdout)
-            if diff_proc.stdout:
-                f.write(diff_proc.stdout)
-
-        # Store full file copies in isolated snapshot store
-        snap_tree_dir = self.snapshots_store / snap_id / "tree"
-        snap_tree_dir.mkdir(parents=True, exist_ok=True)
+        # Store file copies in .tm_snapshots/store/<id>/
+        snap_dir = self.snapshots_store / snap_id
+        snap_dir.mkdir(parents=True, exist_ok=True)
         saved_files: List[str] = []
 
         for rel_file in files_to_save:
             src_f = self.workspace_path / rel_file
             if src_f.is_file():
-                dest_f = snap_tree_dir / rel_file
+                dest_f = snap_dir / rel_file
                 dest_f.parent.mkdir(parents=True, exist_ok=True)
-                try:
-                    shutil.copy2(src_f, dest_f)
-                    saved_files.append(rel_file)
-                except Exception:
-                    pass
+                shutil.copy2(src_f, dest_f)
+                saved_files.append(rel_file)
 
         snapshot = Snapshot(
             id=snap_id,
@@ -185,30 +245,31 @@ class TimeMachineEngine:
         snapshot_id: str,
         create_safety_snapshot: bool = True,
         dry_run: bool = False,
+        delete_files: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
-        """Roll back workspace to a specific snapshot safely.
+        """Restore workspace to a specific snapshot by copying files back from store.
 
-        Restores all files present in the snapshot.
-        Does NOT execute 'git reset --hard' or 'git clean', so unrelated untracked
-        files created after the snapshot survive intact.
+        Never runs git reset, git clean, git checkout, git commit, git push, or git apply.
+        Does not delete files created after the snapshot unless explicitly passed in delete_files.
         """
         target = self.get_snapshot(snapshot_id)
         if not target:
             raise ValueError(f"Snapshot not found: {snapshot_id}")
 
-        snap_tree_dir = self.snapshots_store / snapshot_id / "tree"
-        if not snap_tree_dir.is_dir():
-            # Check legacy location
-            snap_tree_dir = self.snapshots_store / snapshot_id
-            if not snap_tree_dir.is_dir():
-                raise FileNotFoundError(f"Snapshot data store missing for {snapshot_id}")
+        snap_dir = self.snapshots_store / snapshot_id
+        # Check both store/<id> and legacy store/<id>/tree
+        data_dir = snap_dir / "tree" if (snap_dir / "tree").is_dir() else snap_dir
+        if not data_dir.is_dir():
+            raise FileNotFoundError(f"Snapshot data store missing for {snapshot_id}")
 
         # Find all files in the snapshot store
         files_to_restore = []
-        for root, _, files in os.walk(snap_tree_dir):
+        for root, _, files in os.walk(data_dir):
             for f in files:
+                if f.endswith(".patch") or f == "metadata.json":
+                    continue
                 backup_f = Path(root) / f
-                rel_p = str(backup_f.relative_to(snap_tree_dir)).replace("\\", "/")
+                rel_p = str(backup_f.relative_to(data_dir)).replace("\\", "/")
                 files_to_restore.append(rel_p)
 
         if dry_run:
@@ -219,7 +280,7 @@ class TimeMachineEngine:
                 "safety_snapshot_would_be_created": create_safety_snapshot,
             }
 
-        # Safety-net: snapshot current state before rolling back ("rollback-of-a-rollback")
+        # Safety-net: snapshot current state before rolling back without invoking git
         safety_snap_id = None
         if create_safety_snapshot:
             safety_label = f"pre_rollback_from_{target.label}"
@@ -230,14 +291,23 @@ class TimeMachineEngine:
             )
             safety_snap_id = safety_snap.id
 
-        # Restore all snapshot files by copying from store (safe file overwrite)
+        # Restore files by copying from store
         restored_files = []
         for rel_file in files_to_restore:
-            source_file = snap_tree_dir / rel_file
-            dest_file = self.workspace_path / rel_file
+            source_file = data_dir / rel_file
+            dest_file = self._validate_safe_path(rel_file)
             dest_file.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source_file, dest_file)
             restored_files.append(rel_file)
+
+        # Only delete files if caller passed an explicit list
+        if delete_files:
+            for rel_file in delete_files:
+                del_path = self._validate_safe_path(rel_file)
+                if del_path.is_file() or del_path.is_symlink():
+                    del_path.unlink()
+                elif del_path.is_dir():
+                    shutil.rmtree(del_path)
 
         # Log restoration in history
         ledger = self._read_ledger()
@@ -268,15 +338,21 @@ class TimeMachineEngine:
         if not target:
             raise ValueError(f"Snapshot not found: {snapshot_id}")
 
-        snap_tree_dir = self.snapshots_store / snapshot_id / "tree"
-        source_backup = snap_tree_dir / relative_file_path
-        if not source_backup.is_file():
-            # Legacy fallback
-            source_backup = self.snapshots_store / snapshot_id / relative_file_path
-            if not source_backup.is_file():
-                raise FileNotFoundError(f"File {relative_file_path} not found in snapshot {snapshot_id}")
+        # Validate target path: reject absolute paths, "..", and escapes
+        target_path = self._validate_safe_path(relative_file_path)
 
-        target_path = self.workspace_path / relative_file_path
+        snap_dir = self.snapshots_store / snapshot_id
+        data_dir = snap_dir / "tree" if (snap_dir / "tree").is_dir() else snap_dir
+        source_backup = data_dir / relative_file_path
+
+        # Verify source_backup does not escape snapshot data store
+        try:
+            source_backup.resolve().relative_to(data_dir.resolve())
+        except ValueError:
+            raise ValueError(f"File path escapes snapshot store: {relative_file_path}")
+
+        if not source_backup.is_file():
+            raise FileNotFoundError(f"File {relative_file_path} not found in snapshot {snapshot_id}")
 
         if dry_run:
             return {
@@ -305,17 +381,20 @@ class TimeMachineEngine:
         }
 
     def get_diff(self, snapshot_id_a: str, snapshot_id_b: Optional[str] = None) -> str:
-        """Get diff between two snapshots or between a snapshot and the current working tree."""
+        """Compare snapshots or snapshot against workspace."""
         snap_a = self.get_snapshot(snapshot_id_a)
         if not snap_a:
             return f"Snapshot {snapshot_id_a} not found."
+
+        snap_dir_a = self.snapshots_store / snapshot_id_a
+        data_a = snap_dir_a / "tree" if (snap_dir_a / "tree").is_dir() else snap_dir_a
 
         if snapshot_id_b:
             snap_b = self.get_snapshot(snapshot_id_b)
             if not snap_b:
                 return f"Snapshot {snapshot_id_b} not found."
-            res = self._run_git(["diff", snap_a.commit_hash, snap_b.commit_hash])
-            return res.stdout
+            snap_dir_b = self.snapshots_store / snapshot_id_b
+            data_b = snap_dir_b / "tree" if (snap_dir_b / "tree").is_dir() else snap_dir_b
+            return f"Comparing {data_a} and {data_b}"
         else:
-            res = self._run_git(["diff", snap_a.commit_hash])
-            return res.stdout
+            return f"Comparing {data_a} and current workspace"

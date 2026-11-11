@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 # Add repo root to path
@@ -28,7 +29,7 @@ from core.healer.gemini_flash import GeminiFlashHealer
 from core.rerun_bridge.orchestrator import RerunOrchestrator
 from core.time_machine.engine import TimeMachineEngine
 from scripts.syntax_guard import check_py310_compatibility
-from server import github_actions_webhook, verify_hermes_token
+from server import github_actions_webhook, validate_test_file_path, verify_hermes_token
 
 
 class MockRequest:
@@ -45,7 +46,7 @@ class TestHermesRerunPlatform(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.workspace = Path(self.temp_dir.name).resolve()
-        # Initialize git repo in workspace for snapshot engine testing
+        # Initialize git repo in workspace for test isolation
         subprocess.run(["git", "init"], cwd=str(self.workspace), capture_output=True, check=True)
         subprocess.run(["git", "config", "user.name", "Tester"], cwd=str(self.workspace), check=True)
         subprocess.run(["git", "config", "user.email", "tester@test.local"], cwd=str(self.workspace), check=True)
@@ -54,7 +55,7 @@ class TestHermesRerunPlatform(unittest.TestCase):
         self.temp_dir.cleanup()
 
     # --------------------------------------------------------------------------
-    # 1. Existing Foundation Tests (Preserved)
+    # 1. Foundation & Engine Tests
     # --------------------------------------------------------------------------
 
     def test_time_machine_snapshot_and_listing(self):
@@ -141,15 +142,31 @@ class TestHermesRerunPlatform(unittest.TestCase):
         self.assertTrue(resp_routing["continue_on_error"])
 
     # --------------------------------------------------------------------------
-    # 2. Hardening Pass Required Tests (Step 8)
+    # 2. Hardening & Safety Restore Tests
     # --------------------------------------------------------------------------
+
+    def test_snapshot_restores_deleted_file(self):
+        """Verify that a snapshot restores a file that is later deleted."""
+        deleted_file = self.workspace / "important_data.py"
+        deleted_file.write_text("def keep(): return 42\n", encoding="utf-8")
+
+        tm = TimeMachineEngine(self.workspace)
+        snap = tm.create_snapshot("before_deletion")
+
+        # Delete the file from workspace
+        deleted_file.unlink()
+        self.assertFalse(deleted_file.exists())
+
+        # Restore snapshot
+        res = tm.restore_snapshot(snap.id, create_safety_snapshot=False)
+        self.assertTrue(res["success"])
+        self.assertTrue(deleted_file.is_file(), "Deleted file was not restored!")
+        self.assertEqual(deleted_file.read_text(encoding="utf-8"), "def keep(): return 42\n")
 
     def test_untracked_files_survive_restore(self):
         """Verify restore copies snapshot files back while leaving new unrelated untracked files intact."""
         tracked_file = self.workspace / "tracked.py"
         tracked_file.write_text("x = 100\n", encoding="utf-8")
-        subprocess.run(["git", "add", "."], cwd=str(self.workspace), check=True)
-        subprocess.run(["git", "commit", "-m", "add tracked.py"], cwd=str(self.workspace), check=True)
 
         tm = TimeMachineEngine(self.workspace)
         snap = tm.create_snapshot("clean_baseline")
@@ -171,13 +188,96 @@ class TestHermesRerunPlatform(unittest.TestCase):
         self.assertTrue(untracked_file.is_file(), "Unrelated untracked file was deleted by restore!")
         self.assertEqual(untracked_file.read_bytes(), untracked_bytes)
 
+    def test_path_traversal_and_symlink_outside_workspace_rejected(self):
+        """Verify that '../' and symlinks pointing outside workspace are rejected."""
+        from fastapi import HTTPException
+
+        tm = TimeMachineEngine(self.workspace)
+        snap = tm.create_snapshot("clean_snap")
+
+        # 1. '../' in restore_file is rejected
+        with self.assertRaises(ValueError):
+            tm.restore_file(snap.id, "../outside.py")
+
+        with self.assertRaises(ValueError):
+            tm.restore_file(snap.id, "sub/../../outside.py")
+
+        # 2. Absolute path in restore_file is rejected
+        with self.assertRaises(ValueError):
+            tm.restore_file(snap.id, "/etc/passwd")
+
+        # 3. '../' in server validate_test_file_path is rejected
+        with self.assertRaises(HTTPException) as ctx:
+            validate_test_file_path(self.workspace, "../outside.py")
+        self.assertEqual(ctx.exception.status_code, 400)
+
+        # 4. Symlink pointing outside workspace is rejected during snapshot
+        with tempfile.TemporaryDirectory() as outside_dir:
+            outside_file = Path(outside_dir) / "secret.txt"
+            outside_file.write_text("secret_value", encoding="utf-8")
+            symlink_target = self.workspace / "symlink_leak.txt"
+            try:
+                symlink_target.symlink_to(outside_file)
+                with self.assertRaises(ValueError):
+                    tm.create_snapshot("snap_with_escaping_symlink")
+            except OSError:
+                # Some Windows environments without symlink permission
+                pass
+            finally:
+                if symlink_target.is_symlink() or symlink_target.exists():
+                    symlink_target.unlink()
+
+    def test_restore_snapshot_does_not_invoke_git(self):
+        """Verify restore_snapshot never executes any git commands against project repository."""
+        tm = TimeMachineEngine(self.workspace)
+        test_file = self.workspace / "sample.py"
+        test_file.write_text("val = 1\n", encoding="utf-8")
+        snap = tm.create_snapshot("pre_edit")
+
+        test_file.write_text("val = 2\n", encoding="utf-8")
+
+        real_run = subprocess.run
+
+        def fail_on_git(*args, **kwargs):
+            cmd = args[0] if args else kwargs.get("args", [])
+            if isinstance(cmd, (list, tuple)) and len(cmd) > 0 and cmd[0] == "git":
+                raise AssertionError(f"git command was invoked during restore_snapshot: {cmd}")
+            return real_run(*args, **kwargs)
+
+        with mock.patch("subprocess.run", side_effect=fail_on_git):
+            res = tm.restore_snapshot(snap.id, create_safety_snapshot=True)
+            self.assertTrue(res["success"])
+            self.assertEqual(test_file.read_text(encoding="utf-8"), "val = 1\n")
+
+    def test_heal_and_restore_routes_return_401_without_token(self):
+        """Verify /api/heal and /api/time-machine/restore return 401 without token."""
+        from fastapi import HTTPException
+
+        os.environ["HERMES_API_TOKEN"] = "token_abc_123"
+
+        # Missing token -> 401
+        req_unauth = MockRequest(b"", {})
+        with self.assertRaises(HTTPException) as ctx:
+            asyncio.run(verify_hermes_token(req_unauth))
+        self.assertEqual(ctx.exception.status_code, 401)
+
+        # Wrong token -> 401
+        req_bad_auth = MockRequest(b"", {"X-Hermes-Token": "wrong_token"})
+        with self.assertRaises(HTTPException) as ctx2:
+            asyncio.run(verify_hermes_token(req_bad_auth))
+        self.assertEqual(ctx2.exception.status_code, 401)
+
+        # When no token configured in environment -> 401
+        del os.environ["HERMES_API_TOKEN"]
+        with self.assertRaises(HTTPException) as ctx3:
+            asyncio.run(verify_hermes_token(req_unauth))
+        self.assertEqual(ctx3.exception.status_code, 401)
+
     def test_failed_patch_leaves_workspace_untouched(self):
         """Verify that a failing patch inside sandbox copy never touches the caller workspace."""
         failing_test = self.workspace / "test_unfixable.py"
         initial_content = "import pytest\n\ndef test_cannot_pass():\n    assert 1 == 2\n"
         failing_test.write_text(initial_content, encoding="utf-8")
-        subprocess.run(["git", "add", "."], cwd=str(self.workspace), check=True)
-        subprocess.run(["git", "commit", "-m", "unfixable test"], cwd=str(self.workspace), check=True)
 
         agent = TestHealerAgent(workspace_path=self.workspace)
         res = agent.run_and_heal("test_unfixable.py", auto_rollback_on_failure=True)
@@ -187,7 +287,7 @@ class TestHermesRerunPlatform(unittest.TestCase):
         self.assertEqual(failing_test.read_text(encoding="utf-8"), initial_content)
 
     def test_approve_writes_and_rollback_leaves_tree_at_baseline(self):
-        """Verify write gate: Caller workspace is untouched until approval, and rollback restores baseline."""
+        """Verify write gate: Caller workspace is untouched until approval, applied by apply, and rollback restores baseline."""
         test_file = self.workspace / "test_breakglass_gate.py"
         initial_content = (
             "import pytest\n"
@@ -224,8 +324,6 @@ class TestHermesRerunPlatform(unittest.TestCase):
             "        raise AssertionError('Could not find Click here link on preview page')\n"
         )
         test_file.write_text(initial_content, encoding="utf-8")
-        subprocess.run(["git", "add", "."], cwd=str(self.workspace), check=True)
-        subprocess.run(["git", "commit", "-m", "breakglass test"], cwd=str(self.workspace), check=True)
 
         agent = TestHealerAgent(workspace_path=self.workspace)
         result = agent.run_and_heal("test_breakglass_gate.py", auto_rollback_on_failure=False, auto_apply_fix=True)
@@ -235,9 +333,14 @@ class TestHermesRerunPlatform(unittest.TestCase):
         # Write Gate Check: caller workspace must NOT have the fix yet
         self.assertEqual(test_file.read_text(encoding="utf-8"), initial_content)
 
-        # Human Approval: promotes verified fix to caller workspace
+        # Human Approval: Only marks task COMPLETED; must not write files
         app_res = agent.approve_task(result["task_id"])
         self.assertEqual(app_res["status"], "COMPLETED")
+        self.assertEqual(test_file.read_text(encoding="utf-8"), initial_content, "Approve must not write files!")
+
+        # Explicit Apply: applies patch to workspace
+        apply_res = agent.apply_task(result["task_id"])
+        self.assertEqual(apply_res["status"], "APPLIED")
         self.assertIn("owner_user_id", test_file.read_text(encoding="utf-8"))
 
         # Rejection / Rollback: restores workspace to baseline
@@ -246,21 +349,21 @@ class TestHermesRerunPlatform(unittest.TestCase):
         self.assertEqual(test_file.read_text(encoding="utf-8"), initial_content)
 
     def test_webhook_bad_signature_401_and_fixture_resolution(self):
-        """Verify webhook 401 on bad signature, and fixture resolution to rolebased-subscribers with continue_on_error."""
-        from fastapi import BackgroundTasks, HTTPException
+        """Verify webhook 401 on bad signature, reject when secret missing, and fixture resolution to rolebased-subscribers."""
+        from fastapi import HTTPException
 
         os.environ["WEBHOOK_SECRET"] = "test_webhook_secret_key"
 
         # 1. Bad signature -> 401
         bad_req = MockRequest(b'{"action":"completed"}', {"X-Hub-Signature-256": "sha256=badbadbad"})
         with self.assertRaises(HTTPException) as ctx:
-            asyncio.run(github_actions_webhook(bad_req, BackgroundTasks()))
+            asyncio.run(github_actions_webhook(bad_req))
         self.assertEqual(ctx.exception.status_code, 401)
 
         # 2. Missing signature -> 401
         missing_req = MockRequest(b'{"action":"completed"}', {})
         with self.assertRaises(HTTPException) as ctx2:
-            asyncio.run(github_actions_webhook(missing_req, BackgroundTasks()))
+            asyncio.run(github_actions_webhook(missing_req))
         self.assertEqual(ctx2.exception.status_code, 401)
 
         # 3. Valid signature with tests/fixtures/gha_workflow_job_failure.json
@@ -269,9 +372,10 @@ class TestHermesRerunPlatform(unittest.TestCase):
         valid_sig = "sha256=" + hmac.new(b"test_webhook_secret_key", raw_body, hashlib.sha256).hexdigest()
         valid_req = MockRequest(raw_body, {"X-Hub-Signature-256": valid_sig})
 
-        res = asyncio.run(github_actions_webhook(valid_req, BackgroundTasks()))
+        res = asyncio.run(github_actions_webhook(valid_req))
         self.assertEqual(res["status"], "triaged")
         self.assertTrue(res["triaged"])
+        self.assertIn("task_id", res)
         self.assertEqual(res["event"]["recommended_job"], "rolebased-subscribers")
         self.assertTrue(res["event"]["continue_on_error"])
         self.assertIn("Breakglass_Responder_Signup_Stage_Playwright.py", res["event"]["failing_test"])
@@ -281,9 +385,15 @@ class TestHermesRerunPlatform(unittest.TestCase):
         unk_sig = "sha256=" + hmac.new(b"test_webhook_secret_key", unknown_body, hashlib.sha256).hexdigest()
         unk_req = MockRequest(unknown_body, {"X-Hub-Signature-256": unk_sig})
 
-        unk_res = asyncio.run(github_actions_webhook(unk_req, BackgroundTasks()))
+        unk_res = asyncio.run(github_actions_webhook(unk_req))
         self.assertEqual(unk_res["status"], "triaged")
         self.assertFalse(unk_res["triaged"])
+
+        # 5. When WEBHOOK_SECRET is not configured -> rejects with 401
+        del os.environ["WEBHOOK_SECRET"]
+        with self.assertRaises(HTTPException) as ctx3:
+            asyncio.run(github_actions_webhook(valid_req))
+        self.assertEqual(ctx3.exception.status_code, 401)
 
     def test_ci_detective_a_star_registration_routing_strict(self):
         """Verify A_* tests strictly route to registration with continue_on_error: False."""
@@ -317,7 +427,7 @@ class TestHermesRerunPlatform(unittest.TestCase):
         self.assertTrue("backslash" in msg.lower() or "syntaxerror" in msg.lower())
 
     def test_auth_token_gate_on_api_endpoints(self):
-        """Verify X-Hermes-Token requirement for /api/* endpoints."""
+        """Verify shared token requirement on API requests."""
         from fastapi import HTTPException
         os.environ["HERMES_API_TOKEN"] = "secure_token_abc"
 
