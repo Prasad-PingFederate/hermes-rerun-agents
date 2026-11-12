@@ -181,11 +181,66 @@ CONSOLE_HTML = """<!DOCTYPE html>
       border-color: var(--copper);
     }
 
+    /* Executive ROI & Governance Header Bar (AG-11) */
+    .roi-header-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background-color: #1a1713;
+      border-bottom: 1px solid var(--border-hairline);
+      padding: 6px 20px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      flex-shrink: 0;
+      gap: 16px;
+    }
+    .roi-metric-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .roi-metric-label {
+      color: var(--text-dim);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      font-size: 10px;
+    }
+    .roi-metric-val {
+      color: var(--text-main);
+      font-weight: 600;
+    }
+    .roi-metric-val.highlight {
+      color: var(--copper);
+    }
+    .roi-badge-green {
+      background-color: var(--status-green-bg);
+      border: 1px solid var(--status-green-border);
+      color: var(--status-green);
+      padding: 1px 5px;
+      border-radius: 2px;
+      font-size: 10px;
+      font-weight: 600;
+    }
+    .roi-divider {
+      width: 1px;
+      height: 14px;
+      background-color: var(--border-hairline);
+    }
+    .roi-clickable {
+      cursor: pointer;
+      padding: 2px 6px;
+      border-radius: 3px;
+      transition: background 0.15s;
+    }
+    .roi-clickable:hover {
+      background-color: rgba(201, 133, 74, 0.15);
+    }
+
     /* Layout Body */
     .app-body {
       display: flex;
       flex: 1;
-      height: calc(100vh - 48px);
+      height: calc(100vh - 84px);
       overflow: hidden;
     }
 
@@ -881,6 +936,29 @@ CONSOLE_HTML = """<!DOCTYPE html>
     </div>
   </header>
 
+  <!-- Executive ROI & Governance Header Bar (AG-11) -->
+  <section class="roi-header-bar" id="roi-header-bar" data-testid="roi-header-bar">
+    <div class="roi-metric-item" id="roi-metric-hours" data-testid="roi-metric-hours">
+      <span class="roi-metric-label">Engineering Hours Saved:</span>
+      <span class="roi-metric-val" id="roi-val-hours">10.7 hrs</span>
+    </div>
+    <div class="roi-divider"></div>
+    <div class="roi-metric-item" id="roi-metric-mttr" data-testid="roi-metric-mttr">
+      <span class="roi-metric-label">MTTR Compression:</span>
+      <span class="roi-metric-val" id="roi-val-mttr">4.2h → 1.3m <span class="roi-badge-green">-99.5%</span></span>
+    </div>
+    <div class="roi-divider"></div>
+    <div class="roi-metric-item" id="roi-metric-governance" data-testid="roi-metric-governance">
+      <span class="roi-metric-label">Quarantine & Security:</span>
+      <span class="roi-metric-val" id="roi-val-governance"><span id="roi-val-flakes">1 Flake</span> • <span id="roi-val-hostiles" style="color: #ef5350;">1 Blocked</span></span>
+    </div>
+    <div class="roi-divider"></div>
+    <div class="roi-metric-item roi-clickable" id="roi-metric-dollar" data-testid="roi-metric-dollar" title="Click to audit ROI mathematical formula breakdown">
+      <span class="roi-metric-label">Estimated Value ROI:</span>
+      <span class="roi-metric-val highlight" id="roi-val-dollar">$1,338 ROI ℹ️</span>
+    </div>
+  </section>
+
   <!-- Layout Body -->
   <div class="app-body">
     <!-- Left Rail -->
@@ -1471,6 +1549,26 @@ Status: ACTIVE
     </div>
   </div>
 
+  <!-- ROI Formula Drawer / Overlay (AG-11) -->
+  <div class="provider-overlay" id="roi-modal-overlay">
+    <div class="provider-drawer" id="roi-drawer" data-testid="roi-modal" style="width: 500px;">
+      <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-hairline); padding-bottom: 12px; margin-bottom: 16px;">
+        <h3 style="font-size: 14px; font-weight: 600; color: var(--copper);">Executive ROI &amp; Governance Mathematical Breakdown</h3>
+        <button class="btn-top" id="btn-close-roi" style="padding: 2px 8px;">✕</button>
+      </div>
+      <div style="font-family: var(--font-mono); font-size: 12px; color: var(--text-muted); line-height: 1.6;">
+        <p style="margin-bottom: 8px; color: var(--text-main);"><strong>Transparent Formula Standard:</strong></p>
+        <div style="background: var(--bg-card); padding: 12px; border-radius: 3px; border: 1px solid var(--border-hairline); margin-bottom: 16px; font-size: 11px;">
+          Hours Saved = (Product Bugs × 4.2h) + (Test Drifts × 2.0h) + (Flakes × 1.5h) + (Hostiles Blocked × 3.0h)<br><br>
+          Estimated ROI ($) = Total Hours Saved × Engineering Hourly Rate ($125/hr)
+        </div>
+        <div id="roi-breakdown-details" style="font-size: 11px;">
+          <!-- Dynamically populated from /api/telemetry/roi -->
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Client JavaScript -->
   <script>
     // State management
@@ -1525,6 +1623,71 @@ Status: ACTIVE
     const prBannerDetails = document.getElementById('pr-banner-details');
     const inputApproverNote = document.getElementById('input-approver-note');
     const btnRequestChanges = document.getElementById('btn-request-changes');
+
+    // ROI Telemetry DOM Elements (AG-11)
+    const roiValHours = document.getElementById('roi-val-hours');
+    const roiValMttr = document.getElementById('roi-val-mttr');
+    const roiValFlakes = document.getElementById('roi-val-flakes');
+    const roiValHostiles = document.getElementById('roi-val-hostiles');
+    const roiValDollar = document.getElementById('roi-val-dollar');
+    const roiMetricDollar = document.getElementById('roi-metric-dollar');
+    const roiModalOverlay = document.getElementById('roi-modal-overlay');
+    const btnCloseRoi = document.getElementById('btn-close-roi');
+    const roiBreakdownDetails = document.getElementById('roi-breakdown-details');
+
+    async function loadROITelemetry() {
+      try {
+        const data = await apiGet('/api/telemetry/roi');
+        if (data) {
+          if (roiValHours) roiValHours.innerText = `${data.engineering_hours_saved} hrs`;
+          if (roiValMttr) {
+            roiValMttr.innerHTML = `${data.manual_mttr_hours}h → ${data.autonomous_mttr_minutes}m <span class="roi-badge-green">-${data.mttr_reduction_percent}%</span>`;
+          }
+          if (roiValFlakes) roiValFlakes.innerText = `${data.quarantined_flakes} Flake${data.quarantined_flakes === 1 ? '' : 's'}`;
+          if (roiValHostiles) roiValHostiles.innerText = `${data.blocked_hostile_patches} Blocked`;
+          if (roiValDollar) roiValDollar.innerText = `$${Math.round(data.dollar_roi_usd).toLocaleString()} ROI ℹ️`;
+
+          if (roiBreakdownDetails && data.formula_breakdown && data.formula_breakdown.components) {
+            const c = data.formula_breakdown.components;
+            roiBreakdownDetails.innerHTML = `
+              <div style="display:flex; justify-content:space-between; margin-bottom:6px;">
+                <span>Product Bugs Healed (${c.product_bugs.count} × ${c.product_bugs.hours_per_unit}h):</span>
+                <strong style="color:var(--text-main);">${c.product_bugs.subtotal_hours} hrs</strong>
+              </div>
+              <div style="display:flex; justify-content:space-between; margin-bottom:6px;">
+                <span>Test Drifts Healed (${c.test_drifts.count} × ${c.test_drifts.hours_per_unit}h):</span>
+                <strong style="color:var(--text-main);">${c.test_drifts.subtotal_hours} hrs</strong>
+              </div>
+              <div style="display:flex; justify-content:space-between; margin-bottom:6px;">
+                <span>Flakes Quarantined (${c.quarantined_flakes.count} × ${c.quarantined_flakes.hours_per_unit}h):</span>
+                <strong style="color:var(--text-main);">${c.quarantined_flakes.subtotal_hours} hrs</strong>
+              </div>
+              <div style="display:flex; justify-content:space-between; margin-bottom:8px;">
+                <span>Hostile Attacks Blocked (${c.blocked_hostiles.count} × ${c.blocked_hostiles.hours_per_unit}h):</span>
+                <strong style="color:var(--text-main);">${c.blocked_hostiles.subtotal_hours} hrs</strong>
+              </div>
+              <div style="border-top:1px solid var(--border-hairline); padding-top:8px; display:flex; justify-content:space-between; font-weight:600; color:var(--copper);">
+                <span>Total Net ROI ($${data.hourly_rate_usd}/hr rate):</span>
+                <span>$${Math.round(data.dollar_roi_usd).toLocaleString()} USD</span>
+              </div>
+            `;
+          }
+        }
+      } catch (e) {
+        console.error("ROI Telemetry error:", e);
+      }
+    }
+
+    if (roiMetricDollar && roiModalOverlay) {
+      roiMetricDollar.addEventListener('click', () => {
+        roiModalOverlay.classList.add('open');
+      });
+    }
+    if (btnCloseRoi && roiModalOverlay) {
+      btnCloseRoi.addEventListener('click', () => {
+        roiModalOverlay.classList.remove('open');
+      });
+    }
 
     // Navigation Switcher
     function switchTab(tabName) {
@@ -1900,6 +2063,7 @@ Status: ACTIVE
 
         updateUI();
         switchTab('sprint');
+        loadROITelemetry();
       } catch (e) {
         alert("Sprint heal error: " + e.message);
       } finally {
@@ -2235,6 +2399,7 @@ Status: ACTIVE
     // Auto-init on page load / reload (AG-10)
     window.addEventListener('DOMContentLoaded', async () => {
       loadInboxList();
+      loadROITelemetry();
       try {
         const active = await apiGet('/api/demo/active');
         if (active && active.workspace_id) {

@@ -238,6 +238,27 @@ class TestMultiRunnerAssertionErosion(unittest.TestCase):
         self.assertFalse(res_it.valid)
         self.assertTrue(any("it.skip" in r for r in res_it.reasons))
 
+    def test_url_in_string_literals_not_treated_as_comment(self):
+        """String literals containing URLs like https:// must NOT have their trailing content stripped."""
+        spec_with_urls = (
+            "import { test, expect } from '@playwright/test';\n"
+            "test('verify endpoints', async ({ page }) => {\n"
+            '    expect(page.url()).toBe("https://example.com/api/v1");\n'
+            '    expect(page.url()).toBe(\'http://localhost:3000/auth\');\n'
+            '    expect(page.url()).toBe(`https://subdomain.company.org/gateway?param=1`);\n'
+            '});\n'
+        )
+        # Should count exactly 3 assertions without stripping URLs
+        count = PlaywrightASTGuard.count_assertions(spec_with_urls)
+        self.assertEqual(count, 3)
+
+        # Verified through ZeroAssertionErosionGuard: comparing against itself
+        report = ZeroAssertionErosionGuard.verify("tests/api.spec.ts", spec_with_urls, spec_with_urls)
+        self.assertTrue(report.valid)
+        self.assertEqual(report.existing_assertions, 3)
+        self.assertEqual(report.proposed_assertions, 3)
+        self.assertEqual(report.assertion_delta, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

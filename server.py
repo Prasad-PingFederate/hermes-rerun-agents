@@ -117,6 +117,13 @@ class CreatePRRequest(BaseModel):
     title: Optional[str] = None
     body: Optional[str] = None
     approver: Optional[str] = None
+    execution_mode: Optional[str] = "DRAFT_PR"  # DRAFT_PR, DIRECT_COMMIT, SHADOW_SUGGEST
+    pr_number: Optional[int] = None
+
+
+class ROIConfigRequest(BaseModel):
+    hourly_rate_usd: Optional[float] = None
+    manual_mttr_minutes: Optional[float] = None
 
 
 class StoryRequest(BaseModel):
@@ -1058,9 +1065,65 @@ def create_demo_pr_endpoint(workspace_id: str, req: CreatePRRequest = CreatePRRe
     if not ws:
         raise HTTPException(status_code=404, detail="Workspace not found")
 
-    branch = req.branch_name or f"hermes/heal-{ws.workspace_id[-8:]}"
+    from core.quarantine.flake_quarantine_agent import FlakeQuarantineAgent
+    from core.shadow_mode.suggestion_engine import (
+        DiffHunkParser,
+        ShadowSuggestionClient,
+        ShadowSuggestionFormatter,
+    )
+
+    is_quarantine = ws.classification == "FLAKY_TEST"
+    default_prefix = "hermes/quarantine-" if is_quarantine else "hermes/heal-"
+    branch = req.branch_name or f"{default_prefix}{ws.workspace_id[-8:]}"
     approver_str = req.approver or ws.approver or "Human Approver"
-    commit_msg = req.title or f"Hermes Autonomous Heal for {ws.workspace_name} [Approved by {approver_str}]"
+    commit_msg = req.title or (
+        f"Hermes Flake Quarantine for {ws.workspace_name}"
+        if is_quarantine
+        else f"Hermes Autonomous Heal for {ws.workspace_name} [Approved by {approver_str}]"
+    )
+
+    # SHADOW_SUGGEST Mode: Zero branch-push / zero write required
+    if req.execution_mode == "SHADOW_SUGGEST":
+        client = ShadowSuggestionClient(token=os.environ.get("GITHUB_TOKEN"))
+        target_f = ws.scope[0] if ws.scope else "tests/test_cart.py"
+        sprint_id = ws.active_sprint_id or f"sprint_{ws.workspace_id[-8:]}"
+
+        # Get diff text
+        diff_text = ""
+        try:
+            diff_proc = subprocess.run(["git", "diff", "HEAD~1"], cwd=str(ws.workspace_path), capture_output=True, text=True)
+            diff_text = diff_proc.stdout
+        except Exception:
+            pass
+
+        hunks = DiffHunkParser.parse_diff(diff_text)
+        is_in_diff = DiffHunkParser.is_span_in_diff(hunks, target_f, start_line=1, end_line=10)
+
+        # Retrieve replacement code
+        target_full = ws.workspace_path / target_f
+        rep_code = target_full.read_text(encoding="utf-8") if target_full.exists() else ""
+
+        suggestion_res = client.post_or_update_suggestion(
+            owner="demo-org",
+            repo="demo-repo",
+            pr_number=req.pr_number or 1,
+            commit_sha="dummy_head_sha",
+            file_path=target_f,
+            start_line=1,
+            end_line=max(1, len(rep_code.splitlines())),
+            replacement_code=rep_code,
+            sprint_id=sprint_id,
+            is_in_diff=is_in_diff,
+            unified_diff=diff_text,
+            classification=ws.classification,
+        )
+        return {
+            "status": "success",
+            "execution_mode": "SHADOW_SUGGEST",
+            "branch": None,
+            "suggestion": suggestion_res,
+            "instructions": "Zero-Write Shadow Suggestion staged. Click 'Commit suggestion' in GitHub PR Review to apply without branch write access.",
+        }
 
     try:
         subprocess.run(["git", "checkout", "-b", branch], cwd=str(ws.workspace_path), capture_output=True, check=True)
@@ -1085,7 +1148,20 @@ def create_demo_pr_endpoint(workspace_id: str, req: CreatePRRequest = CreatePRRe
                 owner, repo = match.group(1), match.group(2)
                 try:
                     import urllib.request
-                    body_text = req.body or f"### Hermes Autonomous Heal Report\n\n- **Workspace**: {ws.workspace_name}\n- **Approved by**: {approver_str}\n- **Snapshot**: {ws.pre_apply_snapshot_id or 'N/A'}"
+                    if is_quarantine:
+                        evidence = FlakeQuarantineAgent.diagnose_flake(
+                            failure_output=f"Flaky test in {ws.workspace_name}",
+                            test_file=ws.scope[0] if ws.scope else "tests/test_intermittent.py",
+                        )
+                        body_text = FlakeQuarantineAgent.format_quarantine_pr_body(
+                            sprint_id=ws.active_sprint_id or ws.workspace_id,
+                            test_file=ws.scope[0] if ws.scope else "tests/test_intermittent.py",
+                            evidence=evidence,
+                            pr_branch=branch,
+                        )
+                    else:
+                        body_text = req.body or f"### Hermes Autonomous Heal Report\n\n- **Workspace**: {ws.workspace_name}\n- **Approved by**: {approver_str}\n- **Snapshot**: {ws.pre_apply_snapshot_id or 'N/A'}"
+
                     pr_data = json.dumps({
                         "title": commit_msg,
                         "head": branch,
@@ -1117,6 +1193,28 @@ def create_demo_pr_endpoint(workspace_id: str, req: CreatePRRequest = CreatePRRe
         "push_cmd": push_cmd,
         "instructions": f"Branch '{branch}' created locally. Run: '{push_cmd}' to push changes and open PR.",
     }
+
+
+@app.get("/api/telemetry/roi", dependencies=[Depends(verify_hermes_token)])
+def get_roi_telemetry_endpoint():
+    """Real-time Executive ROI & MTTR Telemetry calculation."""
+    from core.telemetry.roi_calculator import roi_telemetry_engine
+    workspaces = demo_manager.list_workspaces()
+    metrics = roi_telemetry_engine.calculate_from_workspaces(workspaces)
+    return metrics.to_dict()
+
+
+@app.post("/api/telemetry/roi/config", dependencies=[Depends(verify_hermes_token)])
+def set_roi_config_endpoint(req: ROIConfigRequest):
+    """Configure ROI hourly rate and manual MTTR baseline."""
+    from core.telemetry.roi_calculator import roi_telemetry_engine
+    updates: Dict[str, Any] = {}
+    if req.hourly_rate_usd is not None:
+        updates["hourly_rate_usd"] = req.hourly_rate_usd
+    if req.manual_mttr_minutes is not None:
+        updates["manual_mttr_minutes"] = req.manual_mttr_minutes
+    roi_telemetry_engine.update_config(**updates)
+    return {"status": "success", "config": roi_telemetry_engine.config.__dict__}
 
 
 @app.post("/api/demo/{workspace_id}/story", dependencies=[Depends(verify_hermes_token)])

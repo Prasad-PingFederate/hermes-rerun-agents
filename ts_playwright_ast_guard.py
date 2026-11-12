@@ -78,14 +78,25 @@ class PlaywrightASTGuard:
 
     @classmethod
     def strip_comments(cls, code: str) -> str:
-        """Strip block and line comments to avoid false positives on commented-out code."""
+        """Strip block and line comments while preserving string literals and URLs."""
         if not code:
             return ""
-        # Strip /* ... */ block comments
-        code_no_block = re.sub(r"/\*.*?\*/", "", code, flags=re.DOTALL)
-        # Strip // ... single-line comments
-        code_clean = re.sub(r"//.*$", "", code_no_block, flags=re.MULTILINE)
-        return code_clean
+        # Match string literals (single, double, template) and comments (block, line)
+        pattern = re.compile(
+            r'("(?:\\.|[^"\\])*"'
+            r"|'(?:\\.|[^'\\])*'"
+            r'|`(?:\\.|[^`\\])*`'
+            r'|/\*[\s\S]*?\*/'
+            r'|//[^\r\n]*)'
+        )
+
+        def replacer(match: re.Match) -> str:
+            s = match.group(0)
+            if s.startswith("/*") or s.startswith("//"):
+                return " "
+            return s
+
+        return pattern.sub(replacer, code)
 
     @classmethod
     def count_assertions(cls, code: str) -> int:

@@ -217,3 +217,7 @@ class RequirementsAgent:
             target_files=ticket.allowed_files,
             max_context_tokens=max_tokens,
         )
+
+
+# Export FlakeQuarantineAgent for worker hierarchy
+from core.quarantine.flake_quarantine_agent import FlakeQuarantineAgent

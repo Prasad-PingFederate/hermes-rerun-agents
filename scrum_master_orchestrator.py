@@ -478,10 +478,30 @@ class ScrumMasterOrchestrator:
                     depends_on=[],
                 )
                 tickets = [t_heal]
-            else:  # TEST_BUG or FLAKY_TEST
+            elif classification == "FLAKY_TEST":
                 test_files = [
                     f for f in all_allowed
-                    if (f.startswith("tests/") or Path(f).name.startswith("test_") or f.endswith("_test.py"))
+                    if (f.startswith("tests/") or Path(f).name.startswith("test_") or f.endswith("_test.py") or f.endswith(".ts") or f.endswith(".js"))
+                ]
+                if not test_files:
+                    test_files = ["tests/test_calc.py"]
+
+                t_heal = self.router.route_ticket(
+                    ticket_id="QUARANTINE-001",
+                    title=f"Quarantine flaky test ({test_files[0]})",
+                    complexity=2,
+                    allowed_files=list(dict.fromkeys(test_files)),
+                    acceptance_criteria=[
+                        "AC-1: Apply non-erosive retry quarantine policy (reruns=2).",
+                        "AC-2: Preserve all existing assertions and inject zero skip modifiers.",
+                    ],
+                    depends_on=[],
+                )
+                tickets = [t_heal]
+            else:  # TEST_BUG
+                test_files = [
+                    f for f in all_allowed
+                    if (f.startswith("tests/") or Path(f).name.startswith("test_") or f.endswith("_test.py") or f.endswith(".ts") or f.endswith(".js"))
                 ]
                 if not test_files:
                     test_files = ["tests/test_calc.py"]
@@ -516,6 +536,8 @@ class ScrumMasterOrchestrator:
         for ticket in ordered_tickets:
             if "WRITER" in ticket.ticket_id:
                 agent_role = AgentRole.TEST_CASE_WRITER_AGENT
+            elif "QUARANTINE" in ticket.ticket_id:
+                agent_role = AgentRole.FLAKE_QUARANTINE_AGENT
             elif "HEAL-TEST" in ticket.ticket_id:
                 agent_role = AgentRole.TEST_HEALER_AGENT
             else:
@@ -540,7 +562,11 @@ class ScrumMasterOrchestrator:
                     proposed_changes=patch_map,
                 )
 
-            allow_tests = agent_role in (AgentRole.TEST_CASE_WRITER_AGENT, AgentRole.TEST_HEALER_AGENT)
+            allow_tests = agent_role in (
+                AgentRole.TEST_CASE_WRITER_AGENT,
+                AgentRole.TEST_HEALER_AGENT,
+                AgentRole.FLAKE_QUARANTINE_AGENT,
+            )
             executed_ticket, proposal = self.execute_ticket_with_escalation(
                 sprint_id=sprint_id,
                 ticket=ticket,

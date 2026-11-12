@@ -121,6 +121,36 @@ class TestTesterConsoleFeatures(unittest.TestCase):
             self.assertTrue(page.locator('[data-testid="btn-export-json"]').is_visible())
             self.assertTrue(page.locator('[data-testid="btn-export-html"]').is_visible())
 
+            # Close audit drawer before proceeding
+            page.locator('#btn-close-audit').click()
+
+            # 5. Test Executive ROI & Governance Header Bar (AG-11)
+            roi_bar = page.locator('[data-testid="roi-header-bar"]')
+            self.assertTrue(roi_bar.is_visible())
+
+            hours_text = page.locator('[data-testid="roi-metric-hours"]').inner_text()
+            self.assertIn("HOURS SAVED", hours_text.upper())
+            self.assertIn("hrs", hours_text.lower())
+
+            mttr_text = page.locator('[data-testid="roi-metric-mttr"]').inner_text()
+            self.assertIn("MTTR COMPRESSION", mttr_text.upper())
+            self.assertIn("%", mttr_text)
+
+            dollar_metric = page.locator('[data-testid="roi-metric-dollar"]')
+            self.assertTrue(dollar_metric.is_visible())
+            self.assertIn("$", dollar_metric.inner_text())
+
+            # Open ROI math modal
+            dollar_metric.click()
+            page.wait_for_selector('[data-testid="roi-modal"]', timeout=5000)
+            roi_modal = page.locator('[data-testid="roi-modal"]')
+            self.assertTrue(roi_modal.is_visible())
+            self.assertIn("Transparent Formula Standard", roi_modal.inner_text())
+
+            # Close ROI math modal
+            page.locator('#btn-close-roi').click()
+            page.wait_for_selector('[data-testid="roi-modal"]', state="hidden", timeout=5000)
+
             browser.close()
 
 

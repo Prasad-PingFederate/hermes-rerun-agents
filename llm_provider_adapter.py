@@ -34,6 +34,7 @@ class AgentRole(str, Enum):
     TEST_HEALER_AGENT = "TestHealerAgent"
     QA_CRITIC_AGENT = "QACriticAgent"
     SECURITY_BLAST_RADIUS_AGENT = "SecurityBlastRadiusAgent"
+    FLAKE_QUARANTINE_AGENT = "FlakeQuarantineAgent"
 
 
 @dataclass
@@ -274,12 +275,38 @@ AGENT_SKILL_REGISTRY: Dict[str, AgentSkillDefinition] = {
     ),
 }
 
+FLAKE_QUARANTINE_SKILL_DEF = AgentSkillDefinition(
+    role_name="FlakeQuarantineAgent",
+    tier=ModelTier.TIER_2_SENIOR_SWE.value,
+    escalation_path="TIER_2 -> TIER_1",
+    role_description=(
+        "Stabilizes non-deterministic and flaky tests by injecting retry policies "
+        "(@pytest.mark.flaky, test.describe.configure, jest.retryTimes) while strictly "
+        "preserving all test assertions and modifying zero product code."
+    ),
+    skills=[
+        "Non-Erosive Retry Quarantine Injection (Pytest, Playwright, Jest)",
+        "Flake Diagnostic Root Cause Profiling (FlakeDiagnosticEvidence)",
+        "Zero Assertion Erosion Enforcement",
+    ],
+    owned_modules=[
+        "core/quarantine/flake_quarantine_agent.py",
+    ],
+    strict_boundaries=[
+        "Never modifies product/application code.",
+        "Never skips or deletes test assertions.",
+        "Never introduces .skip or xfail modifiers.",
+    ],
+)
+
 
 def get_agent_skill_definition(agent_role: Union[str, AgentRole]) -> AgentSkillDefinition:
     """Retrieve skill definition for specified agent role."""
     key = agent_role.value if isinstance(agent_role, AgentRole) else str(agent_role)
     if key in AGENT_SKILL_REGISTRY:
         return AGENT_SKILL_REGISTRY[key]
+    if key in ("FlakeQuarantineAgent", getattr(AgentRole, "FLAKE_QUARANTINE_AGENT", None)):
+        return FLAKE_QUARANTINE_SKILL_DEF
     # Fallback default definition
     return AgentSkillDefinition(
         role_name=key,
@@ -1246,6 +1273,14 @@ class HermesLLMAdapter:
                 return LocalHeuristicEngine.heal_test_cases(ticket, file_contents, instruction)
             elif role_key == AgentRole.TEST_CASE_WRITER_AGENT.value:
                 return LocalHeuristicEngine.author_test_cases(ticket, file_contents, instruction)
+            elif role_key == AgentRole.FLAKE_QUARANTINE_AGENT.value:
+                from core.quarantine.flake_quarantine_agent import FlakeQuarantineAgent
+                q_agent = FlakeQuarantineAgent(self.workspace_path)
+                res: Dict[str, str] = {}
+                for f in getattr(ticket, "allowed_files", []):
+                    curr = file_contents.get(f, "")
+                    res[f] = q_agent.quarantine_code(f, curr)
+                return res
             else:
                 return LocalHeuristicEngine.synthesize_developer_patch(ticket, file_contents, instruction)
 
