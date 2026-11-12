@@ -116,3 +116,4 @@ class NormalizedFailure:
             "runner": self.runner,
             "deterministic_verdict": self.deterministic_verdict,
         }
+

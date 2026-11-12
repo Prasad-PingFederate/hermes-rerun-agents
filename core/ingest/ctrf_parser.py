@@ -137,3 +137,4 @@ class CTRFParser:
             failures.append(failure)
 
         return failures
+

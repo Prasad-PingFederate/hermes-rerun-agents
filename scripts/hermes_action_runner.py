@@ -27,6 +27,7 @@ sys.path.insert(0, str(REPO_ROOT))
 from agents.ci_detective import CIDetectiveAgent
 from core.audit.otel_exporter import OTLPExporter
 from core.audit.sarif_exporter import SARIFExporter
+from core.audit.tricorder_feedback import GatingAction, TricorderGate
 from core.governance.assertion_erosion_guard import ZeroAssertionErosionGuard
 from core.quarantine.flake_quarantine_agent import FlakeQuarantineAgent
 from core.scale.shard_clusterer import ShardClusterer
@@ -190,36 +191,76 @@ def main() -> int:
 
     # 4. Mode Routing: SHADOW_SUGGEST vs DRAFT_PR
     if mode == "shadow":
-        print("🛡️ [SHADOW MODE] Generating Zero-Write in-diff PR review suggestion...")
-        # Get unified diff against HEAD
-        diff_text = ""
-        try:
-            diff_proc = subprocess.run(["git", "diff", "HEAD~1"], cwd=str(workspace_path), capture_output=True, text=True)
-            diff_text = diff_proc.stdout
-        except Exception:
-            pass
-
-        hunks = DiffHunkParser.parse_diff(diff_text)
-        is_in_diff = DiffHunkParser.is_span_in_diff(hunks, target_file, start_line=1, end_line=max(1, len(rep_code.splitlines())))
-
-        client = ShadowSuggestionClient(token=github_token)
-        sugg_res = client.post_or_update_suggestion(
-            owner=repo_owner,
-            repo=repo_name,
-            pr_number=pr_number or 1,
-            commit_sha=head_sha,
-            file_path=target_file,
-            start_line=1,
-            end_line=max(1, len(rep_code.splitlines())),
-            replacement_code=rep_code,
-            sprint_id=sprint_id,
-            is_in_diff=is_in_diff,
-            unified_diff=diff_text or f"--- a/{target_file}\n+++ b/{target_file}\n@@ -1 +1 @@\n",
-            classification=classification,
+        print("🛡️ [SHADOW MODE] Running Google Tricorder Precision Gating & Shadow Suggestion...")
+        is_deterministic = bool(deterministic_override)
+        gate = TricorderGate()
+        raw_conf = 1.0 if is_deterministic else float(staged_proposal.get("confidence", 0.92))
+        decision = gate.evaluate(
+            raw_confidence=raw_conf,
+            category=classification,
+            is_deterministic=is_deterministic,
+            cluster_id=sprint_id,
         )
-        print(f"✨ [SUGGESTION DISPATCHED] Status: {sugg_res.get('status')} | Mode: {sugg_res.get('mode')}")
-        set_action_output("status", "suggested")
-        set_action_output("healed", "true")
+        set_action_output("tricorder_action", decision.action.value)
+        set_action_output("effective_confidence", str(decision.effective_confidence))
+
+        if decision.action == GatingAction.SUPPRESS_SILENT:
+            print(f"🤫 [TRICORDER SUPPRESSED] {decision.reason}")
+            gh_summary = os.environ.get("GITHUB_STEP_SUMMARY")
+            if gh_summary:
+                try:
+                    with open(gh_summary, "a", encoding="utf-8") as f:
+                        f.write(
+                            f"\n### 🤫 Hermes Tricorder Silent Suppression\n"
+                            f"- **Category**: `{classification}`\n"
+                            f"- **Confidence**: {decision.effective_confidence:.0%}\n"
+                            f"- **Reason**: {decision.reason}\n"
+                        )
+                except Exception:
+                    pass
+            set_action_output("status", "suppressed_by_confidence")
+            set_action_output("healed", "false")
+        else:
+            # Get unified diff against HEAD
+            diff_text = ""
+            try:
+                diff_proc = subprocess.run(["git", "diff", "HEAD~1"], cwd=str(workspace_path), capture_output=True, text=True)
+                diff_text = diff_proc.stdout
+            except Exception:
+                pass
+
+            hunks = DiffHunkParser.parse_diff(diff_text)
+            # If Tricorder gated to PUBLISH_COLLAPSED, force out-of-diff / collapsed rendering
+            if decision.action == GatingAction.PUBLISH_COLLAPSED:
+                is_in_diff = False
+            else:
+                is_in_diff = DiffHunkParser.is_span_in_diff(hunks, target_file, start_line=1, end_line=max(1, len(rep_code.splitlines())))
+
+            footer = TricorderGate.generate_report_footer(
+                decision=decision,
+                cluster_id=sprint_id,
+                category=classification,
+            )
+
+            client = ShadowSuggestionClient(token=github_token)
+            sugg_res = client.post_or_update_suggestion(
+                owner=repo_owner,
+                repo=repo_name,
+                pr_number=pr_number or 1,
+                commit_sha=head_sha,
+                file_path=target_file,
+                start_line=1,
+                end_line=max(1, len(rep_code.splitlines())),
+                replacement_code=rep_code,
+                sprint_id=sprint_id,
+                is_in_diff=is_in_diff,
+                unified_diff=diff_text or f"--- a/{target_file}\n+++ b/{target_file}\n@@ -1 +1 @@\n",
+                classification=classification,
+                tricorder_footer=footer,
+            )
+            print(f"✨ [SUGGESTION DISPATCHED] Status: {sugg_res.get('status')} | Mode: {sugg_res.get('mode')} | Gating: {decision.action.value}")
+            set_action_output("status", "suggested")
+            set_action_output("healed", "true")
 
     else:
         # HEAL Mode: Create draft PR branch

@@ -91,6 +91,9 @@ outputs:
   clusters-collapsed:
     description: 'Count of parallel runner shard failures collapsed into this root-cause fix'
     value: ${{ steps.run-hermes.outputs.clusters_collapsed }}
+  tricorder-action:
+    description: 'Google Tricorder confidence gating action (PUBLISH_INLINE, PUBLISH_COLLAPSED, SUPPRESS_SILENT)'
+    value: ${{ steps.run-hermes.outputs.tricorder_action }}
 
 runs:
   using: 'composite'

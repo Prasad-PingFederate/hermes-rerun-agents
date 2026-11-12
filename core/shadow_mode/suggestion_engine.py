@@ -135,6 +135,7 @@ class ShadowSuggestionFormatter:
         classification: str = "PRODUCT_BUG",
         root_cause: str = "Defensive validation required",
         governance_badges: Optional[List[str]] = None,
+        tricorder_footer: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Generate GitHub PR Review comment payload with markdown ```suggestion block."""
         badges = governance_badges or [
@@ -146,6 +147,7 @@ class ShadowSuggestionFormatter:
         marker = cls.get_marker(sprint_id)
 
         clean_replacement = replacement_code.rstrip("\r\n")
+        footer_block = f"\n\n{tricorder_footer}" if tricorder_footer else ""
 
         body = (
             f"{marker}\n"
@@ -156,6 +158,7 @@ class ShadowSuggestionFormatter:
             f"{clean_replacement}\n"
             f"```\n\n"
             f"*Click **\"Commit suggestion\"** to apply this patch directly to this branch with zero human code-writing.*"
+            f"{footer_block}"
         )
 
         payload: Dict[str, Any] = {
@@ -183,10 +186,12 @@ class ShadowSuggestionFormatter:
         classification: str = "TEST_BUG",
         governance_audit: str = "All security gates passed.",
         root_cause: str = "Assertion drifted or untouched test file broken by contract update",
+        tricorder_footer: Optional[str] = None,
     ) -> str:
         """Generate collapsible PR summary comment when file/span is outside PR diff."""
         marker = cls.get_marker(sprint_id)
         clean_path = file_path.replace("\\", "/").lstrip("/")
+        footer_block = f"\n\n{tricorder_footer}" if tricorder_footer else ""
 
         return (
             f"{marker}\n"
@@ -212,6 +217,7 @@ class ShadowSuggestionFormatter:
             f"{unified_diff.strip()}\n"
             f"EOF\n"
             f"```\n"
+            f"{footer_block}"
         )
 
 
@@ -284,6 +290,7 @@ class ShadowSuggestionClient:
         classification: str = "PRODUCT_BUG",
         root_cause: str = "Defensive validation needed",
         governance_audit: str = "All security gates passed.",
+        tricorder_footer: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Post or update an in-diff suggestion or out-of-diff fallback comment."""
         marker = ShadowSuggestionFormatter.get_marker(sprint_id)
@@ -299,6 +306,7 @@ class ShadowSuggestionClient:
                     sprint_id=sprint_id,
                     classification=classification,
                     root_cause=root_cause,
+                    tricorder_footer=tricorder_footer,
                 )
                 payload["commit_id"] = commit_sha
                 return {
@@ -317,6 +325,7 @@ class ShadowSuggestionClient:
                     classification=classification,
                     governance_audit=governance_audit,
                     root_cause=root_cause,
+                    tricorder_footer=tricorder_footer,
                 )
                 return {
                     "status": "simulated",
@@ -337,6 +346,7 @@ class ShadowSuggestionClient:
                 sprint_id=sprint_id,
                 classification=classification,
                 root_cause=root_cause,
+                tricorder_footer=tricorder_footer,
             )
             review_payload["commit_id"] = commit_sha
 
@@ -386,6 +396,7 @@ class ShadowSuggestionClient:
             classification=classification,
             governance_audit=governance_audit,
             root_cause=root_cause,
+            tricorder_footer=tricorder_footer,
         )
 
         if existing and existing.get("type") == "issue_comment":

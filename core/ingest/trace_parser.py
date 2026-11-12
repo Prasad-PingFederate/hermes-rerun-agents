@@ -290,3 +290,4 @@ class PlaywrightTraceForensics:
                         failed_requests.append(req_obj)
 
         return action_error, failed_selector, dom_excerpt
+

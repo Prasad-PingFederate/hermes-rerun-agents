@@ -87,3 +87,4 @@ class ArtifactLoader:
                 continue
 
         return failures
+
