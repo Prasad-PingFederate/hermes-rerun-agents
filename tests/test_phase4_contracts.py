@@ -273,7 +273,7 @@ class TestGAP28StackProject(unittest.TestCase):
 
         result = orch.run_sprint(
             mode="heal",
-            pytest_cmd=["pytest", "tests/test_stack.py"],
+            pytest_cmd=[sys.executable, "-m", "pytest", "tests/test_stack.py"],
             auto_approve=False,
         )
 
@@ -304,7 +304,7 @@ class TestGAP28StackProject(unittest.TestCase):
             # 1. Run sprint in heal mode with fake provider
             result = orch.run_sprint(
                 mode="heal",
-                pytest_cmd=["pytest", "tests/test_stack.py"],
+                pytest_cmd=[sys.executable, "-m", "pytest", "tests/test_stack.py"],
                 auto_approve=False,
             )
 

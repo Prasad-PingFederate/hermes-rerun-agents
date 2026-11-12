@@ -19,3 +19,4 @@ def test_pop_empty_raises_index_error():
     s = Stack()
     with pytest.raises(IndexError):
         s.pop()
+

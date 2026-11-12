@@ -8,6 +8,7 @@ from __future__ import annotations
 import os
 import shutil
 import sqlite3
+import sys
 import tempfile
 import time
 import unittest
@@ -214,7 +215,7 @@ class TestHermesFullPipeline(unittest.TestCase):
         self.assertFalse(sandbox_dir.exists())
 
         # Test timeout handling (AC-2)
-        hang_cmd = ["python", "-c", "import time; time.sleep(10)"]
+        hang_cmd = [sys.executable, "-c", "import time; time.sleep(10)"]
         run_res = executor.run_single_test(hang_cmd, cwd=self.workspace, timeout_seconds=1)
         self.assertTrue(run_res.timed_out)
         self.assertEqual(run_res.exit_code, 124)

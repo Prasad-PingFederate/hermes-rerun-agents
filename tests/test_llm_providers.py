@@ -311,7 +311,7 @@ class TestLLMProviders(unittest.TestCase):
         bat_file = temp_dir / "claude.bat"
         bat_file.write_text(f'@"{sys.executable}" "{py_script}" %*\n', encoding="utf-8")
         sh_file = temp_dir / "claude"
-        sh_file.write_text(f'#!"{sys.executable}"\nimport sys, runpy; runpy.run_path(r"{py_script}", run_name="__main__")\n', encoding="utf-8")
+        sh_file.write_text(f'#!{sys.executable}\nimport sys, runpy; runpy.run_path(r"{py_script}", run_name="__main__")\n', encoding="utf-8")
         try:
             os.chmod(str(sh_file), 0o755)
         except Exception:
