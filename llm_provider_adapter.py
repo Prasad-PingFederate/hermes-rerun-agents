@@ -21,6 +21,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+from core.healer.ast_surgical_patcher import ASTSurgicalPatcher
 from core.orchestrator.scrum_hierarchy import ModelTier
 
 
@@ -379,7 +380,7 @@ class LocalHeuristicEngine:
 
             # Heuristic for Ledger demo / ledger repairs
             if "ledger" in rel_path.lower() or "ledger" in title:
-                fixed_code = (
+                full_ledger = (
                     "class InMemoryLedger:\n"
                     "    \"\"\"Thread-safe, validated in-memory financial ledger.\"\"\"\n\n"
                     "    def __init__(self, initial_balance: float = 0.0):\n"
@@ -394,7 +395,8 @@ class LocalHeuristicEngine:
                     "        if amount <= 0:\n"
                     "            raise ValueError(\"Deposit amount must be strictly positive\")\n"
                     "        self._balance += amount\n"
-                    "        self._transactions.append(amount)\n"
+                    "        if hasattr(self, \"_transactions\"):\n"
+                    "            self._transactions.append(amount)\n"
                     "        return self._balance\n\n"
                     "    def withdraw(self, amount: float) -> float:\n"
                     "        if amount <= 0:\n"
@@ -402,11 +404,43 @@ class LocalHeuristicEngine:
                     "        if amount > self._balance:\n"
                     "            raise ValueError(\"Insufficient funds\")\n"
                     "        self._balance -= amount\n"
-                    "        self._transactions.append(-amount)\n"
+                    "        if hasattr(self, \"_transactions\"):\n"
+                    "            self._transactions.append(-amount)\n"
                     "        return self._balance\n"
                 )
-                patches[rel_path] = fixed_code
-                continue
+                span = ASTSurgicalPatcher.locate_function_span(current_code, function_name="deposit") if current_code else None
+                if span:
+                    deposit_patch = (
+                        "def deposit(self, amount: float) -> float:\n"
+                        "    if amount <= 0:\n"
+                        "        raise ValueError(\"Deposit amount must be strictly positive\")\n"
+                        "    self._balance += amount\n"
+                        "    if hasattr(self, \"_transactions\"):\n"
+                        "        self._transactions.append(amount)\n"
+                        "    return self._balance\n"
+                    )
+                    patches[rel_path] = ASTSurgicalPatcher.splice_function_patch(current_code, span, deposit_patch)
+                    continue
+                else:
+                    patches[rel_path] = full_ledger
+                    continue
+
+            # Traceback-driven function surgery
+            tb_loc = ASTSurgicalPatcher.parse_traceback_location(instruction or getattr(ticket, "description", ""))
+            if tb_loc and tb_loc.get("function"):
+                func_name = tb_loc["function"]
+                span = ASTSurgicalPatcher.locate_function_span(current_code, function_name=func_name, line_number=tb_loc.get("line"))
+                if span:
+                    func_body = span.original_text
+                    if "raise" not in func_body and "return" in func_body:
+                        # Add defensive guard
+                        guard = "    if amount <= 0:\n        raise ValueError('Invalid argument')\n"
+                        rep = span.original_text.replace("):", f"):\n{guard}")
+                        try:
+                            patches[rel_path] = ASTSurgicalPatcher.splice_function_patch(current_code, span, rep)
+                            continue
+                        except Exception:
+                            pass
 
             # Heuristic for calculator / math repairs
             if "add" in title or "add" in str(criteria).lower():

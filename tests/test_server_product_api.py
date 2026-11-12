@@ -42,6 +42,15 @@ class TestServerProductAPI(unittest.TestCase):
     def tearDownClass(cls):
         server.demo_manager.cleanup_all()
 
+    def _post_webhook(self, payload: dict):
+        body = json.dumps(payload).encode("utf-8")
+        sig = "sha256=" + hmac.new(b"secret-123", body, hashlib.sha256).hexdigest()
+        return self.client.post(
+            "/api/webhook/github-actions",
+            content=body,
+            headers={"X-Hub-Signature-256": sig, "Content-Type": "application/json"},
+        )
+
     def test_connect_repo_endpoint(self):
         with tempfile.TemporaryDirectory() as td:
             repo_dir = Path(td)
@@ -168,6 +177,69 @@ class TestServerProductAPI(unittest.TestCase):
         )
         self.assertEqual(res_test.status_code, 200)
         self.assertEqual(res_test.json()["status"], "healthy")
+
+    def test_webhook_comment_commands_approve_and_rewind(self):
+        # 1. Create a ledger workspace awaiting approval
+        res_led = self.client.post("/api/demo/ledger", headers=self.headers)
+        ws_id = res_led.json()["workspace_id"]
+
+        # Run sprint heal without auto_approve
+        ws = server.demo_manager.get_workspace(ws_id)
+        self.assertIsNotNone(ws)
+        sprint_res = ws.orchestrator.run_sprint(mode="heal", auto_approve=False)
+        ws.active_sprint_id = sprint_res.get("sprint_id")
+        ws.status = "AWAITING_WRITE_GATE"
+        ws.pre_apply_snapshot_id = sprint_res.get("snapshot_id")
+        server.demo_manager.persist_workspace(ws)
+
+        # 2. Issue comment webhook with "/hermes approve"
+        approve_payload = {
+            "action": "created",
+            "comment": {"body": "Looks good! /hermes approve"},
+            "sender": {"login": "lead-qa"},
+        }
+        res_app = self._post_webhook(approve_payload)
+        self.assertEqual(res_app.status_code, 200)
+        app_data = res_app.json()
+        self.assertEqual(app_data["status"], "command_executed")
+        self.assertEqual(app_data["command"], "approve")
+        self.assertEqual(app_data["sender"], "lead-qa")
+
+        # 3. Issue comment webhook with "/hermes rewind"
+        rewind_payload = {
+            "action": "created",
+            "comment": {"body": "/hermes rewind back to safety snapshot"},
+            "sender": {"login": "lead-qa"},
+        }
+        res_rew = self._post_webhook(rewind_payload)
+        self.assertEqual(res_rew.status_code, 200)
+        rew_data = res_rew.json()
+        self.assertEqual(rew_data["status"], "command_executed")
+        self.assertEqual(rew_data["command"], "rewind")
+
+    def test_webhook_pr_branch_failure_retrigger_feedback_loop(self):
+        res_led = self.client.post("/api/demo/ledger", headers=self.headers)
+        ws_id = res_led.json()["workspace_id"]
+        ws = server.demo_manager.get_workspace(ws_id)
+        heal_branch = f"hermes/heal-{ws_id[-8:]}"
+        ws.metadata["heal_branch"] = heal_branch
+        server.demo_manager.persist_workspace(ws)
+
+        # Webhook payload with check_run failing on that exact heal branch
+        pr_fail_payload = {
+            "action": "completed",
+            "check_run": {
+                "conclusion": "failure",
+                "head_branch": heal_branch,
+                "output": {"summary": "Subsequent assertion failed on PR branch"},
+            },
+        }
+        res = self._post_webhook(pr_fail_payload)
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data["status"], "sprint_retriggered")
+        self.assertEqual(data["workspace_id"], ws_id)
+        self.assertEqual(data["branch"], heal_branch)
 
 
 if __name__ == "__main__":

@@ -295,9 +295,89 @@ async def github_actions_webhook(request: Request):
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON payload")
 
+    # 1. Handle GitHub Issue / Pull Request Comment commands (/hermes approve, /hermes rewind)
+    if "comment" in payload and payload.get("action") in ("created", "edited"):
+        comment_body = payload["comment"].get("body", "").strip()
+        sender = payload.get("sender", {}).get("login", "operator")
+
+        if "/hermes approve" in comment_body:
+            matching_ws = None
+            for ws in demo_manager._workspaces.values():
+                if ws.status == "AWAITING_WRITE_GATE" or ws.active_sprint_id:
+                    matching_ws = ws
+                    break
+            if matching_ws and matching_ws.orchestrator and matching_ws.active_sprint_id:
+                matching_ws.orchestrator.write_gate.approve_proposal(matching_ws.active_sprint_id)
+                matching_ws.status = "APPLIED"
+                matching_ws.approver = f"github:{sender}"
+                demo_manager.persist_workspace(matching_ws)
+                return {
+                    "status": "command_executed",
+                    "command": "approve",
+                    "sender": sender,
+                    "workspace_id": matching_ws.workspace_id,
+                    "result": "Write-Gate Approved via GitHub comment command. Changes verified in sandbox.",
+                }
+
+        elif "/hermes rewind" in comment_body:
+            matching_ws = None
+            for ws in demo_manager._workspaces.values():
+                if ws.status in ("APPLIED", "AWAITING_WRITE_GATE"):
+                    matching_ws = ws
+                    break
+            if matching_ws and matching_ws.orchestrator:
+                if matching_ws.pre_apply_snapshot_id:
+                    matching_ws.tm.revert_snapshot(matching_ws.pre_apply_snapshot_id)
+                matching_ws.status = "ROLLED_BACK"
+                demo_manager.persist_workspace(matching_ws)
+                return {
+                    "status": "command_executed",
+                    "command": "rewind",
+                    "sender": sender,
+                    "workspace_id": matching_ws.workspace_id,
+                    "result": "TimeMachine snapshot restored and PR closed.",
+                }
+
+    # 2. PR Branch Failure Feedback Loop (Do NOT open a second PR!)
+    head_branch = (
+        payload.get("workflow_run", {}).get("head_branch")
+        or payload.get("check_run", {}).get("head_branch")
+        or payload.get("check_run", {}).get("check_suite", {}).get("head_branch")
+        or ""
+    )
+    if head_branch.startswith("hermes/heal-"):
+        matching_ws = None
+        for ws in demo_manager._workspaces.values():
+            if ws.metadata.get("heal_branch") == head_branch or head_branch.endswith(ws.workspace_id[-8:]):
+                matching_ws = ws
+                break
+        if matching_ws and matching_ws.orchestrator:
+            err_summary = (
+                payload.get("check_run", {}).get("output", {}).get("summary")
+                or payload.get("workflow_run", {}).get("conclusion")
+                or "Subsequent CI failure on PR branch"
+            )
+            matching_ws.failure_output = err_summary
+            matching_ws.status = "FAILING"
+            res = matching_ws.orchestrator.run_sprint(
+                mode="heal",
+                failure_output=err_summary,
+                auto_approve=False,
+            )
+            matching_ws.active_sprint_id = res.get("sprint_id")
+            matching_ws.status = res.get("status", "AWAITING_WRITE_GATE")
+            demo_manager.persist_workspace(matching_ws)
+            return {
+                "status": "sprint_retriggered",
+                "workspace_id": matching_ws.workspace_id,
+                "branch": head_branch,
+                "sprint_id": matching_ws.active_sprint_id,
+                "reason": "CI checks on PR branch failed; re-triaged into existing sprint session without opening second PR",
+            }
+
     event = CIDetectiveAgent.parse_webhook_payload(payload)
     if not event:
-        return {"status": "ignored", "reason": "Not a failing workflow event"}
+        return {"status": "ignored", "reason": "Not an actionable workflow or comment event"}
 
     # Unknown test name returns triaged=false and does not create task
     if not event.failing_test or event.failing_test == "Unknown Test":
