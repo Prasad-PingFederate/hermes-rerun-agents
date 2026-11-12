@@ -27,10 +27,10 @@ This repository is a local healer experiment with its own `.tm_snapshots` store,
 ## 🏗️ System Architecture
 
 ```text
-┌────────────────────────────────────────────────────────────────────────┐
+┌───────────────────────────────────────────────────────────────────────┐
 │                        Rerun Supervisor & Web UI                       │
 │    (Task Scheduling, Webhook Triggers, Human Approval Review Card)     │
-└───────────────────────────────────┬────────────────────────────────────┘
+└───────────────────────────────┬───────────────────────────────────────┘
                                     │ Dispatches Task
                                     ▼
 ┌────────────────────────────────────────────────────────────────────────┐
@@ -43,7 +43,7 @@ This repository is a local healer experiment with its own `.tm_snapshots` store,
 │   6. On Success: Task -> AWAITING_APPROVAL (Caller Workspace Untouched)│
 │   7. On Approval: Promote Verified Fix -> COMPLETED                   │
 │   8. On Rejection: Rollback to Baseline T0 -> ROLLED_BACK              │
-└────────────────────────────────────────────────────────────────────────┘
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -60,14 +60,15 @@ hermes-rerun-agents/
 │   ├── rerun_bridge/
 │   │   ├── orchestrator.py        # Task queue, status lifecycle & human approval gates
 │   └── sandbox/
-│       ├── runner.py              # Isolated subprocess execution & temporary copy isolation
+│       └── runner.py              # Isolated subprocess execution & temporary copy isolation
 ├── agents/
-│   ├── breakglass_responder_healer.py # Domain skill: Stage QR-expired preview handshake recovery
+│   ├── breakglass_responder_healer.py # Optional domain skill. Not part of the public example.
 │   ├── ci_detective.py            # CI triage, log parser & parallel job isolation router
 │   └── test_healer_agent.py       # Full Try → Diagnose → Verify → Approval Write-Gate pipeline
 ├── demo/
-│   └── simulate_stage_breakglass_heal.py # End-to-end simulation of Stage failure detection & heal
+│   └── simulate_stage_breakglass_heal.py # Legacy demo. Prefer scripts/run_live_demo.py
 ├── scripts/
+│   ├── run_live_demo.py           # Generic ledger heal: sandbox, write gate, rollback
 │   └── syntax_guard.py            # Preflight Python 3.10 syntax compatibility checker
 ├── tests/
 │   ├── fixtures/
@@ -120,9 +121,9 @@ python scripts/syntax_guard.py
 ```
 
 ### 4. Run the End-to-End Simulation Demo
-Demonstrates the agent detecting a simulated Stage preview failure, healing it inside a sandbox copy, verifying the write-gate keeps caller code untouched until approval, promoting the fix on approval, and demonstrating a clean safety rollback:
+Creates a temporary repo with a buggy in-memory ledger, heals it inside a sandbox, leaves the caller workspace untouched until approval, then rolls the fix back:
 ```powershell
-python demo/simulate_stage_breakglass_heal.py
+python scripts/run_live_demo.py
 ```
 
 ### 5. Start the Webhook Server
@@ -140,29 +141,30 @@ API endpoints available at `http://127.0.0.1:8000`:
 
 ---
 
-## 💡 Worked Example: Breakglass Responder Stage Healing
+## Worked Example: In-memory ledger deposit
 
-When a Playwright test encounters the Stage preview crypto handshake failure (`MedicalProfileInfoVc.tsx` timing out and displaying `"QR Expired – Emergency Profile"`, skipping the `<InfoNote>` component):
+A pytest file expects `deposit` to reject a non-positive amount. The product code adds the amount anyway, so the suite fails.
 
-1. **Detection**:
-   The agent detects the signature error:
+1. **Detection**
+   The sandbox run reports:
    ```text
-   AssertionError: Could not find the 'Click here' link on the Breakglass preview page...
+   Failed: DID NOT RAISE ValueError
+   tests/test_ledger.py::test_deposit_rejects_negative
    ```
-2. **Analysis**:
-   The agent identifies that the crypto verification timed out, preventing `<InfoNote>` from mounting.
-3. **Autonomous Patch Applied in Sandbox Copy**:
-   * Auto-detects `"QR Expired"` and triggers an automatic single reload.
-   * Adds direct canonical fallback:
-     ```python
-     elif owner_user_id:
-         reg_target = f"{BASE_URL}/register?type=responder&userId={owner_user_id}"
-         resp_page.evaluate("(target) => sessionStorage.setItem('responderSignupCallback', target)", resp_page.url)
-         resp_page.goto(reg_target, wait_until="domcontentloaded")
-     ```
-4. **Verification in Sandbox Copy**:
-   Re-executes test in the isolated sandbox harness $\rightarrow$ **100% Passed**. Caller workspace is **untouched**.
-5. **Approval Write Gate**:
-   Human reviews the diff card in Rerun/API. Calling `approve_task` promotes the verified fix to the working tree.
-6. **Safety Rollback**:
-   If rejected, `rollback_task` guarantees the workspace reverts to the pristine baseline snapshot with zero damage.
+2. **Analysis**
+   Automation Tester classifies this as a product bug. The Developer ticket may change `src/InMemoryLedger.py` only. Test files stay out of scope.
+3. **Patch, still inside the sandbox**
+   The worker proposes a guard before the balance changes:
+   ```python
+   def deposit(self, amount: float) -> float:
+       if amount <= 0:
+           raise ValueError("Deposit amount must be strictly positive")
+       self._balance += amount
+       return self._balance
+   ```
+4. **Verification**
+   The same pytest command is run three times in an ephemeral worktree. The caller workspace is not modified.
+5. **Write gate**
+   A human, or `--auto-approve` in CI, accepts the diff. Time Machine writes a SHA-256 snapshot, then the patch is applied.
+6. **Rollback**
+   Rejecting the proposal, or a failed post-apply run, restores that snapshot. The suite fails again, which confirms the restore.
