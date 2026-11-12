@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from core.runners.runner_detector import detect_runner
 from core.time_machine.engine import TimeMachineEngine
 from scrum_master_orchestrator import ScrumMasterOrchestrator
 from sprint_state_store import SprintStateStore
@@ -219,6 +220,13 @@ class ConsoleDemoManager:
         self.load_persisted_workspaces()
         if not self._workspaces:
             return None
+        # Prioritize active sprint / awaiting write gate workspaces
+        active_sprint_ws = [
+            w for w in self._workspaces.values()
+            if w.status in ("AWAITING_WRITE_GATE", "APPLIED") or w.active_sprint_id
+        ]
+        if active_sprint_ws:
+            return max(active_sprint_ws, key=lambda w: getattr(w, "updated_at", 0.0))
         return max(self._workspaces.values(), key=lambda w: getattr(w, "updated_at", 0.0))
 
     def list_workspaces(self) -> List[Dict[str, Any]]:
@@ -465,24 +473,254 @@ class ConsoleDemoManager:
         self.persist_workspace(ws)
         return ws
 
+    def create_flake_workspace(self) -> DemoWorkspace:
+        """Create seeded Playwright flake fixture workspace (FLAKY_TEST)."""
+        ws_id = f"demo_flake_{int(time.time())}_{uuid.uuid4().hex[:6]}"
+        demo_dir = Path(tempfile.mkdtemp(prefix=f"hermes_{ws_id}_")).resolve()
+
+        subprocess.run(["git", "init"], cwd=str(demo_dir), capture_output=True, check=True)
+        subprocess.run(["git", "config", "user.name", "HermesTester"], cwd=str(demo_dir), capture_output=True, check=True)
+        subprocess.run(["git", "config", "user.email", "tester@hermes.local"], cwd=str(demo_dir), capture_output=True, check=True)
+
+        tests_dir = demo_dir / "tests"
+        tests_dir.mkdir(parents=True, exist_ok=True)
+        (demo_dir / ".gitignore").write_text(".tm_snapshots/\n__pycache__/\n*.pyc\n", encoding="utf-8")
+
+        test_code = (
+            "import pytest\n"
+            "import random\n\n"
+            "def test_intermittent_locator():\n"
+            "    # Intermittent test: fails on timing race condition\n"
+            "    val = random.choice([True, False, True])\n"
+            "    assert val is True, 'Timeout 3000ms waiting for locator button#checkout'\n"
+        )
+        (tests_dir / "test_flake.py").write_text(test_code, encoding="utf-8")
+
+        subprocess.run(["git", "add", "."], cwd=str(demo_dir), capture_output=True, check=True)
+        subprocess.run(["git", "commit", "-m", "Initial flaky test"], cwd=str(demo_dir), capture_output=True, check=True)
+
+        failure_output = (
+            "============================= test session starts =============================\n"
+            "tests/test_flake.py::test_intermittent_locator FAILED\n"
+            "E   AssertionError: Timeout 3000ms waiting for locator button#checkout\n"
+            "========================= 1 failed, 2 passed in 1.45s =========================\n"
+            "--- Multi-Run Execution History ---\n"
+            "Run 1: PASSED\n"
+            "Run 2: FAILED (AssertionError: Timeout 3000ms waiting for locator button#checkout)\n"
+            "Run 3: PASSED\n"
+            "Outcome: FLAKY_TEST (Intermittent locator timing instability)"
+        )
+
+        tm = TimeMachineEngine(demo_dir)
+        store = SprintStateStore(demo_dir / ".tm_snapshots" / "sprint_state.db")
+        orch = ScrumMasterOrchestrator(demo_dir, tm_engine=tm, store=store)
+
+        ws = DemoWorkspace(
+            workspace_id=ws_id,
+            workspace_name="PlaywrightFlake",
+            workspace_path=demo_dir,
+            failing_test="test_intermittent_locator",
+            failure_output=failure_output,
+            classification="FLAKY_TEST",
+            owner_agent="TestHealerAgent",
+            scope=["tests/test_flake.py"],
+            allowed_files=["tests/test_flake.py"],
+            status="FAILING",
+            tm=tm,
+            store=store,
+            orchestrator=orch,
+            metadata={"test_cmd": [sys.executable, "-m", "pytest", "tests/test_flake.py"]},
+        )
+        self.persist_workspace(ws)
+        return ws
+
+    def create_env_noise_workspace(self) -> DemoWorkspace:
+        """Create seeded EnvironmentNoise fixture workspace (ENVIRONMENT_NOISE)."""
+        ws_id = f"demo_noise_{int(time.time())}_{uuid.uuid4().hex[:6]}"
+        demo_dir = Path(tempfile.mkdtemp(prefix=f"hermes_{ws_id}_")).resolve()
+
+        subprocess.run(["git", "init"], cwd=str(demo_dir), capture_output=True, check=True)
+        subprocess.run(["git", "config", "user.name", "HermesTester"], cwd=str(demo_dir), capture_output=True, check=True)
+        subprocess.run(["git", "config", "user.email", "tester@hermes.local"], cwd=str(demo_dir), capture_output=True, check=True)
+
+        tests_dir = demo_dir / "tests"
+        tests_dir.mkdir(parents=True, exist_ok=True)
+        (demo_dir / ".gitignore").write_text(".tm_snapshots/\n__pycache__/\n*.pyc\n", encoding="utf-8")
+
+        test_code = (
+            "import pytest\n\n"
+            "def test_database_connection():\n"
+            "    raise ConnectionRefusedError('[Errno 111] Connection refused on 127.0.0.1:5432')\n"
+        )
+        (tests_dir / "test_api.py").write_text(test_code, encoding="utf-8")
+
+        subprocess.run(["git", "add", "."], cwd=str(demo_dir), capture_output=True, check=True)
+        subprocess.run(["git", "commit", "-m", "Initial env test"], cwd=str(demo_dir), capture_output=True, check=True)
+
+        failure_output = (
+            "ConnectionRefusedError: [Errno 111] Connection refused on 127.0.0.1:5432\n"
+            "E   ConnectionRefusedError: address already in use or service offline\n"
+            "Outcome: ENVIRONMENT_NOISE (Infrastructure blocker. Code modification prohibited.)"
+        )
+
+        tm = TimeMachineEngine(demo_dir)
+        store = SprintStateStore(demo_dir / ".tm_snapshots" / "sprint_state.db")
+        orch = ScrumMasterOrchestrator(demo_dir, tm_engine=tm, store=store)
+
+        ws = DemoWorkspace(
+            workspace_id=ws_id,
+            workspace_name="EnvironmentNoise",
+            workspace_path=demo_dir,
+            failing_test="test_database_connection",
+            failure_output=failure_output,
+            classification="ENVIRONMENT_NOISE",
+            owner_agent="ScrumMasterOrchestrator",
+            scope=["tests/test_api.py"],
+            allowed_files=[],
+            status="FAILING",
+            tm=tm,
+            store=store,
+            orchestrator=orch,
+            metadata={"test_cmd": [sys.executable, "-m", "pytest", "tests/test_api.py"]},
+        )
+        self.persist_workspace(ws)
+        return ws
+
+    def connect_repository(self, repo_path: str, name: Optional[str] = None) -> DemoWorkspace:
+        """Connect customer repository on disk for live triage and autonomous healing."""
+        target_path = Path(repo_path).resolve()
+        if not target_path.exists() or not target_path.is_dir():
+            raise ValueError(f"Path does not exist or is not a directory: {repo_path}")
+
+        # Check or init git
+        if not (target_path / ".git").is_dir():
+            subprocess.run(["git", "init"], cwd=str(target_path), capture_output=True, check=True)
+            subprocess.run(["git", "config", "user.name", "HermesTester"], cwd=str(target_path), capture_output=True, check=True)
+            subprocess.run(["git", "config", "user.email", "tester@hermes.local"], cwd=str(target_path), capture_output=True, check=True)
+
+        repo_name = name or target_path.name
+        ws_id = f"repo_{repo_name}_{int(time.time())}_{uuid.uuid4().hex[:4]}"
+
+        # Detect runner
+        runner_info = detect_runner(target_path)
+
+        # Discover tests
+        discovered_tests = []
+        for pat in runner_info.get("test_patterns", ["tests/**/*.py", "test/**/*.py"]):
+            for f in target_path.glob(pat):
+                if ".git" not in f.parts and ".tm_snapshots" not in f.parts and "node_modules" not in f.parts:
+                    discovered_tests.append(str(f.relative_to(target_path)).replace("\\", "/"))
+
+        tm = TimeMachineEngine(target_path)
+        store = SprintStateStore(target_path / ".tm_snapshots" / "sprint_state.db")
+        orch = ScrumMasterOrchestrator(target_path, tm_engine=tm, store=store)
+
+        first_test = discovered_tests[0] if discovered_tests else "tests/test_main.py"
+        ws = DemoWorkspace(
+            workspace_id=ws_id,
+            workspace_name=repo_name,
+            workspace_path=target_path,
+            failing_test=first_test,
+            failure_output=(
+                f"Repository connected: {repo_name}\n"
+                f"Discovered {len(discovered_tests)} tests.\n"
+                f"Test Runner: {runner_info['runner_name']}\n"
+                f"Command: {' '.join(runner_info['command'])}\n"
+                "Ready for autonomous failure triage."
+            ),
+            classification="PRODUCT_BUG",
+            owner_agent="DeveloperAgent",
+            scope=discovered_tests[:5] if discovered_tests else ["src/"],
+            allowed_files=discovered_tests[:5] if discovered_tests else ["src/"],
+            status="CONNECTED",
+            tm=tm,
+            store=store,
+            orchestrator=orch,
+            metadata={
+                "discovered_tests": discovered_tests,
+                "runner_info": runner_info,
+                "test_cmd": runner_info["command"] + ([first_test] if runner_info["runner_name"] == "pytest" and discovered_tests else []),
+                "customer_repo": True,
+            },
+        )
+        self.persist_workspace(ws)
+        return ws
+
+    def ingest_ci_task(self, task_id: str, title: str, details: Dict[str, Any]) -> DemoWorkspace:
+        """Ingest or sync CI failure task from GitHub Actions / .rerun_tasks/ into console workspace."""
+        ws_id = f"demo_ci_{task_id}"
+        if ws_id in self._workspaces:
+            return self._workspaces[ws_id]
+
+        failing_test = details.get("failing_test") or "tests/test_ci.py"
+        run_id = details.get("run_id") or "run_ci"
+        error_snippet = details.get("error_snippet") or f"GitHub Actions workflow run #{run_id} failed on {failing_test}"
+        classification = "TEST_BUG" if "test" in str(failing_test).lower() else "PRODUCT_BUG"
+        owner_agent = "TestHealerAgent" if classification == "TEST_BUG" else "DeveloperAgent"
+
+        demo_dir = Path(tempfile.mkdtemp(prefix=f"hermes_{ws_id}_")).resolve()
+        subprocess.run(["git", "init"], cwd=str(demo_dir), capture_output=True, check=True)
+        subprocess.run(["git", "config", "user.name", "HermesTester"], cwd=str(demo_dir), capture_output=True, check=True)
+        subprocess.run(["git", "config", "user.email", "tester@hermes.local"], cwd=str(demo_dir), capture_output=True, check=True)
+        (demo_dir / ".gitignore").write_text(".tm_snapshots/\n__pycache__/\n*.pyc\n", encoding="utf-8")
+
+        test_file_path = demo_dir / failing_test
+        test_file_path.parent.mkdir(parents=True, exist_ok=True)
+        test_file_path.write_text(
+            f"# CI failure reproduced from GHA run #{run_id}\nimport pytest\n\ndef test_ci_failure():\n    assert False, 'CI assertion failure'\n",
+            encoding="utf-8",
+        )
+        subprocess.run(["git", "add", "."], cwd=str(demo_dir), capture_output=True, check=True)
+        subprocess.run(["git", "commit", "-m", f"Initial commit for {task_id}"], cwd=str(demo_dir), capture_output=True, check=True)
+
+        tm = TimeMachineEngine(demo_dir)
+        store = SprintStateStore(demo_dir / ".tm_snapshots" / "sprint_state.db")
+        orch = ScrumMasterOrchestrator(demo_dir, tm_engine=tm, store=store)
+
+        ws = DemoWorkspace(
+            workspace_id=ws_id,
+            workspace_name=title or f"CI: {Path(failing_test).name}",
+            workspace_path=demo_dir,
+            failing_test=failing_test,
+            failure_output=error_snippet,
+            classification=classification,
+            owner_agent=owner_agent,
+            scope=[failing_test],
+            allowed_files=[failing_test],
+            status="AWAITING_APPROVAL",
+            tm=tm,
+            store=store,
+            orchestrator=orch,
+            metadata={
+                "ci_task_id": task_id,
+                "run_id": run_id,
+                "is_ci_webhook": True,
+                "test_cmd": [sys.executable, "-m", "pytest", failing_test],
+            },
+            updated_at=1.0,
+        )
+        self.persist_workspace(ws)
+        return ws
+
     def delete_workspace(self, workspace_id: str) -> bool:
         ws = self._workspaces.pop(workspace_id, None)
-        if ws and ws.workspace_path.exists():
+        if ws:
             import gc
             ws.store = None
             ws.orchestrator = None
             ws.tm = None
             gc.collect()
 
-            def _rm(func, path, exc):
-                import stat
-                try:
-                    os.chmod(path, stat.S_IWRITE)
-                    func(path)
-                except Exception:
-                    pass
+            if not ws.metadata.get("customer_repo") and ws.workspace_path.exists():
+                def _rm(func, path, exc):
+                    import stat
+                    try:
+                        os.chmod(path, stat.S_IWRITE)
+                        func(path)
+                    except Exception:
+                        pass
 
-            shutil.rmtree(ws.workspace_path, onerror=_rm)
+                shutil.rmtree(ws.workspace_path, onerror=_rm)
             try:
                 with sqlite3.connect(str(REGISTRY_DB_PATH)) as conn:
                     conn.execute("DELETE FROM demo_workspaces WHERE workspace_id = ?", (workspace_id,))
@@ -509,7 +747,7 @@ class ConsoleDemoManager:
                 ws.orchestrator = None
                 ws.tm = None
                 gc.collect()
-                if ws.workspace_path.exists():
+                if not ws.metadata.get("customer_repo") and ws.workspace_path.exists():
                     shutil.rmtree(ws.workspace_path, onerror=_rm)
             except Exception:
                 pass

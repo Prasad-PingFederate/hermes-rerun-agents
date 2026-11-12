@@ -112,7 +112,7 @@ class TestTesterConsoleBlocked(unittest.TestCase):
             self.assertFalse(btn_approve.is_visible())
 
             # 5. Inspect temp workspace directly
-            active_ws = demo_manager.get_latest_workspace()
+            active_ws = next((w for w in demo_manager._workspaces.values() if w.workspace_name == "HostilePatch"), None) or demo_manager.get_latest_workspace()
             self.assertIsNotNone(active_ws)
             ws_path = active_ws.workspace_path
 

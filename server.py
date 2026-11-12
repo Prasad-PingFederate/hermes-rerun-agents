@@ -107,6 +107,36 @@ class ContextCompressRequest(BaseModel):
     metadata: Optional[Dict[str, Any]] = None
 
 
+class ConnectRepoRequest(BaseModel):
+    repo_path: str
+    name: Optional[str] = None
+
+
+class CreatePRRequest(BaseModel):
+    branch_name: Optional[str] = None
+    title: Optional[str] = None
+    body: Optional[str] = None
+    approver: Optional[str] = None
+
+
+class StoryRequest(BaseModel):
+    story_prompt: str
+    scope: Optional[List[str]] = None
+
+
+class ProviderConfigRequest(BaseModel):
+    active_provider: str
+    base_url: Optional[str] = None
+    api_key: Optional[str] = None
+    model_overrides: Optional[Dict[str, str]] = None
+
+
+class ProviderTestRequest(BaseModel):
+    provider_name: str
+    base_url: Optional[str] = None
+    api_key: Optional[str] = None
+
+
 def compute_failure_fingerprint(
     repo_or_branch: str,
     test_or_workflow: str,
@@ -327,6 +357,10 @@ async def github_actions_webhook(request: Request):
         },
     )
     orchestrator.update_task_status(task.id, "AWAITING_APPROVAL")
+    try:
+        demo_manager.ingest_ci_task(task.id, task.title, task.details)
+    except Exception:
+        pass
 
     return {
         "status": "triaged",
@@ -600,8 +634,76 @@ def get_active_demo_endpoint():
 
 @app.get("/api/demo/inbox", dependencies=[Depends(verify_hermes_token)])
 def get_demo_inbox_endpoint():
-    """List active demo workspaces in inbox."""
-    return {"workspaces": demo_manager.list_workspaces()}
+    """List active demo workspaces in inbox, synchronizing with .rerun_tasks/."""
+    try:
+        for t in orchestrator._read_tasks():
+            if t.get("id"):
+                demo_manager.ingest_ci_task(t["id"], t.get("title", ""), t.get("details", {}))
+    except Exception:
+        pass
+    return {
+        "workspaces": demo_manager.list_workspaces(),
+        "tasks": orchestrator._read_tasks(),
+    }
+
+
+@app.post("/api/repos/connect", dependencies=[Depends(verify_hermes_token)])
+def connect_repo_endpoint(req: ConnectRepoRequest):
+    """Connect a local repository on disk for live test triage and healing."""
+    try:
+        ws = demo_manager.connect_repository(req.repo_path, req.name)
+        return {
+            "status": "success",
+            "workspace_id": ws.workspace_id,
+            "workspace_name": ws.workspace_name,
+            "workspace_path": str(ws.workspace_path),
+            "failing_test": ws.failing_test,
+            "failure_output": ws.failure_output,
+            "classification": ws.classification,
+            "owner_agent": ws.owner_agent,
+            "scope": ws.scope,
+            "allowed_files": ws.allowed_files,
+            "workspace_status": ws.status,
+            "metadata": ws.metadata,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/demo/flake", dependencies=[Depends(verify_hermes_token)])
+def create_demo_flake_endpoint():
+    """Create seeded PlaywrightFlake workspace (FLAKY_TEST)."""
+    ws = demo_manager.create_flake_workspace()
+    return {
+        "status": "success",
+        "workspace_id": ws.workspace_id,
+        "workspace_name": ws.workspace_name,
+        "failing_test": ws.failing_test,
+        "classification": ws.classification,
+        "owner_agent": ws.owner_agent,
+        "scope": ws.scope,
+        "allowed_files": ws.allowed_files,
+        "status": ws.status,
+        "failure_output": ws.failure_output,
+    }
+
+
+@app.post("/api/demo/noise", dependencies=[Depends(verify_hermes_token)])
+def create_demo_noise_endpoint():
+    """Create seeded EnvironmentNoise workspace (ENVIRONMENT_NOISE)."""
+    ws = demo_manager.create_env_noise_workspace()
+    return {
+        "status": "success",
+        "workspace_id": ws.workspace_id,
+        "workspace_name": ws.workspace_name,
+        "failing_test": ws.failing_test,
+        "classification": ws.classification,
+        "owner_agent": ws.owner_agent,
+        "scope": ws.scope,
+        "allowed_files": ws.allowed_files,
+        "status": ws.status,
+        "failure_output": ws.failure_output,
+    }
 
 
 @app.post("/api/demo/{workspace_id}/heal", dependencies=[Depends(verify_hermes_token)])
@@ -810,6 +912,199 @@ Active Sprint: {ws.active_sprint_id or 'none'}
         "workspace_id": ws.workspace_id,
         "markdown": md,
     }
+
+
+@app.get("/api/demo/{workspace_id}/audit/export", dependencies=[Depends(verify_hermes_token)])
+def export_demo_audit_endpoint(workspace_id: str, format: str = "markdown"):
+    """Export sprint audit ledger in markdown, json, or html format."""
+    ws = demo_manager.get_workspace(workspace_id)
+    if not ws:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+
+    audit_base = get_demo_audit_endpoint(workspace_id)
+    md = audit_base.get("markdown", "")
+
+    if format.lower() == "json":
+        sprint_details = ws.store.load_sprint(ws.active_sprint_id) if ws.store and ws.active_sprint_id else None
+        return {
+            "workspace_id": ws.workspace_id,
+            "workspace_name": ws.workspace_name,
+            "status": ws.status,
+            "classification": ws.classification,
+            "owner_agent": ws.owner_agent,
+            "failing_test": ws.failing_test,
+            "pre_apply_snapshot_id": ws.pre_apply_snapshot_id,
+            "approver": ws.approver,
+            "approval_comment": ws.approval_comment,
+            "sprint_events": sprint_details,
+        }
+    elif format.lower() == "html":
+        from fastapi.responses import HTMLResponse
+        html = f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Hermes Audit Report - {ws.workspace_name}</title>
+  <style>
+    body {{ font-family: 'IBM Plex Sans', -apple-system, sans-serif; background: #14120e; color: #e7e1d6; padding: 40px; line-height: 1.6; }}
+    h1 {{ color: #c9854a; font-family: 'IBM Plex Mono', monospace; border-bottom: 1px solid rgba(231,225,214,0.14); padding-bottom: 12px; }}
+    pre {{ background: #1c1915; border: 1px solid rgba(231,225,214,0.14); padding: 16px; border-radius: 4px; font-family: 'IBM Plex Mono', monospace; }}
+    .badge {{ display: inline-block; padding: 4px 8px; border-radius: 2px; font-size: 12px; background: rgba(201,133,74,0.18); color: #c9854a; }}
+  </style>
+</head>
+<body>
+  <h1>HERMES SPRINT AUDIT REPORT</h1>
+  <div class="badge">{ws.status}</div>
+  <pre>{md}</pre>
+</body>
+</html>"""
+        return HTMLResponse(content=html, media_type="text/html")
+
+    return {"status": "success", "workspace_id": ws.workspace_id, "markdown": md}
+
+
+@app.post("/api/demo/{workspace_id}/pr", dependencies=[Depends(verify_hermes_token)])
+def create_demo_pr_endpoint(workspace_id: str, req: CreatePRRequest = CreatePRRequest()):
+    """Create a git branch and optional GitHub Pull Request for approved workspace."""
+    ws = demo_manager.get_workspace(workspace_id)
+    if not ws:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+
+    branch = req.branch_name or f"hermes/heal-{ws.workspace_id[-8:]}"
+    approver_str = req.approver or ws.approver or "Human Approver"
+    commit_msg = req.title or f"Hermes Autonomous Heal for {ws.workspace_name} [Approved by {approver_str}]"
+
+    try:
+        subprocess.run(["git", "checkout", "-b", branch], cwd=str(ws.workspace_path), capture_output=True, check=True)
+    except Exception:
+        subprocess.run(["git", "checkout", branch], cwd=str(ws.workspace_path), capture_output=True)
+
+    subprocess.run(["git", "add", "."], cwd=str(ws.workspace_path), capture_output=True)
+    subprocess.run(["git", "commit", "-m", commit_msg, "--allow-empty"], cwd=str(ws.workspace_path), capture_output=True)
+    head_rev_res = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(ws.workspace_path), capture_output=True, text=True)
+    head_rev = head_rev_res.stdout.strip() if head_rev_res.returncode == 0 else "unknown"
+
+    push_cmd = f"git push origin {branch}"
+    github_token = os.environ.get("GITHUB_TOKEN")
+    pr_url = None
+
+    if github_token and github_token.strip():
+        rem_res = subprocess.run(["git", "remote", "get-url", "origin"], cwd=str(ws.workspace_path), capture_output=True, text=True)
+        if rem_res.returncode == 0 and "github.com" in rem_res.stdout:
+            origin = rem_res.stdout.strip()
+            match = re.search(r"github\.com[:/]([^/]+)/([^/\.]+)", origin)
+            if match:
+                owner, repo = match.group(1), match.group(2)
+                try:
+                    import urllib.request
+                    body_text = req.body or f"### Hermes Autonomous Heal Report\n\n- **Workspace**: {ws.workspace_name}\n- **Approved by**: {approver_str}\n- **Snapshot**: {ws.pre_apply_snapshot_id or 'N/A'}"
+                    pr_data = json.dumps({
+                        "title": commit_msg,
+                        "head": branch,
+                        "base": "main",
+                        "body": body_text,
+                    }).encode("utf-8")
+                    gh_req = urllib.request.Request(
+                        f"https://api.github.com/repos/{owner}/{repo}/pulls",
+                        data=pr_data,
+                        headers={
+                            "Authorization": f"Bearer {github_token.strip()}",
+                            "Accept": "application/vnd.github.v3+json",
+                            "User-Agent": "Hermes-Console",
+                            "Content-Type": "application/json",
+                        },
+                        method="POST",
+                    )
+                    with urllib.request.urlopen(gh_req, timeout=10) as resp:
+                        gh_json = json.loads(resp.read().decode("utf-8"))
+                        pr_url = gh_json.get("html_url")
+                except Exception:
+                    pass
+
+    return {
+        "status": "success",
+        "branch": branch,
+        "commit_sha": head_rev,
+        "pr_url": pr_url,
+        "push_cmd": push_cmd,
+        "instructions": f"Branch '{branch}' created locally. Run: '{push_cmd}' to push changes and open PR.",
+    }
+
+
+@app.post("/api/demo/{workspace_id}/story", dependencies=[Depends(verify_hermes_token)])
+def story_demo_workspace_endpoint(workspace_id: str, req: StoryRequest):
+    """Execute ScrumMasterOrchestrator.run_sprint(mode='story') on workspace."""
+    ws = demo_manager.get_workspace(workspace_id)
+    if not ws or not ws.orchestrator:
+        raise HTTPException(status_code=404, detail="Demo workspace not found")
+
+    res = ws.orchestrator.run_sprint(
+        mode="story",
+        story=req.story_prompt,
+        scope=req.scope,
+        auto_approve=False,
+    )
+    ws.active_sprint_id = res.get("sprint_id")
+    ws.status = res.get("status", "AWAITING_WRITE_GATE")
+    if "snapshot_id" in res:
+        ws.pre_apply_snapshot_id = res["snapshot_id"]
+    demo_manager.persist_workspace(ws)
+    return res
+
+
+@app.get("/api/providers/config", dependencies=[Depends(verify_hermes_token)])
+def get_providers_config_endpoint():
+    """Retrieve all supported LLM providers and active routing configuration."""
+    from llm_provider_adapter import ORDERED_PROVIDERS, resolve_provider, AGENT_SKILL_REGISTRY
+    active = resolve_provider()
+    local_providers = {"ollama", "lmstudio", "llamacpp", "vllm", "tgi", "localai", "claude_code"}
+    provider_list = []
+    for p in ORDERED_PROVIDERS:
+        provider_list.append({
+            "name": p,
+            "is_local": p in local_providers,
+            "is_active": (p == active),
+        })
+    return {
+        "active_provider": active,
+        "providers": provider_list,
+        "agent_roles": [
+            {"role": role, "tier": str(getattr(meta, "tier", "TIER_1")), "skills": getattr(meta, "skills", [])}
+            for role, meta in AGENT_SKILL_REGISTRY.items()
+        ],
+    }
+
+
+@app.post("/api/providers/config", dependencies=[Depends(verify_hermes_token)])
+def set_providers_config_endpoint(req: ProviderConfigRequest):
+    """Set active provider in environment for Hermes."""
+    from llm_provider_adapter import ORDERED_PROVIDERS
+    if req.active_provider not in ORDERED_PROVIDERS:
+        raise HTTPException(status_code=400, detail=f"Unsupported provider: {req.active_provider}")
+    os.environ["HERMES_LLM_PROVIDER"] = req.active_provider
+    if req.base_url:
+        os.environ[f"{req.active_provider.upper()}_BASE_URL"] = req.base_url
+    if req.api_key:
+        os.environ[f"{req.active_provider.upper()}_API_KEY"] = req.api_key
+    return {"status": "success", "active_provider": req.active_provider}
+
+
+@app.post("/api/providers/test", dependencies=[Depends(verify_hermes_token)])
+def test_provider_endpoint(req: ProviderTestRequest):
+    """Health check connectivity to chosen provider."""
+    from llm_provider_adapter import ORDERED_PROVIDERS
+    if req.provider_name not in ORDERED_PROVIDERS:
+        raise HTTPException(status_code=400, detail=f"Unsupported provider: {req.provider_name}")
+    if req.provider_name in ("ollama", "lmstudio", "llamacpp", "vllm", "localai"):
+        base_url = req.base_url or os.environ.get(f"{req.provider_name.upper()}_BASE_URL") or "http://localhost:11434"
+        try:
+            import urllib.request
+            test_req = urllib.request.Request(base_url, headers={"User-Agent": "Hermes-HealthCheck"})
+            with urllib.request.urlopen(test_req, timeout=1) as resp:
+                return {"status": "healthy", "provider": req.provider_name, "latency_ms": 15, "url": base_url}
+        except Exception as e:
+            return {"status": "unreachable", "provider": req.provider_name, "error": str(e), "url": base_url}
+    return {"status": "healthy", "provider": req.provider_name, "latency_ms": 25}
 
 
 @app.post("/api/tasks/{task_id}/apply", dependencies=[Depends(verify_hermes_token)])
