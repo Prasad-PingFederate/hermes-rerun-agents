@@ -1,15 +1,18 @@
 """
 Hermes Console Demo Workspace Manager
-Owns ephemeral test repository lifecycles for the Tester Console (AG-2, AG-3, AG-4, AG-6).
+Owns ephemeral test repository lifecycles for the Tester Console (AG-2 through AG-10).
 Creates isolated git repositories with reproducible bug fixtures and connects them to
 ScrumMasterOrchestrator, TimeMachineEngine, and SprintStateStore.
+Persists open demo registry state to SQLite so it survives page reloads and process restarts.
 """
 
 from __future__ import annotations
 
 import atexit
+import json
 import os
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -22,6 +25,8 @@ from typing import Any, Dict, List, Optional
 from core.time_machine.engine import TimeMachineEngine
 from scrum_master_orchestrator import ScrumMasterOrchestrator
 from sprint_state_store import SprintStateStore
+
+REGISTRY_DB_PATH = Path(tempfile.gettempdir()) / "hermes_demo_sessions.db"
 
 
 @dataclass
@@ -41,6 +46,7 @@ class DemoWorkspace:
     approver: Optional[str] = None
     approval_comment: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
+    updated_at: float = field(default_factory=time.time)
 
     # Managed orchestrator components
     tm: Optional[TimeMachineEngine] = None
@@ -49,16 +55,174 @@ class DemoWorkspace:
 
 
 class ConsoleDemoManager:
-    """Manages isolated temp workspaces for the tester console."""
+    """Manages isolated temp workspaces for the tester console with SQLite persistence."""
 
     def __init__(self):
         self._workspaces: Dict[str, DemoWorkspace] = {}
+        self._init_sqlite()
+        self.load_persisted_workspaces()
         atexit.register(self.cleanup_all)
 
+    def _init_sqlite(self) -> None:
+        try:
+            with sqlite3.connect(str(REGISTRY_DB_PATH)) as conn:
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS demo_workspaces (
+                        workspace_id TEXT PRIMARY KEY,
+                        workspace_name TEXT,
+                        workspace_path TEXT,
+                        failing_test TEXT,
+                        failure_output TEXT,
+                        classification TEXT,
+                        owner_agent TEXT,
+                        scope_json TEXT,
+                        allowed_files_json TEXT,
+                        status TEXT,
+                        active_sprint_id TEXT,
+                        pre_apply_snapshot_id TEXT,
+                        approver TEXT,
+                        approval_comment TEXT,
+                        metadata_json TEXT,
+                        updated_at REAL
+                    )
+                    """
+                )
+                conn.commit()
+        except Exception:
+            pass
+
+    def persist_workspace(self, ws: DemoWorkspace) -> None:
+        """Persist workspace state to global registry sqlite under temp (AG-10)."""
+        ws.updated_at = time.time()
+        self._workspaces[ws.workspace_id] = ws
+
+        try:
+            REGISTRY_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+            with sqlite3.connect(str(REGISTRY_DB_PATH)) as conn:
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS demo_workspaces (
+                        workspace_id TEXT PRIMARY KEY,
+                        workspace_name TEXT,
+                        workspace_path TEXT,
+                        failing_test TEXT,
+                        failure_output TEXT,
+                        classification TEXT,
+                        owner_agent TEXT,
+                        scope_json TEXT,
+                        allowed_files_json TEXT,
+                        status TEXT,
+                        active_sprint_id TEXT,
+                        pre_apply_snapshot_id TEXT,
+                        approver TEXT,
+                        approval_comment TEXT,
+                        metadata_json TEXT,
+                        updated_at REAL
+                    )
+                    """
+                )
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO demo_workspaces (
+                        workspace_id, workspace_name, workspace_path, failing_test,
+                        failure_output, classification, owner_agent, scope_json,
+                        allowed_files_json, status, active_sprint_id, pre_apply_snapshot_id,
+                        approver, approval_comment, metadata_json, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        ws.workspace_id,
+                        ws.workspace_name,
+                        str(ws.workspace_path),
+                        ws.failing_test,
+                        ws.failure_output,
+                        ws.classification,
+                        ws.owner_agent,
+                        json.dumps(ws.scope),
+                        json.dumps(ws.allowed_files),
+                        ws.status,
+                        ws.active_sprint_id,
+                        ws.pre_apply_snapshot_id,
+                        ws.approver,
+                        ws.approval_comment,
+                        json.dumps(ws.metadata),
+                        ws.updated_at,
+                    ),
+                )
+                conn.commit()
+        except Exception:
+            pass
+
+    def load_persisted_workspaces(self) -> None:
+        """Reload persisted workspaces from sqlite on startup / GET / (AG-10)."""
+        if not REGISTRY_DB_PATH.exists():
+            return
+
+        try:
+            with sqlite3.connect(str(REGISTRY_DB_PATH)) as conn:
+                conn.row_factory = sqlite3.Row
+                cur = conn.cursor()
+                rows = cur.execute("SELECT * FROM demo_workspaces ORDER BY updated_at DESC").fetchall()
+                for r in rows:
+                    ws_path = Path(r["workspace_path"])
+                    if not ws_path.exists():
+                        continue
+
+                    ws_id = r["workspace_id"]
+                    if ws_id in self._workspaces:
+                        # Update in-memory mutable fields
+                        ws = self._workspaces[ws_id]
+                        ws.status = r["status"]
+                        ws.active_sprint_id = r["active_sprint_id"]
+                        ws.pre_apply_snapshot_id = r["pre_apply_snapshot_id"]
+                        ws.approver = r["approver"]
+                        ws.approval_comment = r["approval_comment"]
+                        ws.updated_at = r["updated_at"] or ws.updated_at
+                        continue
+
+                    # Reconstruct managed orchestrator
+                    tm = TimeMachineEngine(ws_path)
+                    store = SprintStateStore(ws_path / ".tm_snapshots" / "sprint_state.db")
+                    orch = ScrumMasterOrchestrator(ws_path, tm_engine=tm, store=store)
+
+                    ws = DemoWorkspace(
+                        workspace_id=ws_id,
+                        workspace_name=r["workspace_name"],
+                        workspace_path=ws_path,
+                        failing_test=r["failing_test"],
+                        failure_output=r["failure_output"],
+                        classification=r["classification"],
+                        owner_agent=r["owner_agent"],
+                        scope=json.loads(r["scope_json"]),
+                        allowed_files=json.loads(r["allowed_files_json"]),
+                        status=r["status"],
+                        active_sprint_id=r["active_sprint_id"],
+                        pre_apply_snapshot_id=r["pre_apply_snapshot_id"],
+                        approver=r["approver"],
+                        approval_comment=r["approval_comment"],
+                        metadata=json.loads(r["metadata_json"]) if r["metadata_json"] else {},
+                        updated_at=r["updated_at"] or time.time(),
+                        tm=tm,
+                        store=store,
+                        orchestrator=orch,
+                    )
+                    self._workspaces[ws_id] = ws
+        except Exception:
+            pass
+
     def get_workspace(self, workspace_id: str) -> Optional[DemoWorkspace]:
+        self.load_persisted_workspaces()
         return self._workspaces.get(workspace_id)
 
+    def get_latest_workspace(self) -> Optional[DemoWorkspace]:
+        self.load_persisted_workspaces()
+        if not self._workspaces:
+            return None
+        return max(self._workspaces.values(), key=lambda w: getattr(w, "updated_at", 0.0))
+
     def list_workspaces(self) -> List[Dict[str, Any]]:
+        self.load_persisted_workspaces()
         return [
             {
                 "workspace_id": ws.workspace_id,
@@ -88,6 +252,7 @@ class ConsoleDemoManager:
         src_dir.mkdir(parents=True, exist_ok=True)
         tests_dir = demo_dir / "tests"
         tests_dir.mkdir(parents=True, exist_ok=True)
+        (demo_dir / ".gitignore").write_text(".tm_snapshots/\n__pycache__/\n*.pyc\n", encoding="utf-8")
 
         # 2. Buggy InMemoryLedger: does not validate negative deposits
         buggy_ledger = (
@@ -154,11 +319,11 @@ class ConsoleDemoManager:
             orchestrator=orch,
             metadata={"test_cmd": [sys.executable, "-m", "pytest", "tests/test_ledger.py"]},
         )
-        self._workspaces[ws_id] = ws
+        self.persist_workspace(ws)
         return ws
 
     def create_drift_workspace(self) -> DemoWorkspace:
-        """Create seeded PlaywrightDrift fixture workspace (TEST_BUG) for AG-6."""
+        """Create seeded PlaywrightDrift fixture workspace (TEST_BUG) for AG-8."""
         ws_id = f"demo_drift_{int(time.time())}_{uuid.uuid4().hex[:6]}"
         demo_dir = Path(tempfile.mkdtemp(prefix=f"hermes_{ws_id}_")).resolve()
 
@@ -171,6 +336,7 @@ class ConsoleDemoManager:
         src_dir.mkdir(parents=True, exist_ok=True)
         tests_dir = demo_dir / "tests"
         tests_dir.mkdir(parents=True, exist_ok=True)
+        (demo_dir / ".gitignore").write_text(".tm_snapshots/\n__pycache__/\n*.pyc\n", encoding="utf-8")
 
         # Correct product implementation
         cart_code = (
@@ -226,24 +392,133 @@ class ConsoleDemoManager:
             orchestrator=orch,
             metadata={"test_cmd": [sys.executable, "-m", "pytest", "tests/test_cart.py"]},
         )
-        self._workspaces[ws_id] = ws
+        self.persist_workspace(ws)
+        return ws
+
+    def create_hostile_workspace(self) -> DemoWorkspace:
+        """Create seeded HostilePatch workspace (AG-9: Security rejection / shell=True)."""
+        ws_id = f"demo_hostile_{int(time.time())}_{uuid.uuid4().hex[:6]}"
+        demo_dir = Path(tempfile.mkdtemp(prefix=f"hermes_{ws_id}_")).resolve()
+
+        subprocess.run(["git", "init"], cwd=str(demo_dir), capture_output=True, check=True)
+        subprocess.run(["git", "config", "user.name", "HermesTester"], cwd=str(demo_dir), capture_output=True, check=True)
+        subprocess.run(["git", "config", "user.email", "tester@hermes.local"], cwd=str(demo_dir), capture_output=True, check=True)
+
+        src_dir = demo_dir / "src"
+        src_dir.mkdir(parents=True, exist_ok=True)
+        tests_dir = demo_dir / "tests"
+        tests_dir.mkdir(parents=True, exist_ok=True)
+        (demo_dir / ".gitignore").write_text(".tm_snapshots/\n__pycache__/\n*.pyc\n", encoding="utf-8")
+
+        service_code = (
+            "class SystemHealth:\n"
+            "    def check_status(self) -> str:\n"
+            "        return 'ONLINE'\n"
+        )
+        (src_dir / "service.py").write_text(service_code, encoding="utf-8")
+
+        test_code = (
+            "import pytest\n"
+            "import sys\n"
+            "from pathlib import Path\n"
+            "sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))\n"
+            "from service import SystemHealth\n\n"
+            "def test_health_metrics():\n"
+            "    h = SystemHealth()\n"
+            "    assert h.check_status() == 'HEALTHY_200'\n"
+        )
+        (tests_dir / "test_service.py").write_text(test_code, encoding="utf-8")
+
+        subprocess.run(["git", "add", "."], cwd=str(demo_dir), capture_output=True, check=True)
+        subprocess.run(["git", "commit", "-m", "Initial system service"], cwd=str(demo_dir), capture_output=True, check=True)
+
+        res = subprocess.run(
+            [sys.executable, "-m", "pytest", "tests/test_service.py", "-v"],
+            cwd=str(demo_dir),
+            capture_output=True,
+            text=True,
+        )
+
+        tm = TimeMachineEngine(demo_dir)
+        store = SprintStateStore(demo_dir / ".tm_snapshots" / "sprint_state.db")
+        orch = ScrumMasterOrchestrator(demo_dir, tm_engine=tm, store=store)
+
+        ws = DemoWorkspace(
+            workspace_id=ws_id,
+            workspace_name="HostilePatch",
+            workspace_path=demo_dir,
+            failing_test="test_health_metrics",
+            failure_output=res.stdout + "\n" + res.stderr,
+            classification="PRODUCT_BUG",
+            owner_agent="DeveloperAgent",
+            scope=["src/service.py"],
+            allowed_files=["src/service.py"],
+            status="FAILING",
+            tm=tm,
+            store=store,
+            orchestrator=orch,
+            metadata={
+                "test_cmd": [sys.executable, "-m", "pytest", "tests/test_service.py"],
+                "hostile_trigger": True,
+            },
+        )
+        self.persist_workspace(ws)
         return ws
 
     def delete_workspace(self, workspace_id: str) -> bool:
         ws = self._workspaces.pop(workspace_id, None)
         if ws and ws.workspace_path.exists():
-            shutil.rmtree(ws.workspace_path, ignore_errors=True)
+            import gc
+            ws.store = None
+            ws.orchestrator = None
+            ws.tm = None
+            gc.collect()
+
+            def _rm(func, path, exc):
+                import stat
+                try:
+                    os.chmod(path, stat.S_IWRITE)
+                    func(path)
+                except Exception:
+                    pass
+
+            shutil.rmtree(ws.workspace_path, onerror=_rm)
+            try:
+                with sqlite3.connect(str(REGISTRY_DB_PATH)) as conn:
+                    conn.execute("DELETE FROM demo_workspaces WHERE workspace_id = ?", (workspace_id,))
+                    conn.commit()
+            except Exception:
+                pass
             return True
         return False
 
     def cleanup_all(self):
+        import gc
+
+        def _rm(func, path, exc):
+            import stat
+            try:
+                os.chmod(path, stat.S_IWRITE)
+                func(path)
+            except Exception:
+                pass
+
         for ws_id, ws in list(self._workspaces.items()):
             try:
+                ws.store = None
+                ws.orchestrator = None
+                ws.tm = None
+                gc.collect()
                 if ws.workspace_path.exists():
-                    shutil.rmtree(ws.workspace_path, ignore_errors=True)
+                    shutil.rmtree(ws.workspace_path, onerror=_rm)
             except Exception:
                 pass
         self._workspaces.clear()
+        if REGISTRY_DB_PATH.exists():
+            try:
+                REGISTRY_DB_PATH.unlink()
+            except Exception:
+                pass
 
 
 # Global manager singleton

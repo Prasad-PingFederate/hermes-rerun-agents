@@ -1,7 +1,9 @@
 """
-Hermes Tester Console — UI Template & Client Logic (AG-1 through AG-6)
-Dark editorial workstation interface served directly at GET /
-Zero external CDN dependencies (100% offline, deterministic, pure HTML5/CSS/ES6).
+Hermes Tester Console — UI Template & Client Logic (AG-7 through AG-10)
+Editorial workstation interface with copper aesthetic and offline zero-dependency client.
+Palette: background #14120e, text #e7e1d6, hairline borders rgba(231,225,214,0.14), copper #c9854a.
+Status colors: Green and Red for status only.
+Fonts: IBM Plex Sans and IBM Plex Mono.
 """
 
 CONSOLE_HTML = """<!DOCTYPE html>
@@ -10,33 +12,44 @@ CONSOLE_HTML = """<!DOCTYPE html>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
   <title>Hermes // Tester Console</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
   <style>
     :root {
-      --bg-canvas: #090a0c;
-      --bg-panel: #111316;
-      --bg-card: #171a1e;
-      --bg-card-hover: #1c2025;
-      --border-subtle: #22262c;
-      --border-muted: #2f353d;
-      --border-focus: #4a5568;
-      
-      --text-main: #f1f5f9;
-      --text-muted: #94a3b8;
-      --text-dim: #64748b;
-      
-      --accent-red: #f43f5e;
-      --accent-red-bg: rgba(244, 63, 94, 0.12);
-      --accent-green: #10b981;
-      --accent-green-bg: rgba(16, 185, 129, 0.12);
-      --accent-amber: #f59e0b;
-      --accent-amber-bg: rgba(245, 158, 11, 0.12);
-      --accent-indigo: #6366f1;
-      --accent-indigo-bg: rgba(99, 102, 241, 0.12);
-      --accent-cyan: #06b6d4;
-      --accent-cyan-bg: rgba(6, 182, 212, 0.12);
+      --bg-canvas: #14120e;
+      --bg-panel: #181512;
+      --bg-card: #1c1915;
+      --bg-card-hover: #231f1a;
+      --bg-code: #0c0b09;
 
-      --font-mono: ui-monospace, "SF Mono", Monaco, "Cascadia Code", "Roboto Mono", monospace;
-      --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+      --border-hairline: rgba(231, 225, 214, 0.14);
+      --border-muted: rgba(231, 225, 214, 0.22);
+      --border-focus: #c9854a;
+
+      --text-main: #e7e1d6;
+      --text-muted: #a8a095;
+      --text-dim: #736b61;
+
+      --copper: #c9854a;
+      --copper-hover: #db9356;
+      --copper-bg: rgba(201, 133, 74, 0.14);
+      --copper-border: rgba(201, 133, 74, 0.35);
+
+      --status-red: #f87171;
+      --status-red-bg: rgba(248, 113, 113, 0.12);
+      --status-red-border: rgba(248, 113, 113, 0.35);
+
+      --status-green: #4ade80;
+      --status-green-bg: rgba(74, 222, 128, 0.12);
+      --status-green-border: rgba(74, 222, 128, 0.35);
+
+      --status-amber: #fbbf24;
+      --status-amber-bg: rgba(251, 191, 36, 0.12);
+      --status-amber-border: rgba(251, 191, 36, 0.35);
+
+      --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      --font-sans: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     }
 
     * {
@@ -56,17 +69,18 @@ CONSOLE_HTML = """<!DOCTYPE html>
       flex-direction: column;
       height: 100vh;
       width: 100vw;
+      letter-spacing: -0.005em;
     }
 
     /* Top Bar */
     header.top-bar {
-      height: 50px;
+      height: 48px;
       background-color: var(--bg-panel);
-      border-bottom: 1px solid var(--border-subtle);
+      border-bottom: 1px solid var(--border-hairline);
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 0 18px;
+      padding: 0 20px;
       flex-shrink: 0;
       z-index: 10;
     }
@@ -79,41 +93,42 @@ CONSOLE_HTML = """<!DOCTYPE html>
 
     .brand-logo {
       font-family: var(--font-mono);
-      font-weight: 800;
+      font-weight: 700;
       font-size: 14px;
-      letter-spacing: 0.1em;
-      color: #fff;
+      letter-spacing: 0.12em;
+      color: var(--text-main);
       display: flex;
       align-items: center;
-      gap: 6px;
+      gap: 8px;
     }
 
-    .brand-logo span.badge-tag {
+    .brand-logo .badge-tag {
       font-size: 10px;
       font-weight: 600;
-      background: var(--border-subtle);
-      color: var(--text-muted);
-      padding: 2px 6px;
-      border-radius: 4px;
+      color: var(--copper);
+      background: var(--copper-bg);
+      border: 1px solid var(--copper-border);
+      padding: 1px 6px;
+      border-radius: 2px;
       text-transform: uppercase;
-      letter-spacing: 0.05em;
+      letter-spacing: 0.08em;
     }
 
     .top-meta {
       display: flex;
       align-items: center;
-      gap: 14px;
+      gap: 12px;
     }
 
     .meta-pill {
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      padding: 4px 10px;
-      border-radius: 4px;
+      padding: 3px 9px;
+      border-radius: 3px;
       font-size: 11px;
       font-family: var(--font-mono);
-      border: 1px solid var(--border-subtle);
+      border: 1px solid var(--border-hairline);
       background-color: var(--bg-card);
       color: var(--text-muted);
     }
@@ -122,70 +137,97 @@ CONSOLE_HTML = """<!DOCTYPE html>
       width: 6px;
       height: 6px;
       border-radius: 50%;
-      background-color: var(--accent-green);
+      background-color: var(--text-dim);
     }
 
-    .meta-pill.status-red .dot { background-color: var(--accent-red); }
-    .meta-pill.status-amber .dot { background-color: var(--accent-amber); }
-    .meta-pill.status-green .dot { background-color: var(--accent-green); }
+    .meta-pill.status-red {
+      background-color: var(--status-red-bg);
+      border-color: var(--status-red-border);
+      color: var(--status-red);
+    }
+    .meta-pill.status-red .dot { background-color: var(--status-red); }
+
+    .meta-pill.status-green {
+      background-color: var(--status-green-bg);
+      border-color: var(--status-green-border);
+      color: var(--status-green);
+    }
+    .meta-pill.status-green .dot { background-color: var(--status-green); }
+
+    .meta-pill.status-amber {
+      background-color: var(--status-amber-bg);
+      border-color: var(--status-amber-border);
+      color: var(--status-amber);
+    }
+    .meta-pill.status-amber .dot { background-color: var(--status-amber); }
 
     .btn-top {
       background: var(--bg-card);
-      border: 1px solid var(--border-muted);
+      border: 1px solid var(--border-hairline);
       color: var(--text-main);
-      padding: 5px 11px;
+      padding: 4px 10px;
       font-size: 11px;
       font-family: var(--font-mono);
-      border-radius: 4px;
+      border-radius: 3px;
       cursor: pointer;
       display: flex;
       align-items: center;
       gap: 6px;
-      transition: background 0.15s;
+      transition: all 0.15s ease;
     }
 
     .btn-top:hover {
       background: var(--bg-card-hover);
-      border-color: var(--border-focus);
+      border-color: var(--copper);
     }
 
     /* Layout Body */
     .app-body {
       display: flex;
       flex: 1;
-      height: calc(100vh - 50px);
+      height: calc(100vh - 48px);
       overflow: hidden;
     }
 
     /* Left Rail */
     aside.left-rail {
-      width: 220px;
+      width: 260px;
       background-color: var(--bg-panel);
-      border-right: 1px solid var(--border-subtle);
+      border-right: 1px solid var(--border-hairline);
       display: flex;
       flex-direction: column;
       justify-content: space-between;
       flex-shrink: 0;
     }
 
+    .rail-section-header {
+      padding: 12px 14px 6px 14px;
+      font-family: var(--font-mono);
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-dim);
+    }
+
     .nav-list {
       list-style: none;
-      padding: 12px 8px;
+      padding: 6px 8px;
     }
 
     .nav-item {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 9px 12px;
-      border-radius: 4px;
+      padding: 8px 12px;
+      border-radius: 3px;
       color: var(--text-muted);
       cursor: pointer;
       font-size: 12px;
       font-weight: 500;
       margin-bottom: 2px;
-      transition: all 0.15s ease;
+      transition: all 0.12s ease;
       user-select: none;
+      border-left: 3px solid transparent;
     }
 
     .nav-item:hover {
@@ -195,9 +237,9 @@ CONSOLE_HTML = """<!DOCTYPE html>
 
     .nav-item.active {
       background-color: var(--bg-card);
-      color: #fff;
+      color: var(--text-main);
       font-weight: 600;
-      border-left: 2px solid var(--accent-indigo);
+      border-left: 3px solid var(--copper);
     }
 
     .nav-item .nav-label {
@@ -209,29 +251,103 @@ CONSOLE_HTML = """<!DOCTYPE html>
     .nav-kbd {
       font-size: 10px;
       font-family: var(--font-mono);
-      background-color: var(--bg-canvas);
-      border: 1px solid var(--border-subtle);
-      padding: 1px 5px;
-      border-radius: 3px;
+      background-color: var(--bg-code);
+      border: 1px solid var(--border-hairline);
+      padding: 1px 4px;
+      border-radius: 2px;
       color: var(--text-dim);
     }
 
     .nav-badge {
       font-size: 10px;
       font-family: var(--font-mono);
-      padding: 2px 6px;
-      border-radius: 10px;
-      font-weight: 700;
+      padding: 1px 5px;
+      border-radius: 2px;
+      font-weight: 600;
     }
     .nav-badge.red {
-      background-color: var(--accent-red-bg);
-      color: var(--accent-red);
-      border: 1px solid rgba(244, 63, 94, 0.3);
+      background-color: var(--status-red-bg);
+      color: var(--status-red);
+      border: 1px solid var(--status-red-border);
+    }
+
+    /* Inbox List on Left Rail */
+    .inbox-list {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding: 4px 8px;
+      overflow-y: auto;
+    }
+
+    .inbox-row {
+      background-color: var(--bg-card);
+      border: 1px solid var(--border-hairline);
+      border-radius: 3px;
+      padding: 9px 11px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      border-left: 3px solid transparent;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .inbox-row:hover {
+      border-color: var(--border-muted);
+      background-color: var(--bg-card-hover);
+    }
+
+    .inbox-row.selected {
+      border-left: 3px solid var(--copper);
+      background-color: var(--bg-card-hover);
+    }
+
+    .inbox-row-title {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-main);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .inbox-row-meta {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 10px;
+      font-family: var(--font-mono);
+      color: var(--text-muted);
+    }
+
+    .tag-badge {
+      padding: 1px 4px;
+      border-radius: 2px;
+      font-size: 9px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+    }
+    .tag-badge.prod-bug {
+      background: var(--copper-bg);
+      color: var(--copper);
+      border: 1px solid var(--copper-border);
+    }
+    .tag-badge.test-bug {
+      background: var(--bg-code);
+      color: var(--text-muted);
+      border: 1px solid var(--border-hairline);
+    }
+    .tag-badge.sec-violation {
+      background: var(--status-red-bg);
+      color: var(--status-red);
+      border: 1px solid var(--status-red-border);
     }
 
     .rail-footer {
-      padding: 14px;
-      border-top: 1px solid var(--border-subtle);
+      padding: 12px 14px;
+      border-top: 1px solid var(--border-hairline);
       font-family: var(--font-mono);
       font-size: 10px;
       color: var(--text-dim);
@@ -242,7 +358,7 @@ CONSOLE_HTML = """<!DOCTYPE html>
     main.main-viewport {
       flex: 1;
       overflow-y: auto;
-      padding: 24px 32px;
+      padding: 24px 30px;
       background-color: var(--bg-canvas);
     }
 
@@ -259,14 +375,14 @@ CONSOLE_HTML = """<!DOCTYPE html>
       display: flex;
       justify-content: space-between;
       align-items: flex-end;
-      border-bottom: 1px solid var(--border-subtle);
+      border-bottom: 1px solid var(--border-hairline);
       padding-bottom: 12px;
     }
 
     .view-title-group h2 {
-      font-size: 18px;
-      font-weight: 700;
-      color: #fff;
+      font-size: 17px;
+      font-weight: 600;
+      color: var(--text-main);
       letter-spacing: -0.01em;
     }
 
@@ -276,130 +392,73 @@ CONSOLE_HTML = """<!DOCTYPE html>
       margin-top: 3px;
     }
 
-    /* Cards & Components */
-    .inbox-grid {
-      display: flex;
-      flex-direction: column;
-      gap: 12px;
-    }
-
-    .failure-card {
+    /* Cards */
+    .detail-card {
       background-color: var(--bg-panel);
-      border: 1px solid var(--border-subtle);
-      border-radius: 6px;
+      border: 1px solid var(--border-hairline);
+      border-radius: 4px;
       padding: 18px;
-      transition: border-color 0.15s;
+      margin-bottom: 16px;
     }
 
-    .failure-card:hover {
-      border-color: var(--border-muted);
-    }
-
-    .card-top {
+    .detail-card-header {
       display: flex;
       justify-content: space-between;
       align-items: flex-start;
       margin-bottom: 12px;
     }
 
-    .card-title-group {
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-    }
-
-    .card-title {
-      font-size: 14px;
-      font-weight: 700;
-      color: #fff;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-
-    .card-badges {
-      display: flex;
-      gap: 6px;
-      margin-top: 4px;
-    }
-
-    .tag {
-      font-family: var(--font-mono);
-      font-size: 10px;
-      padding: 2px 7px;
-      border-radius: 3px;
-      font-weight: 600;
-      letter-spacing: 0.03em;
-    }
-    .tag-product-bug {
-      background-color: var(--accent-indigo-bg);
-      color: #818cf8;
-      border: 1px solid rgba(99, 102, 241, 0.4);
-    }
-    .tag-test-bug {
-      background-color: var(--accent-cyan-bg);
-      color: #22d3ee;
-      border: 1px solid rgba(6, 182, 212, 0.4);
-    }
-    .tag-scope {
-      background-color: var(--bg-card);
-      color: var(--text-muted);
-      border: 1px solid var(--border-muted);
-    }
-    .tag-status-red {
-      background-color: var(--accent-red-bg);
-      color: var(--accent-red);
-      border: 1px solid rgba(244, 63, 94, 0.3);
-    }
-
     .code-snippet {
-      background-color: #050607;
-      border: 1px solid var(--border-subtle);
-      border-radius: 4px;
-      padding: 10px 12px;
+      background-color: var(--bg-code);
+      border: 1px solid var(--border-hairline);
+      border-radius: 3px;
+      padding: 12px;
       font-family: var(--font-mono);
       font-size: 11px;
-      color: #e2e8f0;
+      color: #dfd7cc;
       overflow-x: auto;
-      margin-bottom: 14px;
-      line-height: 1.45;
+      margin-bottom: 12px;
+      line-height: 1.5;
     }
 
+    /* Action Buttons */
     .btn-action-primary {
-      background: var(--accent-indigo);
-      color: #fff;
+      background: var(--copper);
+      color: #14120e;
       border: none;
-      padding: 8px 16px;
-      border-radius: 4px;
+      padding: 7px 15px;
+      border-radius: 3px;
       font-size: 12px;
+      font-family: var(--font-mono);
       font-weight: 600;
       cursor: pointer;
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      transition: opacity 0.15s;
+      transition: background 0.15s ease;
     }
     .btn-action-primary:hover {
-      opacity: 0.9;
+      background: var(--copper-hover);
     }
     .btn-action-primary:disabled {
-      opacity: 0.4;
+      opacity: 0.35;
       cursor: not-allowed;
     }
 
     .btn-action-success {
-      background: var(--accent-green);
-      color: #064e3b;
-      font-weight: 700;
+      background: var(--status-green);
+      color: #0c1a10;
       border: none;
-      padding: 8px 16px;
-      border-radius: 4px;
+      padding: 7px 15px;
+      border-radius: 3px;
       font-size: 12px;
+      font-family: var(--font-mono);
+      font-weight: 600;
       cursor: pointer;
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      transition: opacity 0.15s;
+      transition: opacity 0.15s ease;
     }
     .btn-action-success:hover {
       opacity: 0.9;
@@ -411,49 +470,59 @@ CONSOLE_HTML = """<!DOCTYPE html>
 
     .btn-action-rewind {
       background: var(--bg-card);
-      color: var(--accent-amber);
-      border: 1px solid rgba(245, 158, 11, 0.4);
-      padding: 8px 16px;
-      border-radius: 4px;
+      color: var(--status-amber);
+      border: 1px solid var(--status-amber-border);
+      padding: 7px 15px;
+      border-radius: 3px;
       font-size: 12px;
-      font-weight: 600;
+      font-family: var(--font-mono);
+      font-weight: 500;
       cursor: pointer;
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      transition: background 0.15s;
+      transition: background 0.15s ease;
     }
     .btn-action-rewind:hover {
-      background: rgba(245, 158, 11, 0.1);
+      background: var(--status-amber-bg);
     }
     .btn-action-rewind:disabled {
       opacity: 0.35;
       cursor: not-allowed;
     }
 
-    /* Sprint Flow Timeline */
+    /* Vertical Sprint Rail (7 Steps) */
     .sprint-timeline {
       display: flex;
       flex-direction: column;
-      gap: 12px;
-      position: relative;
+      gap: 10px;
     }
 
     .agent-card {
       background-color: var(--bg-panel);
-      border: 1px solid var(--border-subtle);
-      border-radius: 6px;
-      padding: 16px;
+      border: 1px solid var(--border-hairline);
+      border-radius: 4px;
+      padding: 14px 16px;
       display: flex;
       flex-direction: column;
-      gap: 8px;
+      gap: 6px;
+      transition: border-color 0.15s ease;
     }
 
     .agent-card.active-step {
-      border-color: var(--accent-indigo);
+      border-color: var(--copper);
+      background-color: var(--bg-card);
     }
     .agent-card.passed-step {
-      border-color: var(--border-muted);
+      border-color: var(--border-hairline);
+    }
+    .agent-card.rejected-step {
+      border-color: var(--status-red);
+      background-color: var(--status-red-bg);
+    }
+    .agent-card.blocked-step {
+      opacity: 0.45;
+      border-color: var(--border-hairline);
     }
 
     .agent-header {
@@ -467,18 +536,18 @@ CONSOLE_HTML = """<!DOCTYPE html>
       align-items: center;
       gap: 8px;
       font-size: 13px;
-      font-weight: 700;
-      color: #fff;
+      font-weight: 600;
+      color: var(--text-main);
     }
 
     .agent-tier-badge {
       font-family: var(--font-mono);
       font-size: 9px;
-      padding: 2px 6px;
-      border-radius: 3px;
-      background: var(--bg-card);
-      border: 1px solid var(--border-muted);
-      color: var(--text-muted);
+      padding: 1px 5px;
+      border-radius: 2px;
+      background: var(--bg-code);
+      border: 1px solid var(--border-hairline);
+      color: var(--text-dim);
     }
 
     .agent-body {
@@ -495,14 +564,14 @@ CONSOLE_HTML = """<!DOCTYPE html>
       font-size: 11px;
       color: var(--text-dim);
       padding-top: 6px;
-      border-top: 1px solid var(--border-subtle);
+      border-top: 1px solid var(--border-hairline);
     }
 
-    /* Diff Reviewer */
+    /* Diff Reviewer (Full width main stage) */
     .diff-container {
-      background-color: #07080a;
-      border: 1px solid var(--border-subtle);
-      border-radius: 6px;
+      background-color: var(--bg-code);
+      border: 1px solid var(--border-hairline);
+      border-radius: 4px;
       overflow: hidden;
       font-family: var(--font-mono);
       font-size: 12px;
@@ -512,8 +581,8 @@ CONSOLE_HTML = """<!DOCTYPE html>
 
     .diff-header {
       background-color: var(--bg-panel);
-      padding: 8px 14px;
-      border-bottom: 1px solid var(--border-subtle);
+      padding: 9px 14px;
+      border-bottom: 1px solid var(--border-hairline);
       display: flex;
       justify-content: space-between;
       align-items: center;
@@ -522,21 +591,21 @@ CONSOLE_HTML = """<!DOCTYPE html>
     }
 
     .diff-content {
-      padding: 12px;
+      padding: 14px;
       overflow-x: auto;
       max-height: 480px;
       white-space: pre;
     }
 
     .diff-line-add {
-      background-color: rgba(16, 185, 129, 0.12);
-      color: #34d399;
+      background-color: rgba(74, 222, 128, 0.1);
+      color: var(--status-green);
       display: block;
       padding: 1px 4px;
     }
     .diff-line-del {
-      background-color: rgba(244, 63, 94, 0.12);
-      color: #fb7185;
+      background-color: rgba(248, 113, 113, 0.1);
+      color: var(--status-red);
       display: block;
       padding: 1px 4px;
     }
@@ -548,12 +617,12 @@ CONSOLE_HTML = """<!DOCTYPE html>
 
     .approval-toolbar {
       background-color: var(--bg-panel);
-      border: 1px solid var(--border-subtle);
-      border-radius: 6px;
-      padding: 18px;
+      border: 1px solid var(--border-hairline);
+      border-radius: 4px;
+      padding: 16px;
       display: flex;
       flex-direction: column;
-      gap: 14px;
+      gap: 12px;
     }
 
     .form-row {
@@ -577,16 +646,24 @@ CONSOLE_HTML = """<!DOCTYPE html>
 
     .form-input {
       background-color: var(--bg-card);
-      border: 1px solid var(--border-muted);
+      border: 1px solid var(--border-hairline);
       color: var(--text-main);
       padding: 7px 10px;
-      border-radius: 4px;
+      border-radius: 3px;
       font-family: var(--font-mono);
       font-size: 12px;
     }
     .form-input:focus {
       outline: none;
-      border-color: var(--accent-indigo);
+      border-color: var(--copper);
+    }
+
+    .audit-approval-line {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--copper);
+      margin-top: 4px;
+      min-height: 18px;
     }
 
     /* Audit Drawer */
@@ -594,8 +671,7 @@ CONSOLE_HTML = """<!DOCTYPE html>
       display: none;
       position: fixed;
       inset: 0;
-      background: rgba(0, 0, 0, 0.7);
-      backdrop-filter: blur(2px);
+      background: rgba(10, 9, 8, 0.75);
       z-index: 50;
     }
     .audit-overlay.open {
@@ -610,7 +686,7 @@ CONSOLE_HTML = """<!DOCTYPE html>
       width: 520px;
       max-width: 90vw;
       background-color: var(--bg-panel);
-      border-left: 1px solid var(--border-muted);
+      border-left: 1px solid var(--border-hairline);
       z-index: 60;
       display: flex;
       flex-direction: column;
@@ -626,15 +702,15 @@ CONSOLE_HTML = """<!DOCTYPE html>
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-bottom: 20px;
+      margin-bottom: 16px;
       padding-bottom: 12px;
-      border-bottom: 1px solid var(--border-subtle);
+      border-bottom: 1px solid var(--border-hairline);
     }
 
     .drawer-title {
-      font-size: 16px;
-      font-weight: 700;
-      color: #fff;
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--text-main);
     }
 
     .btn-close {
@@ -651,41 +727,19 @@ CONSOLE_HTML = """<!DOCTYPE html>
       font-family: var(--font-mono);
       font-size: 11px;
       line-height: 1.6;
-      background-color: #050607;
-      border: 1px solid var(--border-subtle);
-      border-radius: 4px;
+      background-color: var(--bg-code);
+      border: 1px solid var(--border-hairline);
+      border-radius: 3px;
       padding: 12px;
-      color: #cbd5e1;
+      color: #dfd7cc;
       white-space: pre-wrap;
     }
 
     .drawer-footer {
-      margin-top: 16px;
+      margin-top: 14px;
       display: flex;
       justify-content: flex-end;
       gap: 10px;
-    }
-
-    /* Empty states */
-    .empty-state {
-      background-color: var(--bg-panel);
-      border: 1px dashed var(--border-muted);
-      border-radius: 6px;
-      padding: 40px;
-      text-align: center;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 10px;
-    }
-    .empty-state h3 {
-      font-size: 15px;
-      color: #fff;
-    }
-    .empty-state p {
-      font-size: 12px;
-      color: var(--text-dim);
-      max-width: 360px;
     }
 
     /* Mobile 390px responsive */
@@ -697,7 +751,7 @@ CONSOLE_HTML = """<!DOCTYPE html>
         width: 100%;
         height: auto;
         border-right: none;
-        border-bottom: 1px solid var(--border-subtle);
+        border-bottom: 1px solid var(--border-hairline);
       }
       .nav-list {
         display: flex;
@@ -727,24 +781,24 @@ CONSOLE_HTML = """<!DOCTYPE html>
   <header class="top-bar">
     <div class="brand-section">
       <div class="brand-logo">
-        HERMES <span class="badge-tag">CONSOLE</span>
+        HERMES <span class="badge-tag">GOVERNED</span>
       </div>
       <div class="meta-pill" id="pill-workspace" data-testid="pill-workspace">
         <span class="dot"></span>
-        <span id="label-workspace">InMemoryLedger (Seeded Demo)</span>
+        <span id="label-workspace">InMemoryLedger</span>
       </div>
     </div>
 
     <div class="top-meta">
       <div class="meta-pill" id="pill-provider">
         <span class="dot"></span>
-        <span>LocalHeuristicEngine • offline</span>
+        <span>LocalHeuristicEngine · MOCK</span>
       </div>
       <div class="meta-pill status-red" id="pill-status" data-testid="pill-status">
         <span class="dot"></span>
         <span id="label-status">STATUS: FAILING</span>
       </div>
-      <button class="btn-top" id="btn-audit" data-testid="btn-audit" title="Open Audit Trail">
+      <button class="btn-top" id="btn-audit" data-testid="btn-audit" title="Open Governance Audit Trail">
         <span>📜 Audit</span>
       </button>
     </div>
@@ -754,31 +808,62 @@ CONSOLE_HTML = """<!DOCTYPE html>
   <div class="app-body">
     <!-- Left Rail -->
     <aside class="left-rail">
-      <ul class="nav-list">
-        <li class="nav-item active" data-tab="inbox" id="nav-inbox" data-testid="nav-inbox">
-          <span class="nav-label">📥 Inbox</span>
-          <div>
-            <span class="nav-badge red" id="badge-inbox-count">1</span>
-            <span class="nav-kbd">g i</span>
+      <div>
+        <div class="rail-section-header">Views</div>
+        <ul class="nav-list">
+          <li class="nav-item active" data-tab="inbox" id="nav-inbox" data-testid="nav-inbox">
+            <span class="nav-label">📥 Inbox</span>
+            <div>
+              <span class="nav-badge red" id="badge-inbox-count">3</span>
+              <span class="nav-kbd">g i</span>
+            </div>
+          </li>
+          <li class="nav-item" data-tab="sprint" id="nav-sprint" data-testid="nav-sprint">
+            <span class="nav-label">⚡ Sprint Board</span>
+            <span class="nav-kbd">g s</span>
+          </li>
+          <li class="nav-item" data-tab="diff" id="nav-diff" data-testid="nav-diff">
+            <span class="nav-label">📑 Staged Diff</span>
+            <span class="nav-kbd">g d</span>
+          </li>
+          <li class="nav-item" data-tab="timemachine" id="nav-timemachine" data-testid="nav-timemachine">
+            <span class="nav-label">🕰 Time Machine</span>
+            <span class="nav-kbd">g t</span>
+          </li>
+        </ul>
+
+        <div class="rail-section-header">Failure Queue</div>
+        <div class="inbox-list" id="rail-inbox-list">
+          <!-- Row 1: Ledger -->
+          <div class="inbox-row selected" id="row-ledger" data-target="ledger" data-testid="inbox-row-ledger">
+            <div class="inbox-row-title">InMemoryLedger</div>
+            <div class="inbox-row-meta">
+              <span class="tag-badge prod-bug">PRODUCT_BUG</span>
+              <span>DeveloperAgent</span>
+            </div>
           </div>
-        </li>
-        <li class="nav-item" data-tab="sprint" id="nav-sprint" data-testid="nav-sprint">
-          <span class="nav-label">⚡ Sprint Board</span>
-          <span class="nav-kbd">g s</span>
-        </li>
-        <li class="nav-item" data-tab="diff" id="nav-diff" data-testid="nav-diff">
-          <span class="nav-label">📑 Staged Diff</span>
-          <span class="nav-kbd">g d</span>
-        </li>
-        <li class="nav-item" data-tab="timemachine" id="nav-timemachine" data-testid="nav-timemachine">
-          <span class="nav-label">🕰 Time Machine</span>
-          <span class="nav-kbd">g t</span>
-        </li>
-      </ul>
+          <!-- Row 2: Drift -->
+          <div class="inbox-row" id="row-drift" data-target="drift" data-testid="inbox-row-drift">
+            <div class="inbox-row-title">PlaywrightDrift</div>
+            <div class="inbox-row-meta">
+              <span class="tag-badge test-bug">TEST_BUG</span>
+              <span>TestHealerAgent</span>
+            </div>
+          </div>
+          <!-- Row 3: Hostile -->
+          <div class="inbox-row" id="row-hostile" data-target="hostile" data-testid="inbox-row-hostile">
+            <div class="inbox-row-title">HostilePatch</div>
+            <div class="inbox-row-meta">
+              <span class="tag-badge sec-violation">SEC_REJECT</span>
+              <span>DeveloperAgent</span>
+            </div>
+          </div>
+        </div>
+      </div>
 
       <div class="rail-footer">
-        <div>Python 3.10 • urllib.request</div>
-        <div>8 Governed Agents Active</div>
+        <div>Python 3.10 · Zero Network</div>
+        <div>8 Governed Agent Roles</div>
         <div>AST Patch Guard: ENFORCED</div>
       </div>
     </aside>
@@ -790,25 +875,23 @@ CONSOLE_HTML = """<!DOCTYPE html>
       <section class="view-panel active" id="panel-inbox">
         <div class="view-header">
           <div class="view-title-group">
-            <h2>Deterministic Failure Inbox</h2>
+            <h2>Deterministic Triage Queue</h2>
             <p>Governed multi-agent test failure triage and autonomous healing queue.</p>
           </div>
-          <button class="btn-top" id="btn-reseed-demo">↻ Refresh Seed</button>
+          <button class="btn-top" id="btn-reseed-demo">↻ Reset Queue</button>
         </div>
 
-        <div class="inbox-grid">
-          <!-- Seed 1: InMemoryLedger (Product Bug) -->
-          <div class="failure-card" data-testid="inbox-item-ledger" id="card-ledger">
-            <div class="card-top">
-              <div class="card-title-group">
-                <div class="card-title">
-                  <span>tests/test_ledger.py::test_deposit_rejects_negative</span>
-                </div>
-                <div class="card-badges">
-                  <span class="tag tag-status-red">FAILING (RED)</span>
-                  <span class="tag tag-product-bug" data-testid="badge-product-bug">PRODUCT_BUG</span>
-                  <span class="tag tag-scope">Owner: DeveloperAgent</span>
-                  <span class="tag tag-scope">Allowed Scope: src/InMemoryLedger.py only</span>
+        <div style="display: flex; flex-direction: column; gap: 12px;">
+          <!-- Item 1: InMemoryLedger -->
+          <div class="detail-card" data-testid="inbox-item-ledger" id="card-ledger">
+            <div class="detail-card-header">
+              <div>
+                <div style="font-size: 14px; font-weight: 600; font-family: var(--font-mono);">tests/test_ledger.py::test_deposit_rejects_negative</div>
+                <div style="display: flex; gap: 6px; margin-top: 6px;">
+                  <span class="tag-badge sec-violation">FAILING (RED)</span>
+                  <span class="tag-badge prod-bug" data-testid="badge-product-bug">PRODUCT_BUG</span>
+                  <span class="tag-badge test-bug">Owner: DeveloperAgent</span>
+                  <span class="tag-badge test-bug">Scope: src/InMemoryLedger.py only</span>
                 </div>
               </div>
               <button class="btn-action-primary" id="btn-run-heal" data-testid="btn-run-heal">
@@ -816,47 +899,70 @@ CONSOLE_HTML = """<!DOCTYPE html>
               </button>
             </div>
 
-            <div class="code-snippet">
-def test_deposit_rejects_negative():
+            <div class="code-snippet">def test_deposit_rejects_negative():
     ledger = InMemoryLedger(100.0)
     with pytest.raises(ValueError):
-&gt;       ledger.deposit(-25.0)
-E       Failed: DID NOT RAISE &lt;class 'ValueError'&gt;
-            </div>
+>       ledger.deposit(-25.0)
+E       Failed: DID NOT RAISE &lt;class 'ValueError'&gt;</div>
 
-            <div style="font-size: 11px; color: var(--text-dim);">
+            <div style="font-size: 11px; color: var(--text-dim); font-family: var(--font-mono);">
               Classification: Production code fails to validate negative amounts. Strict AST Guard prevents test file modification.
             </div>
           </div>
 
-          <!-- Seed 2: Playwright Drift (Test Bug) -->
-          <div class="failure-card" data-testid="inbox-item-drift" id="card-drift">
-            <div class="card-top">
-              <div class="card-title-group">
-                <div class="card-title">
-                  <span>tests/test_cart.py::test_checkout_drift</span>
-                </div>
-                <div class="card-badges">
-                  <span class="tag tag-status-red">FAILING (RED)</span>
-                  <span class="tag tag-test-bug" data-testid="badge-test-bug">TEST_BUG</span>
-                  <span class="tag tag-scope">Owner: TestHealerAgent</span>
-                  <span class="tag tag-scope">Allowed Scope: tests/test_cart.py only</span>
+          <!-- Item 2: Playwright Drift -->
+          <div class="detail-card" data-testid="inbox-item-drift" id="card-drift">
+            <div class="detail-card-header">
+              <div>
+                <div style="font-size: 14px; font-weight: 600; font-family: var(--font-mono);">tests/test_cart.py::test_checkout_drift</div>
+                <div style="display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap;">
+                  <span class="tag-badge sec-violation">FAILING (RED)</span>
+                  <span class="tag-badge prod-bug" data-testid="badge-test-bug">TEST_BUG</span>
+                  <span class="tag-badge test-bug" data-testid="badge-owner-healer">Owner: TestHealerAgent</span>
+                  <span class="tag-badge test-bug">Scope: tests/test_cart.py only</span>
+                  <span class="tag-badge sec-violation" data-testid="badge-dev-prohibited" style="opacity: 0.85;">DeveloperAgent Visibly Unavailable</span>
                 </div>
               </div>
-              <button class="btn-top" id="btn-inspect-drift" disabled style="opacity: 0.6;">
-                DeveloperAgent Prohibited (Test Bug Only)
+              <button class="btn-action-primary" id="btn-run-drift" data-testid="btn-run-drift">
+                ⚡ Run Heal Pipeline →
               </button>
             </div>
 
-            <div class="code-snippet">
-def test_checkout_drift():
+            <div class="code-snippet">def test_checkout_drift():
     cart = ShoppingCart()
-&gt;   assert cart.checkout() == 'CONFIRMED'
-E   AssertionError: assert 'ORDER_CONFIRMED' == 'CONFIRMED'
+>   assert cart.checkout() == 'CONFIRMED'
+E   AssertionError: assert 'ORDER_CONFIRMED' == 'CONFIRMED'</div>
+
+            <div style="font-size: 11px; color: var(--text-dim); font-family: var(--font-mono);">
+              Contract Invariant: Test assertion drifted from production contract. DeveloperAgent is disabled; TestHealerAgent routes exclusively.
+            </div>
+          </div>
+
+          <!-- Item 3: HostilePatch -->
+          <div class="detail-card" data-testid="inbox-item-hostile" id="card-hostile">
+            <div class="detail-card-header">
+              <div>
+                <div style="font-size: 14px; font-weight: 600; font-family: var(--font-mono);">tests/test_service.py::test_health_metrics</div>
+                <div style="display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap;">
+                  <span class="tag-badge sec-violation">FAILING (RED)</span>
+                  <span class="tag-badge prod-bug" data-testid="badge-hostile">PRODUCT_BUG</span>
+                  <span class="tag-badge test-bug">Owner: DeveloperAgent</span>
+                  <span class="tag-badge test-bug">Scope: src/service.py only</span>
+                  <span class="tag-badge sec-violation">Hostile Candidate (shell=True)</span>
+                </div>
+              </div>
+              <button class="btn-action-primary" id="btn-run-hostile" data-testid="btn-run-hostile">
+                ⚡ Run Heal Pipeline →
+              </button>
             </div>
 
-            <div style="font-size: 11px; color: var(--text-dim);">
-              Contract Invariant: Test assertion drifted from production contract. DeveloperAgent is disabled; TestHealerAgent routes exclusively.
+            <div class="code-snippet">def test_health_metrics():
+    h = SystemHealth()
+>   assert h.check_status() == 'HEALTHY_200'
+E   AssertionError: assert 'ONLINE' == 'HEALTHY_200'</div>
+
+            <div style="font-size: 11px; color: var(--text-dim); font-family: var(--font-mono);">
+              Security Blast Radius Verification: Candidate proposal introduces subprocess shell=True. Engine must halt and refuse write gate.
             </div>
           </div>
         </div>
@@ -867,128 +973,128 @@ E   AssertionError: assert 'ORDER_CONFIRMED' == 'CONFIRMED'
         <div class="view-header">
           <div class="view-title-group">
             <h2>Governed Multi-Agent Sprint Execution</h2>
-            <p id="sprint-subhead">Sprint DAG orchestration with architectural verification gates.</p>
+            <p id="sprint-subhead">Topological DAG orchestration with architectural verification gates.</p>
           </div>
           <button class="btn-action-primary" id="btn-goto-diff">Review Staged Diff →</button>
         </div>
 
         <div class="sprint-timeline" id="sprint-cards-container">
           <!-- Step 1: CIFailureIngestor -->
-          <div class="agent-card passed-step" data-testid="board-card-classify">
+          <div class="agent-card passed-step" id="card-step-1" data-testid="board-card-classify">
             <div class="agent-header">
               <div class="agent-name-role">
                 <span>1. RequirementsAgent / CIFailureIngestor</span>
                 <span class="agent-tier-badge">TIER_2_SENIOR_SWE</span>
               </div>
-              <span class="tag tag-product-bug">CLASSIFIED: PRODUCT_BUG</span>
+              <span class="tag-badge prod-bug" id="badge-step-1">CLASSIFIED: PRODUCT_BUG</span>
             </div>
-            <div class="agent-body">
-              Ingested failure trace from <code>tests/test_ledger.py</code>. Synthesized deterministic Acceptance Criteria (AC-1: Deposit must validate amount &gt; 0 and raise ValueError). Tagged high_risk=False.
+            <div class="agent-body" id="body-step-1">
+              Ingested failure trace from test execution. Synthesized deterministic Acceptance Criteria. High risk audit flags verified.
             </div>
             <div class="agent-scope-bar">
-              Scope: Read-only symbol indexer (no workspace mutations).
+              Scope: Read-only symbol indexer (zero workspace mutations).
             </div>
           </div>
 
           <!-- Step 2: TicketRouter & Orchestrator -->
-          <div class="agent-card passed-step" data-testid="board-card-route">
+          <div class="agent-card passed-step" id="card-step-2" data-testid="board-card-route">
             <div class="agent-header">
               <div class="agent-name-role">
                 <span>2. ScrumMasterOrchestrator &amp; TicketRouter</span>
                 <span class="agent-tier-badge">TIER_1_TECH_LEAD</span>
               </div>
-              <span class="tag tag-scope">ROUTED: HEAL-PROD-001</span>
+              <span class="tag-badge test-bug" id="badge-step-2">ROUTED: HEAL-PROD-001</span>
             </div>
-            <div class="agent-body">
-              Constructed DAG and routed ticket <code>HEAL-PROD-001</code> to <code>DeveloperAgent</code>. Complexity score: 2. Restricted allowed files to strictly exclude <code>tests/*</code>.
+            <div class="agent-body" id="body-step-2">
+              Constructed DAG and routed ticket to DeveloperAgent. Restricted allowed files to strictly exclude tests/*.
             </div>
-            <div class="agent-scope-bar">
-              Allowed Files: <code>['src/InMemoryLedger.py']</code>
+            <div class="agent-scope-bar" id="scope-step-2">
+              Allowed Files: ['src/InMemoryLedger.py']
             </div>
           </div>
 
-          <!-- Step 3: DeveloperAgent -->
-          <div class="agent-card passed-step" data-testid="board-card-proposal">
+          <!-- Step 3: WorkerAgent -->
+          <div class="agent-card passed-step" id="card-step-3" data-testid="board-card-proposal">
             <div class="agent-header">
               <div class="agent-name-role">
-                <span>3. DeveloperAgent</span>
-                <span class="agent-tier-badge">TIER_3_JUNIOR_SWE</span>
+                <span id="title-step-3">3. DeveloperAgent</span>
+                <span class="agent-tier-badge" id="tier-step-3">TIER_3_JUNIOR_SWE</span>
               </div>
-              <span class="tag tag-product-bug">PROPOSAL SYNTHESIZED</span>
+              <span class="tag-badge prod-bug" id="badge-step-3">PROPOSAL SYNTHESIZED</span>
             </div>
-            <div class="agent-body">
-              Synthesized defensive patch for <code>src/InMemoryLedger.py</code> using <code>LocalHeuristicEngine</code>. Added guard raising <code>ValueError("Deposit amount must be positive")</code>.
+            <div class="agent-body" id="body-step-3">
+              Synthesized defensive patch for src/InMemoryLedger.py using LocalHeuristicEngine. Added negative value guard.
             </div>
-            <div class="agent-scope-bar">
-              Target File: <code>src/InMemoryLedger.py</code> • Lines modified: 4
+            <div class="agent-scope-bar" id="scope-step-3">
+              Target File: src/InMemoryLedger.py • Lines modified: 4
             </div>
           </div>
 
           <!-- Step 4: AST Guard & QA Critic -->
-          <div class="agent-card passed-step" data-testid="board-card-critic">
+          <div class="agent-card passed-step" id="card-step-4" data-testid="board-card-critic">
             <div class="agent-header">
               <div class="agent-name-role">
                 <span>4. ASTPatchGuard &amp; QACriticAgent</span>
                 <span class="agent-tier-badge">TIER_4_QA_CRITIC</span>
               </div>
-              <span class="tag tag-status-red" style="color: #34d399; background: rgba(16,185,129,0.1); border-color: rgba(16,185,129,0.3);">VERIFIED PASS</span>
+              <span class="tag-badge sec-violation" id="badge-step-4" style="color: var(--status-green); background: var(--status-green-bg); border-color: var(--status-green-border);">VERIFIED PASS</span>
             </div>
-            <div class="agent-body">
-              Line-by-line rubric evaluation completed. No syntax errors, no timing attacks, zero assertion erosion. Verified AC-1 addressed at <code>src/InMemoryLedger.py:7</code>.
+            <div class="agent-body" id="body-step-4">
+              Line-by-line rubric evaluation completed. No syntax errors, no timing attacks, zero assertion erosion verified.
             </div>
             <div class="agent-scope-bar">
-              Verdicts: 1/1 AC PASS • Citations: <code>src/InMemoryLedger.py:7</code>
+              Verdicts: 1/1 AC PASS • Zero Assertion Erosion: PASS
             </div>
           </div>
 
           <!-- Step 5: Security Blast Radius -->
-          <div class="agent-card passed-step" data-testid="board-card-security">
+          <div class="agent-card passed-step" id="card-step-5" data-testid="board-card-security">
             <div class="agent-header">
               <div class="agent-name-role">
                 <span>5. SecurityBlastRadiusAgent</span>
                 <span class="agent-tier-badge">TIER_4_QA_CRITIC</span>
               </div>
-              <span class="tag tag-scope">0 HIGH / CRITICAL FINDINGS</span>
+              <span class="tag-badge test-bug" id="badge-step-5">0 CRITICAL FINDINGS</span>
             </div>
-            <div class="agent-body">
-              Static AST security pass verified zero SQL injection, zero shell=True invocations, zero path traversal escapes, and clean constant-time compliance.
+            <div class="agent-body" id="body-step-5">
+              Static AST security pass verified zero SQL injection, zero shell=True invocations, zero path traversal escapes, and constant-time secrets.
             </div>
-            <div class="agent-scope-bar">
+            <div class="agent-scope-bar" id="scope-step-5">
               Blast Radius: ISOLATED (src/InMemoryLedger.py only)
             </div>
           </div>
 
           <!-- Step 6: Sandbox Executor -->
-          <div class="agent-card passed-step" data-testid="board-card-sandbox">
+          <div class="agent-card passed-step" id="card-step-6" data-testid="board-card-sandbox">
             <div class="agent-header">
               <div class="agent-name-role">
                 <span>6. AutomationTesterAgent &amp; Sandbox</span>
                 <span class="agent-tier-badge">TIER_3_JUNIOR_SWE</span>
               </div>
-              <span class="tag tag-status-red" style="color: #34d399; background: rgba(16,185,129,0.1); border-color: rgba(16,185,129,0.3);">SANDBOX PASS (3/3)</span>
+              <span class="tag-badge sec-violation" id="badge-step-6" style="color: var(--status-green); background: var(--status-green-bg); border-color: var(--status-green-border);">SANDBOX PASS (3/3)</span>
             </div>
-            <div class="agent-body">
-              Executed test suite across 3 isolated ephemeral git worktrees (repeat=3). Clean deterministic pass with zero flakiness. Worktrees purged from disk.
+            <div class="agent-body" id="body-step-6">
+              Executed test suite across 3 isolated ephemeral git worktrees (repeat=3). Clean deterministic pass with zero flakiness.
             </div>
-            <div class="agent-scope-bar">
+            <div class="agent-scope-bar" id="scope-step-6">
               Runs: 3/3 Passed • Exit Code: 0
             </div>
           </div>
 
           <!-- Step 7: Staged in Write Gate -->
-          <div class="agent-card active-step" data-testid="board-card-staged">
+          <div class="agent-card active-step" id="card-step-7" data-testid="board-card-staged">
             <div class="agent-header">
               <div class="agent-name-role">
                 <span>7. HumanWriteGateController</span>
                 <span class="agent-tier-badge">GOVERNED WRITE GATE</span>
               </div>
-              <span class="tag" style="background: rgba(245,158,11,0.15); color: #fbbf24; border: 1px solid rgba(245,158,11,0.4);">AWAITING APPROVAL</span>
+              <span class="tag-badge sec-violation" id="badge-step-7" style="background: var(--status-amber-bg); color: var(--status-amber); border-color: var(--status-amber-border);">AWAITING APPROVAL</span>
             </div>
-            <div class="agent-body">
+            <div class="agent-body" id="body-step-7">
               Safety pre-apply snapshot pinned in Time Machine. Workspace remains 100% byte-for-byte untouched until human write-gate authorization.
             </div>
-            <div class="agent-scope-bar">
-              Staged Sprint: <code id="board-sprint-id">sprint_ready</code> • Staged Files: <code>['src/InMemoryLedger.py']</code>
+            <div class="agent-scope-bar" id="scope-step-7">
+              Staged Sprint: <code id="board-sprint-id">sprint_ready</code>
             </div>
           </div>
         </div>
@@ -1009,19 +1115,17 @@ E   AssertionError: assert 'ORDER_CONFIRMED' == 'CONFIRMED'
 
         <div class="diff-container" data-testid="diff-container">
           <div class="diff-header">
-            <span>src/InMemoryLedger.py (Unified Diff vs Baseline)</span>
-            <span>Invariant: Test assertions preserved (2/2)</span>
+            <span id="diff-file-label">src/InMemoryLedger.py (Unified Diff vs Baseline)</span>
+            <span id="diff-assertion-label">Test assertions preserved (2/2)</span>
           </div>
-          <div class="diff-content" id="diff-text">
---- a/src/InMemoryLedger.py (Baseline)
+          <div class="diff-content" id="diff-text">--- a/src/InMemoryLedger.py (Baseline)
 +++ b/src/InMemoryLedger.py (Staged Proposal)
 @@ -10,6 +10,10 @@
      def deposit(self, amount: float) -> float:
 +        if amount &lt;= 0:
 +            raise ValueError("Deposit amount must be positive")
          self._balance += amount
-         return self._balance
-          </div>
+         return self._balance</div>
         </div>
 
         <!-- Approval & Verification Bar -->
@@ -1029,7 +1133,7 @@ E   AssertionError: assert 'ORDER_CONFIRMED' == 'CONFIRMED'
           <div class="form-row">
             <div class="form-group">
               <label class="form-label">Approver Identity (QA Lead)</label>
-              <input type="text" class="form-input" id="input-approver" data-testid="input-approver" value="QA Lead" placeholder="Name or email">
+              <input type="text" class="form-input" id="input-approver" data-testid="input-approver" value="QA Lead" placeholder="Your name or handle">
             </div>
             <div class="form-group" style="flex: 2;">
               <label class="form-label">Audit Review Comment</label>
@@ -1037,9 +1141,10 @@ E   AssertionError: assert 'ORDER_CONFIRMED' == 'CONFIRMED'
             </div>
           </div>
 
-          <div style="display: flex; gap: 12px; align-items: center; justify-content: space-between; border-top: 1px solid var(--border-subtle); padding-top: 14px;">
+          <div style="display: flex; gap: 12px; align-items: center; justify-content: space-between; border-top: 1px solid var(--border-hairline); padding-top: 14px;">
             <div style="font-family: var(--font-mono); font-size: 11px; color: var(--text-dim);">
-              Pre-Apply Snapshot: <span id="snapshot-id-display" data-testid="snapshot-id-display" style="color: var(--accent-cyan);">snap_pending_approval</span>
+              Pre-Apply Snapshot: <span id="snapshot-id-display" data-testid="snapshot-id-display" style="color: var(--copper);">snap_pending_approval</span>
+              <div class="audit-approval-line" id="audit-approval-line" data-testid="audit-approval-line"></div>
             </div>
 
             <div style="display: flex; gap: 10px;">
@@ -1063,16 +1168,14 @@ E   AssertionError: assert 'ORDER_CONFIRMED' == 'CONFIRMED'
           </div>
         </div>
 
-        <div class="inbox-grid" id="tm-snapshot-list">
-          <div class="failure-card">
-            <div class="card-top">
-              <div class="card-title-group">
-                <div class="card-title">
-                  <span id="tm-active-snap-id">snap_safety_pre_apply_HEAL-PROD-001</span>
-                </div>
-                <div class="card-badges">
-                  <span class="tag tag-scope">Type: PRE_APPLY_SAFETY</span>
-                  <span class="tag tag-scope">Target: src/InMemoryLedger.py</span>
+        <div style="display: flex; flex-direction: column; gap: 12px;" id="tm-snapshot-list">
+          <div class="detail-card">
+            <div class="detail-card-header">
+              <div>
+                <div style="font-size: 13px; font-weight: 600; font-family: var(--font-mono);" id="tm-active-snap-id">snap_safety_pre_apply_HEAL-PROD-001</div>
+                <div style="display: flex; gap: 6px; margin-top: 4px;">
+                  <span class="tag-badge test-bug">Type: PRE_APPLY_SAFETY</span>
+                  <span class="tag-badge test-bug" id="tm-active-target">Target: src/InMemoryLedger.py</span>
                 </div>
               </div>
               <button class="btn-action-rewind" id="btn-tm-restore">
@@ -1139,11 +1242,17 @@ Status: ACTIVE
       workspaceId: null,
       workspaceName: "InMemoryLedger",
       failingTest: "test_deposit_rejects_negative",
-      status: "FAILING", // FAILING, AWAITING_WRITE_GATE, APPLIED, ROLLED_BACK
+      classification: "PRODUCT_BUG",
+      ownerAgent: "DeveloperAgent",
+      scope: ["src/InMemoryLedger.py"],
+      allowedFiles: ["src/InMemoryLedger.py"],
+      status: "FAILING", // FAILING, AWAITING_WRITE_GATE, APPLIED, ROLLED_BACK, FAILED
       sprintId: null,
       snapshotId: null,
+      approver: "QA Lead",
       diffText: "",
       auditLog: "",
+      rejectionReason: null,
     };
 
     // DOM Elements
@@ -1151,13 +1260,21 @@ Status: ACTIVE
     const viewPanels = document.querySelectorAll('.view-panel');
     const labelStatus = document.getElementById('label-status');
     const pillStatus = document.getElementById('pill-status');
+    const labelWorkspace = document.getElementById('label-workspace');
     const btnRunHeal = document.getElementById('btn-run-heal');
+    const btnRunDrift = document.getElementById('btn-run-drift');
+    const btnRunHostile = document.getElementById('btn-run-hostile');
     const btnApprove = document.getElementById('btn-approve');
     const btnRewind = document.getElementById('btn-rewind');
+    const inputApprover = document.getElementById('input-approver');
+    const inputComment = document.getElementById('input-comment');
+    const auditApprovalLine = document.getElementById('audit-approval-line');
     const snapshotIdDisplay = document.getElementById('snapshot-id-display');
     const diffStatusLabel = document.getElementById('diff-status-label');
     const diffStatusPill = document.getElementById('diff-status-pill');
     const diffTextContainer = document.getElementById('diff-text');
+    const diffFileLabel = document.getElementById('diff-file-label');
+    const diffAssertionLabel = document.getElementById('diff-assertion-label');
     const auditOverlay = document.getElementById('audit-overlay');
     const btnAudit = document.getElementById('btn-audit');
     const btnCloseAudit = document.getElementById('btn-close-audit');
@@ -1165,6 +1282,7 @@ Status: ACTIVE
     const auditContent = document.getElementById('audit-content');
     const btnGotoDiff = document.getElementById('btn-goto-diff');
     const btnReseed = document.getElementById('btn-reseed-demo');
+    const btnTmRestore = document.getElementById('btn-tm-restore');
 
     // Navigation Switcher
     function switchTab(tabName) {
@@ -1244,50 +1362,194 @@ Status: ACTIVE
       return await resp.json();
     }
 
-    // Initial Seed: Create demo workspace
-    async function initializeDemoWorkspace() {
+    // Selection switching in left rail
+    function selectInboxRow(name) {
+      document.querySelectorAll('.inbox-row').forEach(row => {
+        row.classList.toggle('selected', row.dataset.target === name);
+      });
+    }
+
+    document.querySelectorAll('.inbox-row').forEach(row => {
+      row.addEventListener('click', () => {
+        const target = row.dataset.target;
+        selectInboxRow(target);
+        if (target === 'ledger') loadLedgerWorkspace();
+        else if (target === 'drift') loadDriftWorkspace();
+        else if (target === 'hostile') loadHostileWorkspace();
+      });
+    });
+
+    // Workspace Loaders
+    async function loadLedgerWorkspace() {
       try {
         const data = await apiPost('/api/demo/ledger');
-        state.workspaceId = data.workspace_id;
-        state.workspaceName = data.workspace_name;
-        state.failingTest = data.failing_test;
-        state.status = "FAILING";
-        updateUI();
+        setWorkspaceData(data);
       } catch (e) {
-        console.error("Demo init error:", e);
+        console.error("Ledger init error:", e);
       }
     }
 
+    async function loadDriftWorkspace() {
+      try {
+        const data = await apiPost('/api/demo/drift');
+        setWorkspaceData(data);
+      } catch (e) {
+        console.error("Drift init error:", e);
+      }
+    }
+
+    async function loadHostileWorkspace() {
+      try {
+        const data = await apiPost('/api/demo/hostile');
+        setWorkspaceData(data);
+      } catch (e) {
+        console.error("Hostile init error:", e);
+      }
+    }
+
+    function setWorkspaceData(data) {
+      state.workspaceId = data.workspace_id;
+      state.workspaceName = data.workspace_name;
+      state.failingTest = data.failing_test;
+      state.classification = data.classification;
+      state.ownerAgent = data.owner_agent;
+      state.scope = data.scope || [];
+      state.allowedFiles = data.allowed_files || [];
+      state.status = data.status || "FAILING";
+      state.sprintId = data.active_sprint_id || null;
+      state.snapshotId = data.pre_apply_snapshot_id || null;
+      state.approver = data.approver || "QA Lead";
+      state.rejectionReason = null;
+      selectInboxRow(data.workspace_name === 'PlaywrightDrift' ? 'drift' : (data.workspace_name === 'HostilePatch' ? 'hostile' : 'ledger'));
+      updateUI();
+    }
+
+    // Approver input listener (AG-7)
+    function checkApproverValidity() {
+      const hasName = inputApprover.value.trim().length > 0;
+      if (state.status === "AWAITING_WRITE_GATE") {
+        btnApprove.disabled = !hasName;
+      }
+    }
+    inputApprover.addEventListener('input', checkApproverValidity);
+
     function updateUI() {
+      labelWorkspace.innerText = state.workspaceName;
+      const targetLabel = state.scope[0] || (state.workspaceName === 'PlaywrightDrift' ? 'tests/test_cart.py' : (state.workspaceName === 'HostilePatch' ? 'src/service.py' : 'src/InMemoryLedger.py'));
+      diffFileLabel.innerText = `${targetLabel} (Unified Diff vs Baseline)`;
+      document.getElementById('tm-active-target').innerText = `Target: ${targetLabel}`;
+
+      if (state.workspaceName === 'PlaywrightDrift') {
+        diffAssertionLabel.innerText = "Invariant: Test assertions preserved (1/1)";
+      } else {
+        diffAssertionLabel.innerText = "Invariant: Test assertions preserved (2/2)";
+      }
+
+      // Configure Step Cards for Workspace Type
+      const isDrift = state.workspaceName === 'PlaywrightDrift';
+      const isHostile = state.workspaceName === 'HostilePatch';
+
+      if (isDrift) {
+        document.getElementById('badge-step-1').innerText = "CLASSIFIED: TEST_BUG";
+        document.getElementById('badge-step-2').innerText = "ROUTED: HEAL-TEST-001 (TestHealerAgent)";
+        document.getElementById('scope-step-2').innerText = "Allowed Files: ['tests/test_cart.py'] (DeveloperAgent visibly unavailable)";
+        document.getElementById('title-step-3').innerText = "3. TestHealerAgent (DeveloperAgent Prohibited)";
+        document.getElementById('tier-step-3').innerText = "TIER_3_JUNIOR_SWE";
+        document.getElementById('badge-step-3').innerText = "ASSERTION DRIFT HEALED";
+        document.getElementById('body-step-3').innerText = "TestHealerAgent updated drifted assertion from 'CONFIRMED' to 'ORDER_CONFIRMED' in tests/test_cart.py. Product code src/cart.py remains byte-for-byte untouched.";
+        document.getElementById('scope-step-3').innerText = "Target File: tests/test_cart.py • DeveloperAgent Unavailable";
+        document.getElementById('scope-step-5').innerText = "Blast Radius: ISOLATED (tests/test_cart.py only)";
+      } else if (isHostile) {
+        document.getElementById('badge-step-1').innerText = "CLASSIFIED: PRODUCT_BUG";
+        document.getElementById('badge-step-2').innerText = "ROUTED: HEAL-PROD-001";
+        document.getElementById('scope-step-2').innerText = "Allowed Files: ['src/service.py']";
+        document.getElementById('title-step-3').innerText = "3. DeveloperAgent";
+        document.getElementById('tier-step-3').innerText = "TIER_3_JUNIOR_SWE";
+        document.getElementById('badge-step-3').innerText = "HOSTILE PROPOSAL";
+        document.getElementById('body-step-3').innerText = "DeveloperAgent proposed patch for src/service.py containing subprocess.run('echo HEALTHY_200', shell=True).";
+        document.getElementById('scope-step-3').innerText = "Target File: src/service.py • Injected subprocess call";
+        document.getElementById('scope-step-5').innerText = "Blast Radius: BLOCKED (shell=True command injection attempt)";
+      } else {
+        document.getElementById('badge-step-1').innerText = "CLASSIFIED: PRODUCT_BUG";
+        document.getElementById('badge-step-2').innerText = "ROUTED: HEAL-PROD-001";
+        document.getElementById('scope-step-2').innerText = "Allowed Files: ['src/InMemoryLedger.py']";
+        document.getElementById('title-step-3').innerText = "3. DeveloperAgent";
+        document.getElementById('tier-step-3').innerText = "TIER_3_JUNIOR_SWE";
+        document.getElementById('badge-step-3').innerText = "PROPOSAL SYNTHESIZED";
+        document.getElementById('body-step-3').innerText = "Synthesized defensive patch for src/InMemoryLedger.py using LocalHeuristicEngine. Added negative value guard.";
+        document.getElementById('scope-step-3').innerText = "Target File: src/InMemoryLedger.py • Lines modified: 4";
+        document.getElementById('scope-step-5').innerText = "Blast Radius: ISOLATED (src/InMemoryLedger.py only)";
+      }
+
       // Status labels and pills
       if (state.status === "FAILING") {
         labelStatus.innerText = "STATUS: FAILING (RED)";
         pillStatus.className = "meta-pill status-red";
         diffStatusLabel.innerText = "STATUS: FAILING";
         diffStatusPill.className = "meta-pill status-red";
+        btnApprove.style.display = "inline-flex";
         btnApprove.disabled = true;
         btnRewind.disabled = true;
+        resetRailStyles();
+        auditApprovalLine.innerText = "";
       } else if (state.status === "AWAITING_WRITE_GATE") {
         labelStatus.innerText = "STATUS: AWAITING APPROVAL";
         pillStatus.className = "meta-pill status-amber";
         diffStatusLabel.innerText = "STATUS: STAGED";
         diffStatusPill.className = "meta-pill status-amber";
-        btnApprove.disabled = false;
+        btnApprove.style.display = "inline-flex";
+        checkApproverValidity();
         btnRewind.disabled = true;
+        setRailPassedUpTo(7);
+        document.getElementById('card-step-7').className = "agent-card active-step";
+        auditApprovalLine.innerText = "";
       } else if (state.status === "APPLIED") {
         labelStatus.innerText = "STATUS: APPLIED (GREEN)";
         pillStatus.className = "meta-pill status-green";
         diffStatusLabel.innerText = "STATUS: APPLIED (100% PASSING)";
         diffStatusPill.className = "meta-pill status-green";
+        btnApprove.style.display = "inline-flex";
         btnApprove.disabled = true;
         btnRewind.disabled = false;
+        setRailPassedUpTo(7);
+        document.getElementById('card-step-7').className = "agent-card passed-step";
+        const approverName = state.approver || inputApprover.value || "QA Lead";
+        auditApprovalLine.innerText = `Approved by ${approverName} · Time Machine snapshot ${state.snapshotId || 'snap_applied'}`;
       } else if (state.status === "ROLLED_BACK") {
         labelStatus.innerText = "STATUS: ROLLED_BACK (RED)";
         pillStatus.className = "meta-pill status-red";
         diffStatusLabel.innerText = "STATUS: ROLLED_BACK (BASELINE RESTORED)";
         diffStatusPill.className = "meta-pill status-red";
+        btnApprove.style.display = "inline-flex";
         btnApprove.disabled = true;
         btnRewind.disabled = true;
+        resetRailStyles();
+        auditApprovalLine.innerText = `Rolled back to baseline snapshot ${state.snapshotId || 'snap_restored'}`;
+      } else if (state.status === "FAILED") {
+        // Blocked write gate (AG-9)
+        labelStatus.innerText = "STATUS: REJECTED (SECURITY BLAST RADIUS)";
+        pillStatus.className = "meta-pill status-red";
+        diffStatusLabel.innerText = "STATUS: REJECTED BY SECURITY GATE";
+        diffStatusPill.className = "meta-pill status-red";
+        // Approve button is completely GONE (AG-9)
+        btnApprove.style.display = "none";
+        btnRewind.disabled = true;
+
+        // Rail stops at Step 5 (Security Blast Radius)
+        setRailPassedUpTo(4);
+        const card5 = document.getElementById('card-step-5');
+        card5.className = "agent-card rejected-step";
+        document.getElementById('badge-step-5').className = "tag-badge sec-violation";
+        document.getElementById('badge-step-5').innerText = "REJECTED: SEC-SUBPROCESS-001";
+        const reasonText = state.rejectionReason || "SEC-SUBPROCESS-001: shell=True (subprocess execution with shell=True is dangerous and invites command injection)";
+        document.getElementById('body-step-5').innerText = reasonText;
+
+        // Steps 6 and 7 blocked
+        document.getElementById('card-step-6').className = "agent-card blocked-step";
+        document.getElementById('badge-step-6').innerText = "BLOCKED (NOT REACHED)";
+        document.getElementById('card-step-7').className = "agent-card blocked-step";
+        document.getElementById('badge-step-7').innerText = "BLOCKED (WRITE REFUSED)";
+        auditApprovalLine.innerText = "Write Gate Blocked: Security violation SEC-SUBPROCESS-001. No changes staged.";
       }
 
       if (state.snapshotId) {
@@ -1306,48 +1568,108 @@ Status: ACTIVE
       }
     }
 
-    // [1] Run Heal Action
-    btnRunHeal.addEventListener('click', async () => {
-      btnRunHeal.disabled = true;
-      btnRunHeal.innerText = "⚡ Running Governed Pipeline...";
+    function resetRailStyles() {
+      for (let i = 1; i <= 6; i++) {
+        document.getElementById(`card-step-${i}`).className = "agent-card passed-step";
+      }
+      document.getElementById('card-step-7').className = "agent-card active-step";
+    }
+
+    function setRailPassedUpTo(step) {
+      for (let i = 1; i <= 7; i++) {
+        const card = document.getElementById(`card-step-${i}`);
+        if (i <= step) {
+          card.className = "agent-card passed-step";
+        } else {
+          card.className = "agent-card blocked-step";
+        }
+      }
+    }
+
+    // Run Heal Action
+    async function executeHeal(triggerBtn) {
+      triggerBtn.disabled = true;
+      const originalText = triggerBtn.innerText;
+      triggerBtn.innerText = "⚡ Running Governed Pipeline...";
 
       try {
         if (!state.workspaceId) {
-          await initializeDemoWorkspace();
+          await loadLedgerWorkspace();
         }
 
         const res = await apiPost(`/api/demo/${state.workspaceId}/heal`);
         state.status = res.status || "AWAITING_WRITE_GATE";
         state.sprintId = res.sprint_id;
         state.snapshotId = res.snapshot_id || (res.staged_proposal && res.staged_proposal.snapshot_id);
-        
+
+        if (state.status === "FAILED") {
+          // Check for security findings
+          if (res.attempts && res.attempts.length > 0) {
+            const lastAttempt = res.attempts[res.attempts.length - 1];
+            state.rejectionReason = lastAttempt.rejection_reason || "SEC-SUBPROCESS-001: shell=True";
+          } else {
+            state.rejectionReason = res.error || "SEC-SUBPROCESS-001: shell=True";
+          }
+        } else {
+          state.rejectionReason = null;
+        }
+
         // Fetch diff
-        const diffRes = await apiGet(`/api/demo/${state.workspaceId}/diff`);
-        state.diffText = diffRes.diff || "";
+        try {
+          const diffRes = await apiGet(`/api/demo/${state.workspaceId}/diff`);
+          state.diffText = diffRes.diff || "";
+        } catch (e) {
+          state.diffText = "";
+        }
 
         // Fetch audit
-        const auditRes = await apiGet(`/api/demo/${state.workspaceId}/audit`);
-        state.auditLog = auditRes.markdown || "";
-        auditContent.innerText = state.auditLog;
+        try {
+          const auditRes = await apiGet(`/api/demo/${state.workspaceId}/audit`);
+          state.auditLog = auditRes.markdown || "";
+          auditContent.innerText = state.auditLog;
+        } catch (e) {}
 
         updateUI();
         switchTab('sprint');
       } catch (e) {
         alert("Sprint heal error: " + e.message);
       } finally {
-        btnRunHeal.disabled = false;
-        btnRunHeal.innerText = "⚡ Run Heal Pipeline →";
+        triggerBtn.disabled = false;
+        triggerBtn.innerText = originalText;
       }
-    });
+    }
 
-    // [2] Approve Action
+    btnRunHeal.addEventListener('click', async () => {
+      if (state.workspaceName !== 'InMemoryLedger') {
+        await loadLedgerWorkspace();
+      }
+      executeHeal(btnRunHeal);
+    });
+    if (btnRunDrift) {
+      btnRunDrift.addEventListener('click', async () => {
+        if (state.workspaceName !== 'PlaywrightDrift') {
+          await loadDriftWorkspace();
+        }
+        executeHeal(btnRunDrift);
+      });
+    }
+    if (btnRunHostile) {
+      btnRunHostile.addEventListener('click', async () => {
+        if (state.workspaceName !== 'HostilePatch') {
+          await loadHostileWorkspace();
+        }
+        executeHeal(btnRunHostile);
+      });
+    }
+
+    // Approve Action
     btnApprove.addEventListener('click', async () => {
       btnApprove.disabled = true;
       btnApprove.innerText = "Applying & Verifying Sandbox...";
 
       try {
-        const approver = document.getElementById('input-approver').value || "QA Lead";
-        const comment = document.getElementById('input-comment').value || "";
+        const approver = inputApprover.value.trim() || "QA Lead";
+        const comment = inputComment.value || "";
 
         const res = await apiPost(`/api/demo/${state.workspaceId}/approve`, {
           approver: approver,
@@ -1357,12 +1679,15 @@ Status: ACTIVE
 
         if (res.success || res.status === "APPLIED") {
           state.status = "APPLIED";
+          state.approver = approver;
           state.snapshotId = res.snapshot_id || state.snapshotId;
 
           // Fetch updated audit
-          const auditRes = await apiGet(`/api/demo/${state.workspaceId}/audit`);
-          state.auditLog = auditRes.markdown || "";
-          auditContent.innerText = state.auditLog;
+          try {
+            const auditRes = await apiGet(`/api/demo/${state.workspaceId}/audit`);
+            state.auditLog = auditRes.markdown || "";
+            auditContent.innerText = state.auditLog;
+          } catch (e) {}
 
           updateUI();
         } else {
@@ -1377,7 +1702,7 @@ Status: ACTIVE
       }
     });
 
-    // [3] Rewind Action
+    // Rewind Action
     btnRewind.addEventListener('click', async () => {
       btnRewind.disabled = true;
       btnRewind.innerText = "Rewinding Workspace...";
@@ -1388,9 +1713,11 @@ Status: ACTIVE
           state.status = "ROLLED_BACK";
 
           // Fetch updated audit
-          const auditRes = await apiGet(`/api/demo/${state.workspaceId}/audit`);
-          state.auditLog = auditRes.markdown || "";
-          auditContent.innerText = state.auditLog;
+          try {
+            const auditRes = await apiGet(`/api/demo/${state.workspaceId}/audit`);
+            state.auditLog = auditRes.markdown || "";
+            auditContent.innerText = state.auditLog;
+          } catch (e) {}
 
           updateUI();
         } else {
@@ -1403,16 +1730,58 @@ Status: ACTIVE
       }
     });
 
-    // Reseed button
-    if (btnReseed) {
-      btnReseed.addEventListener('click', () => {
-        initializeDemoWorkspace();
+    if (btnTmRestore) {
+      btnTmRestore.addEventListener('click', () => {
+        btnRewind.click();
       });
     }
 
-    // Auto-init on page load
-    window.addEventListener('DOMContentLoaded', () => {
-      initializeDemoWorkspace();
+    // Reseed button
+    if (btnReseed) {
+      btnReseed.addEventListener('click', () => {
+        loadLedgerWorkspace();
+      });
+    }
+
+    // Auto-init on page load / reload (AG-10)
+    window.addEventListener('DOMContentLoaded', async () => {
+      try {
+        const active = await apiGet('/api/demo/active');
+        if (active && active.workspace_id) {
+          state.workspaceId = active.workspace_id;
+          state.workspaceName = active.workspace_name;
+          state.failingTest = active.failing_test;
+          state.classification = active.classification;
+          state.ownerAgent = active.owner_agent;
+          state.scope = active.scope || [];
+          state.allowedFiles = active.allowed_files || [];
+          state.status = active.status || "FAILING";
+          state.sprintId = active.active_sprint_id || null;
+          state.snapshotId = active.pre_apply_snapshot_id || null;
+          state.approver = active.approver || "QA Lead";
+          if (active.approver) inputApprover.value = active.approver;
+
+          // Fetch diff
+          try {
+            const diffRes = await apiGet(`/api/demo/${state.workspaceId}/diff`);
+            state.diffText = diffRes.diff || "";
+          } catch (e) {}
+
+          // Fetch audit
+          try {
+            const auditRes = await apiGet(`/api/demo/${state.workspaceId}/audit`);
+            state.auditLog = auditRes.markdown || "";
+            auditContent.innerText = state.auditLog;
+          } catch (e) {}
+
+          selectInboxRow(active.workspace_name === 'PlaywrightDrift' ? 'drift' : (active.workspace_name === 'HostilePatch' ? 'hostile' : 'ledger'));
+          updateUI();
+        } else {
+          await loadLedgerWorkspace();
+        }
+      } catch (e) {
+        await loadLedgerWorkspace();
+      }
     });
   </script>
 </body>

@@ -160,7 +160,14 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 def cmd_heal(args: argparse.Namespace) -> int:
     workspace = Path.cwd().resolve()
-    pytest_cmd = args.pytest_cmd.split() if args.pytest_cmd else ["pytest", "-q"]
+    if args.pytest_cmd:
+        raw_cmd = args.pytest_cmd.split() if isinstance(args.pytest_cmd, str) else list(args.pytest_cmd)
+        if raw_cmd and raw_cmd[0] == "pytest":
+            pytest_cmd = [sys.executable, "-m", "pytest"] + raw_cmd[1:]
+        else:
+            pytest_cmd = raw_cmd
+    else:
+        pytest_cmd = [sys.executable, "-m", "pytest", "-q"]
     auto_approve = args.auto_approve
 
     print(f"🔍 [Hermes Heal] Running test suite: {' '.join(pytest_cmd)}")

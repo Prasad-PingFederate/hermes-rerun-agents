@@ -1,9 +1,9 @@
 # 🤖 Hermes Multi-Agent Orchestrator
 
-[![Tests](https://img.shields.io/badge/tests-84%20passed-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-84%20unit%20%2B%206%20E2E%20passed-brightgreen.svg)]()
 [![Tester Console](https://img.shields.io/badge/tester%20console-playwright%20verified-success.svg)]()
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)]()
-[![Standard Library](https://img.shields.io/badge/dependencies-zero%20external%20SDKs-success.svg)]()
+[![Standard Library LLM](https://img.shields.io/badge/LLM%20HTTP-zero%20cloud%20SDKs-success.svg)]()
 [![License](https://img.shields.io/badge/license-AGPL--3.0-orange.svg)](LICENSE)
 
 **Hermes Multi-Agent Orchestrator** is an enterprise-grade autonomous software engineering and self-healing system built on a hierarchical multi-model architecture. It coordinates 8 specialized agent roles across 4 competence tiers with deterministic Scope Gates, an AST Test-Tampering Guard, automated multi-tier escalation, a durable SQLite state store, and a safety-first Human Write-Gate backed by a SHA-256 TimeMachine snapshot engine.
@@ -27,12 +27,13 @@ Every agent role is governed by a strict system prompt, explicit ModelTier, assi
 
 ---
 
-## 🌐 Any Model Can Be Any Agent (18 LLM Providers)
+## 🌐 Any Model Can Be Any Agent (19 LLM Providers)
 
-Hermes uses standard library `urllib.request` exclusively—**no OpenAI, Anthropic, or Google SDKs are required**. A single unified client (`HermesLLMAdapter.complete`) routes to any local engine or cloud provider across three wire protocols:
+Hermes uses standard library `urllib.request` for network LLM requests—**no OpenAI, Anthropic, or Google SDKs are required**. A single unified client (`HermesLLMAdapter.complete`) routes to local engines, cloud providers, or CLI sandboxes across wire protocols:
 * `openai_chat`: Standard OpenAI-compatible chat completions (`POST {base}/chat/completions`)
 * `gemini`: Google Generative Language REST API (`POST https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent`)
 * `anthropic`: Anthropic Messages REST API (`POST https://api.anthropic.com/v1/messages`)
+* `subprocess`: Sandboxed CLI invocation (e.g. `claude_code` with strict timeout, budget caps, and workspace isolation)
 
 ### Supported Provider Registry
 
@@ -56,6 +57,7 @@ Hermes uses standard library `urllib.request` exclusively—**no OpenAI, Anthrop
 | `azure_openai` | `openai_chat` | `https://{resource}.openai.azure.com` | `AZURE_OPENAI_BASE_URL` | `AZURE_OPENAI_API_KEY` | `AZURE_OPENAI_DEPLOYMENT` |
 | `gemini` | `gemini` | `https://generativelanguage.googleapis.com`| `GEMINI_BASE_URL` | `GEMINI_API_KEY` | `GEMINI_MODEL` |
 | `anthropic` | `anthropic` | `https://api.anthropic.com` | `ANTHROPIC_BASE_URL` | `ANTHROPIC_API_KEY` | `ANTHROPIC_MODEL` |
+| `claude_code` | `subprocess` | `cli` | *(None / binary)* | *(Inherited / CLI auth)* | `CLAUDE_CODE_MODEL` |
 
 > **Offline Fallback**: `LocalHeuristicEngine` runs **only** when `resolve_provider()` returns `"none"` (no API keys and no local server configured). If a provider is configured and returns an HTTP error, the system raises an exception immediately without falling back to heuristics.
 
@@ -222,20 +224,20 @@ The FastAPI server (`python server.py`) exposes unified endpoints backed by SQLi
 
 ---
 
-## 🧪 Verification & Unit Testing
+## 🧪 Verification & Comprehensive Test Suite
 
-Hermes is verified by 72 automated unit and integration tests:
+Hermes is verified by 84 automated unit/platform tests and 6 Playwright E2E product tests:
 
 ```powershell
-# Run the full test suite
+# 1. Run the full unit and contract test suite (84 tests)
 python -m pytest tests/ -v
 
-# Run the Phase 4 single-pipeline tests
-python -m pytest tests/test_phase4_single_pipeline.py -v
+# 2. Run the Playwright Tester Console product E2E test suite (6 specs)
+python -m pytest console_tests/ -v
 
-# Run the live self-healing smoke demo (6 phases end-to-end)
+# 3. Run the live self-healing smoke demo (6 phases end-to-end)
 python scripts/run_live_demo.py
 
-# Verify Python 3.10 standard library compatibility
+# 4. Verify Python 3.10 standard library syntax compliance across all files
 python scripts/syntax_guard.py
 ```

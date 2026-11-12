@@ -211,7 +211,8 @@ async def verify_hermes_token(request: Request):
 
 @app.get("/", response_class=HTMLResponse)
 def get_console_root():
-    """Serve the Hermes Tester Console Shell (AG-1)."""
+    """Serve the Hermes Tester Console Shell (AG-1 through AG-10)."""
+    demo_manager.load_persisted_workspaces()
     resp = HTMLResponse(content=CONSOLE_HTML)
     resp.set_cookie(
         key=CONSOLE_SESSION_COOKIE,
@@ -494,7 +495,19 @@ def approve_sprint_endpoint(sprint_id: str, req: SprintApproveRequest = SprintAp
     if not staged:
         raise HTTPException(status_code=404, detail=f"No staged proposal found for sprint '{sprint_id}'")
 
-    cmd = req.pytest_cmd or [sys.executable, "-m", "pytest", "-q"]
+    raw_cmd = req.pytest_cmd or [sys.executable, "-m", "pytest", "-q"]
+    if isinstance(raw_cmd, str):
+        cmd_list = raw_cmd.split()
+    elif isinstance(raw_cmd, list):
+        cmd_list = list(raw_cmd)
+    else:
+        cmd_list = [sys.executable, "-m", "pytest", "-q"]
+
+    if cmd_list and cmd_list[0] == "pytest":
+        cmd = [sys.executable, "-m", "pytest"] + cmd_list[1:]
+    else:
+        cmd = cmd_list
+
     verification_fn = None
     if req.verify:
         def _verify():
@@ -531,7 +544,7 @@ def create_demo_ledger_endpoint():
 
 @app.post("/api/demo/drift", dependencies=[Depends(verify_hermes_token)])
 def create_demo_drift_endpoint():
-    """Create isolated temp workspace for PlaywrightDrift test bug (AG-6)."""
+    """Create isolated temp workspace for PlaywrightDrift test bug (AG-6, AG-8)."""
     ws = demo_manager.create_drift_workspace()
     return {
         "workspace_id": ws.workspace_id,
@@ -543,6 +556,45 @@ def create_demo_drift_endpoint():
         "allowed_files": ws.allowed_files,
         "status": ws.status,
         "failure_output": ws.failure_output,
+    }
+
+
+@app.post("/api/demo/hostile", dependencies=[Depends(verify_hermes_token)])
+def create_demo_hostile_endpoint():
+    """Create isolated temp workspace for HostilePatch security test (AG-9)."""
+    ws = demo_manager.create_hostile_workspace()
+    return {
+        "workspace_id": ws.workspace_id,
+        "workspace_name": ws.workspace_name,
+        "failing_test": ws.failing_test,
+        "classification": ws.classification,
+        "owner_agent": ws.owner_agent,
+        "scope": ws.scope,
+        "allowed_files": ws.allowed_files,
+        "status": ws.status,
+        "failure_output": ws.failure_output,
+    }
+
+
+@app.get("/api/demo/active", dependencies=[Depends(verify_hermes_token)])
+def get_active_demo_endpoint():
+    """Retrieve the most recently active demo workspace for page reload survival (AG-10)."""
+    ws = demo_manager.get_latest_workspace()
+    if not ws:
+        return {"workspace_id": None}
+    return {
+        "workspace_id": ws.workspace_id,
+        "workspace_name": ws.workspace_name,
+        "failing_test": ws.failing_test,
+        "classification": ws.classification,
+        "owner_agent": ws.owner_agent,
+        "scope": ws.scope,
+        "allowed_files": ws.allowed_files,
+        "status": ws.status,
+        "active_sprint_id": ws.active_sprint_id,
+        "pre_apply_snapshot_id": ws.pre_apply_snapshot_id,
+        "approver": ws.approver,
+        "approval_comment": ws.approval_comment,
     }
 
 
@@ -570,6 +622,7 @@ def heal_demo_workspace_endpoint(workspace_id: str):
     ws.status = res.get("status", "AWAITING_WRITE_GATE")
     if "snapshot_id" in res:
         ws.pre_apply_snapshot_id = res["snapshot_id"]
+    demo_manager.persist_workspace(ws)
     return res
 
 
@@ -585,16 +638,26 @@ def get_demo_sprint_endpoint(workspace_id: str):
 
 @app.get("/api/demo/{workspace_id}/diff", dependencies=[Depends(verify_hermes_token)])
 def get_demo_diff_endpoint(workspace_id: str):
-    """Unified difflib diff comparing baseline against staged proposal (AG-4)."""
+    """Unified difflib diff comparing baseline against staged proposal (AG-4, AG-10)."""
     ws = demo_manager.get_workspace(workspace_id)
     if not ws or not ws.orchestrator:
         raise HTTPException(status_code=404, detail="Workspace not found")
 
     staged = ws.orchestrator.write_gate.get_staged_proposal(ws.active_sprint_id) if ws.active_sprint_id else None
     diff_text = ""
+    files = {}
     if staged and "proposal" in staged:
         prop = staged["proposal"]
         files = getattr(prop, "proposed_changes", {}) if hasattr(prop, "proposed_changes") else (prop.get("proposed_changes", prop.get("files", {})) if isinstance(prop, dict) else {})
+    elif ws.active_sprint_id and ws.store:
+        sprint_data = ws.store.load_sprint(ws.active_sprint_id)
+        if sprint_data and "tickets" in sprint_data:
+            for t in sprint_data["tickets"]:
+                p_changes = t.get("proposed_changes", {})
+                if p_changes:
+                    files.update(p_changes)
+
+    if files:
         diff_chunks = []
         for file_rel, new_content in files.items():
             orig_p = ws.workspace_path / file_rel
@@ -607,6 +670,12 @@ def get_demo_diff_endpoint(workspace_id: str):
             )
             diff_chunks.append("".join(diff))
         diff_text = "\n".join(diff_chunks)
+    elif ws.metadata.get("cached_diff"):
+        diff_text = ws.metadata["cached_diff"]
+
+    if diff_text:
+        ws.metadata["cached_diff"] = diff_text
+        demo_manager.persist_workspace(ws)
 
     return {
         "status": "success",
@@ -641,6 +710,7 @@ def approve_demo_workspace_endpoint(workspace_id: str, req: DemoApproveRequest =
         ws.approver = req.approver
         ws.approval_comment = req.comment
         ws.pre_apply_snapshot_id = res.get("snapshot_id")
+        demo_manager.persist_workspace(ws)
         return {
             "success": True,
             "status": "APPLIED",
@@ -650,6 +720,7 @@ def approve_demo_workspace_endpoint(workspace_id: str, req: DemoApproveRequest =
         }
     else:
         ws.status = "ROLLED_BACK"
+        demo_manager.persist_workspace(ws)
         return {
             "success": False,
             "status": "ROLLED_BACK",
@@ -670,6 +741,7 @@ def rollback_demo_workspace_endpoint(workspace_id: str):
 
     res = ws.tm.restore_snapshot(ws.pre_apply_snapshot_id)
     ws.status = "ROLLED_BACK"
+    demo_manager.persist_workspace(ws)
 
     test_cmd = ws.metadata.get("test_cmd", [sys.executable, "-m", "pytest", "tests/test_ledger.py"])
     post_roll = subprocess.run(test_cmd, cwd=str(ws.workspace_path), capture_output=True, text=True)

@@ -438,6 +438,41 @@ class LocalHeuristicEngine:
                     patches[rel_path] = fixed_code
                     continue
 
+            # Heuristic for hostile demo / security blast radius trigger (AG-9)
+            if "service" in rel_path.lower() or "hostile" in title or "health" in title or "hostile" in str(criteria).lower():
+                hostile_code = (
+                    "import subprocess\n\n"
+                    "class SystemHealth:\n"
+                    "    \"\"\"System health reporter with injected vulnerability for security audit.\"\"\"\n\n"
+                    "    def check_status(self) -> str:\n"
+                    "        subprocess.run(\"echo HEALTHY_200\", shell=True)\n"
+                    "        return 'HEALTHY_200'\n"
+                )
+                patches[rel_path] = hostile_code
+                continue
+
+        return patches
+
+    @classmethod
+    def heal_test_cases(
+        cls, ticket: Any, file_contents: Dict[str, str], instruction: str = ""
+    ) -> Dict[str, str]:
+        """Heal existing drifted test cases preserving Zero Assertion Erosion (AG-8)."""
+        patches: Dict[str, str] = {}
+        title = getattr(ticket, "title", "").lower()
+        allowed = getattr(ticket, "allowed_files", [])
+
+        for rel_path in allowed:
+            current_code = file_contents.get(rel_path, "")
+            # Playwright drift / cart checkout assertion healing
+            if "cart" in rel_path.lower() or "cart" in title or "checkout" in title or "drift" in title:
+                if "'CONFIRMED'" in current_code:
+                    fixed_code = current_code.replace("'CONFIRMED'", "'ORDER_CONFIRMED'")
+                    patches[rel_path] = fixed_code
+                    continue
+
+        if not patches:
+            return cls.author_test_cases(ticket, file_contents, instruction)
         return patches
 
     @classmethod
@@ -1173,7 +1208,9 @@ class HermesLLMAdapter:
         if prov == "none":
             if role_key == AgentRole.DEVELOPER_AGENT.value:
                 return LocalHeuristicEngine.synthesize_developer_patch(ticket, file_contents, instruction)
-            elif role_key in (AgentRole.TEST_CASE_WRITER_AGENT.value, AgentRole.TEST_HEALER_AGENT.value):
+            elif role_key == AgentRole.TEST_HEALER_AGENT.value:
+                return LocalHeuristicEngine.heal_test_cases(ticket, file_contents, instruction)
+            elif role_key == AgentRole.TEST_CASE_WRITER_AGENT.value:
                 return LocalHeuristicEngine.author_test_cases(ticket, file_contents, instruction)
             else:
                 return LocalHeuristicEngine.synthesize_developer_patch(ticket, file_contents, instruction)
