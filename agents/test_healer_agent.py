@@ -22,6 +22,8 @@ from core.time_machine.engine import TimeMachineEngine
 class TestHealerAgent:
     """Autonomous agent that investigates, heals, and verifies test failures with rollback safety."""
 
+    __test__ = False
+
     def __init__(
         self,
         workspace_path: Optional[str | Path] = None,
