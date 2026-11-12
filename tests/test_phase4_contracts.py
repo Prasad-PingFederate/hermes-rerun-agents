@@ -214,7 +214,7 @@ class TestPhase4Contracts(unittest.TestCase):
             self.assertIn(p, output, f"Provider '{p}' missing from hermes_cli.py providers output!")
 
     def test_git_grep_invariants_exit_zero_clean(self):
-        """Contracts 5 & 6: git grep 'propose_patch' in cli/demo and git grep 'gemini-1.5-flash' print nothing."""
+        """Contracts 5 & 6: git grep 'propose_patch' in cli/demo and git grep obsolete flash model print nothing."""
         # 1. propose_patch in hermes_cli.py and scripts/run_live_demo.py
         p1 = subprocess.run(
             ["git", "grep", "propose_patch", "--", "hermes_cli.py", "scripts/run_live_demo.py"],
@@ -225,14 +225,15 @@ class TestPhase4Contracts(unittest.TestCase):
         self.assertNotEqual(p1.returncode, 0, f"propose_patch found in cli or demo: {p1.stdout}")
         self.assertEqual(p1.stdout.strip(), "")
 
-        # 2. gemini-1.5-flash
+        # 2. obsolete gemini flash model literal
+        obsolete_model = "gemini" + "-1.5-" + "flash"
         p2 = subprocess.run(
-            ["git", "grep", "gemini-1.5-flash"],
+            ["git", "grep", obsolete_model],
             cwd=str(REPO_ROOT),
             capture_output=True,
             text=True,
         )
-        self.assertNotEqual(p2.returncode, 0, f"gemini-1.5-flash found in repo: {p2.stdout}")
+        self.assertNotEqual(p2.returncode, 0, f"{obsolete_model} found in repo: {p2.stdout}")
         self.assertEqual(p2.stdout.strip(), "")
 
 
