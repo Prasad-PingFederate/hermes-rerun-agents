@@ -14,6 +14,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from core.time_machine.patch_guard import analyze_proposed_changes as analyze_python_ast
+from core.verification.accessibility_locator_guard import AccessibilityLocatorGuard
+from core.verification.semantic_assertion_guard import SemanticAssertionGuard
 from security_blast_radius import SecurityBlastRadiusAgent
 from ts_playwright_ast_guard import PlaywrightASTGuard, analyze_ts_playwright_changes
 
@@ -85,6 +87,26 @@ class ASTPatchGuard:
                 valid = False
                 all_reasons.extend(sec_report.reasons)
 
+        # 4. Semantic Assertion Weakening Guard (AST v2 - Option 4)
+        semantic_report = SemanticAssertionGuard.evaluate_changes(
+            proposed_changes=proposed_changes,
+            workspace_root=workspace,
+        )
+        if not semantic_report.valid:
+            valid = False
+            tampering_detected = True
+            all_reasons.extend(semantic_report.reasons)
+
+        # 5. Accessibility-First Locator Guard (Playwright / Testing Library - Option 4)
+        locator_report = AccessibilityLocatorGuard.audit_changes(
+            proposed_changes=proposed_changes,
+            workspace_root=workspace,
+        )
+        if not locator_report.valid:
+            valid = False
+            tampering_detected = True
+            all_reasons.extend(locator_report.reasons)
+
         return {
             "valid": valid and len(all_reasons) == 0,
             "tampering_detected": tampering_detected,
@@ -95,4 +117,6 @@ class ASTPatchGuard:
                 "risk_level": sec_report.risk_level,
                 "findings": [f.to_dict() for f in sec_report.findings],
             },
+            "semantic_findings": [f.to_dict() for f in semantic_report.findings],
+            "locator_findings": [f.to_dict() for f in locator_report.findings],
         }

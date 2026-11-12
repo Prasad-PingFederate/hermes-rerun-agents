@@ -34,6 +34,7 @@ class QACriticReview:
     rejection_reasons: List[str]
     missing_coverage: List[str] = field(default_factory=list)
     edge_case_findings: List[str] = field(default_factory=list)
+    counterfactual_result: Optional[Dict[str, Any]] = None
 
 
 class QACriticAgent:
@@ -148,6 +149,7 @@ class QACriticAgent:
         proposed_changes: Dict[str, str],
         allow_test_modification: bool = False,
         workspace_path: Optional[Path | str] = None,
+        baseline_source_files: Optional[Dict[str, str]] = None,
     ) -> QACriticReview:
         """Perform strict rubric review on worker proposed changes."""
         verdicts: List[CriterionVerdict] = []
@@ -244,6 +246,41 @@ class QACriticAgent:
                 )
                 rejection_reasons.append(item)
 
+        # 4. Counterfactual Differential Verification (Option 4)
+        cf_payload: Optional[Dict[str, Any]] = None
+        base_src = baseline_source_files or (getattr(ticket, "metadata", {}) or {}).get("baseline_source_files")
+        if base_src and allow_test_modification:
+            from core.verification.counterfactual_verifier import CounterfactualVerifier
+            test_files = [f for f in proposed_changes if "test" in f.lower() or f.endswith((".py", ".ts", ".js"))]
+            for tf in test_files:
+                if tf in proposed_changes:
+                    cf_engine = CounterfactualVerifier(workspace_root=ws)
+                    cf_res = cf_engine.verify_differential(
+                        test_file=tf,
+                        healed_test_content=proposed_changes[tf],
+                        baseline_source_files=base_src,
+                    )
+                    cf_payload = cf_res.to_dict()
+                    if cf_res.is_vacuous:
+                        verdicts.append(
+                            CriterionVerdict(
+                                criterion=f"Counterfactual Verification: {tf}",
+                                status="FAIL",
+                                citations=[f"{tf}:1"],
+                                feedback=cf_res.summary,
+                            )
+                        )
+                        rejection_reasons.append(f"Vacuous test heal rejected: {cf_res.summary}")
+                    elif cf_res.verified:
+                        verdicts.append(
+                            CriterionVerdict(
+                                criterion=f"Counterfactual Verification: {tf}",
+                                status="PASS",
+                                citations=[f"{tf}:1"],
+                                feedback=cf_res.summary,
+                            )
+                        )
+
         # Approved only if EVERY verdict is PASS
         all_passed = len(rejection_reasons) == 0 and all(v.status == "PASS" for v in verdicts)
 
@@ -253,6 +290,7 @@ class QACriticAgent:
             rejection_reasons=rejection_reasons,
             missing_coverage=missing_coverage,
             edge_case_findings=error_paths,
+            counterfactual_result=cf_payload,
         )
 
 
