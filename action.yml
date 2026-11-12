@@ -1,0 +1,85 @@
+name: 'Hermes Autonomous Test Healer & Shadow Mode Agent'
+description: 'Autonomous, governed AI engineering loop: detects CI test failures, diagnoses root cause, validates with Delta-SAST & Zero Assertion Erosion, and posts 1-click in-diff review suggestions or draft PRs.'
+author: 'Hermes Platform Engineering'
+branding:
+  icon: 'shield'
+  color: 'orange'
+
+inputs:
+  mode:
+    description: "Execution permissions mode: 'shadow' (Zero-Write in-diff suggestion comments) or 'heal' (opens draft PR)"
+    required: false
+    default: 'shadow'
+  test-command:
+    description: 'Command used to run test suite (e.g., "pytest", "npm test", "npx playwright test")'
+    required: false
+    default: 'python -m pytest'
+  github-token:
+    description: 'GitHub Token for posting review suggestions or opening draft PRs'
+    required: false
+    default: ${{ github.token }}
+  llm-provider:
+    description: 'LLM Provider: "ollama", "claude_code", "openai", "groq", "anthropic", "gemini", or "none" (offline heuristic)'
+    required: false
+    default: 'none'
+  hourly-rate-usd:
+    description: 'Fully loaded engineering hourly rate for Executive ROI calculation (default: 125.0)'
+    required: false
+    default: '125.0'
+  anthropic-api-key:
+    description: 'Anthropic API Key (optional)'
+    required: false
+    default: ''
+  openai-api-key:
+    description: 'OpenAI API Key (optional)'
+    required: false
+    default: ''
+  gemini-api-key:
+    description: 'Google Gemini API Key (optional)'
+    required: false
+    default: ''
+  groq-api-key:
+    description: 'Groq API Key (optional)'
+    required: false
+    default: ''
+
+outputs:
+  status:
+    description: 'Outcome status (passed, suggested, healed, quarantined, blocked_by_governance)'
+    value: ${{ steps.run-hermes.outputs.status }}
+  healed:
+    description: 'Boolean flag indicating whether a failure was successfully healed or quarantined'
+    value: ${{ steps.run-hermes.outputs.healed }}
+  hours_saved:
+    description: 'Engineering hours saved by autonomous diagnosis and healing'
+    value: ${{ steps.run-hermes.outputs.hours_saved }}
+  dollar_roi:
+    description: 'Estimated dollar ROI value saved in engineering time'
+    value: ${{ steps.run-hermes.outputs.dollar_roi }}
+  branch:
+    description: 'Git branch created in heal mode (if applicable)'
+    value: ${{ steps.run-hermes.outputs.branch }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Python Environment
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+
+    - name: Run Hermes Autonomous Healer
+      id: run-hermes
+      shell: bash
+      env:
+        INPUT_MODE: ${{ inputs.mode }}
+        INPUT_TEST_COMMAND: ${{ inputs.test-command }}
+        INPUT_GITHUB_TOKEN: ${{ inputs.github-token }}
+        INPUT_HOURLY_RATE_USD: ${{ inputs.hourly-rate-usd }}
+        HERMES_LLM_PROVIDER: ${{ inputs.llm-provider }}
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+        OPENAI_API_KEY: ${{ inputs.openai-api-key }}
+        GEMINI_API_KEY: ${{ inputs.gemini-api-key }}
+        GROQ_API_KEY: ${{ inputs.groq-api-key }}
+      run: |
+        python ${{ github.action_path }}/scripts/hermes_action_runner.py

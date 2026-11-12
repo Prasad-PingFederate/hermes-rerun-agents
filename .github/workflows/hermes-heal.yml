@@ -1,0 +1,38 @@
+name: Hermes Autonomous Healer
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  hermes-shadow-heal:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Codebase
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 5  # Enables CIDetectiveAgent to extract commit intent
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Project Dependencies
+        run: |
+          pip install -r requirements.txt || true
+
+      - name: Run Hermes Autonomous Healer (Shadow Mode)
+        uses: Prasad-PingFederate/hermes-rerun-agents@feat/tester-console
+        with:
+          mode: 'shadow'  # Zero-Write: posts in-diff ```suggestion blocks in PR reviews
+          test-command: 'pytest tests/ -q'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          llm-provider: 'none'  # Uses deterministic zero-API-key engine (or configure 'ollama', 'anthropic', etc.)
+          hourly-rate-usd: '125.0'

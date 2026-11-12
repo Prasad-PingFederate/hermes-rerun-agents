@@ -359,6 +359,20 @@ class TestOption2ServerEndpoints(unittest.TestCase):
         self.assertIn("suggestion", pr_data)
         self.assertIn("Zero-Write Shadow Suggestion", pr_data["instructions"])
 
+    def test_hermes_action_runner_passing_test(self):
+        """Action runner exits 0 when tests pass cleanly without triggering heal DAG."""
+        import os
+        from unittest.mock import patch
+        import scripts.hermes_action_runner as runner
+
+        with patch.dict(os.environ, {
+            "INPUT_MODE": "shadow",
+            "INPUT_TEST_COMMAND": "python -c \"print('All passed')\"",
+            "INPUT_HOURLY_RATE_USD": "125.0",
+        }):
+            code = runner.main()
+            self.assertEqual(code, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -411,3 +411,4 @@ class ShadowSuggestionClient:
         with urllib.request.urlopen(post_issue_req, timeout=10) as resp:
             res = json.loads(resp.read().decode("utf-8"))
             return {"status": "created", "mode": "out_of_diff", "id": res.get("id"), "url": res.get("html_url")}
+

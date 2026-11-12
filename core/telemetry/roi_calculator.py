@@ -149,3 +149,4 @@ class ROITelemetryEngine:
 
 # Global singleton instance
 roi_telemetry_engine = ROITelemetryEngine()
+
