@@ -318,14 +318,18 @@ class SandboxExecutor:
             summary=summary,
         )
 
-    def classify_failure(self, runs: Union[List[ExecutionRun], str]) -> str:
+    def classify_failure(
+        self,
+        runs: Union[List[ExecutionRun], str],
+        intent_context: Optional[Dict[str, Any]] = None,
+    ) -> str:
         """Classify test execution outcome into clean categories:
         
         - PASSED: All runs passed.
         - FLAKY_TEST: Some runs passed, some failed.
         - ENVIRONMENT_NOISE: Failed due to network, port, missing dependencies, or OS env.
         - PRODUCT_BUG: Unhandled exceptions or failures originating in application/product code.
-        - TEST_BUG: Assertion failures in tests, test fixture errors, or obsolete tests.
+        - TEST_BUG: Assertion failures in tests, test fixture errors, or intentional contract drift.
         """
         if isinstance(runs, str):
             combined_output = runs
@@ -361,6 +365,30 @@ class SandboxExecutor:
             if re.search(pattern, combined_output, re.IGNORECASE):
                 if "AssertionError" not in combined_output:
                     return "ENVIRONMENT_NOISE"
+
+        # Check for intentional contract / API changes in commit/PR intent
+        assertion_mismatch_patterns = [
+            r"AssertionError",
+            r"assert .* == .*",
+            r"assert .*\.status_code\s*==\s*\d+",
+            r"expect\(.*\)\.to",
+            r"Expected: .*\nReceived:",
+            r"FAILED tests/.* - AssertionError",
+        ]
+        has_assertion_mismatch = any(re.search(pat, combined_output, re.IGNORECASE) for pat in assertion_mismatch_patterns)
+
+        unhandled_product_crash_patterns = [
+            r"AttributeError: '.*' object has no attribute",
+            r"KeyError: '.*'",
+            r"TypeError: .* missing \d+ required",
+            r"ZeroDivisionError",
+            r"IndexError: list index out of range",
+        ]
+        has_unhandled_crash = any(re.search(pat, combined_output) for pat in unhandled_product_crash_patterns)
+
+        if intent_context and intent_context.get("has_intentional_contract_change"):
+            if has_assertion_mismatch and not has_unhandled_crash:
+                return "TEST_BUG"
 
         # 2. Product Bug patterns (exceptions originating in application/product code)
         product_bug_patterns = [

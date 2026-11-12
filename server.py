@@ -302,12 +302,17 @@ async def github_actions_webhook(request: Request):
 
         if "/hermes approve" in comment_body:
             matching_ws = None
-            for ws in demo_manager._workspaces.values():
-                if ws.status == "AWAITING_WRITE_GATE" or ws.active_sprint_id:
+            for ws in reversed(list(demo_manager._workspaces.values())):
+                if ws.status == "AWAITING_WRITE_GATE" or (ws.orchestrator and getattr(ws.orchestrator.write_gate, "_staged", None)):
                     matching_ws = ws
                     break
-            if matching_ws and matching_ws.orchestrator and matching_ws.active_sprint_id:
-                matching_ws.orchestrator.write_gate.approve_proposal(matching_ws.active_sprint_id)
+            if not matching_ws and demo_manager._workspaces:
+                matching_ws = list(demo_manager._workspaces.values())[-1]
+
+            if matching_ws and matching_ws.orchestrator:
+                staged = getattr(matching_ws.orchestrator.write_gate, "_staged", {})
+                target_sprint = matching_ws.active_sprint_id or (next(iter(staged.keys())) if staged else "sprint_default")
+                matching_ws.orchestrator.write_gate.approve_proposal(target_sprint)
                 matching_ws.status = "APPLIED"
                 matching_ws.approver = f"github:{sender}"
                 demo_manager.persist_workspace(matching_ws)
@@ -321,10 +326,13 @@ async def github_actions_webhook(request: Request):
 
         elif "/hermes rewind" in comment_body:
             matching_ws = None
-            for ws in demo_manager._workspaces.values():
-                if ws.status in ("APPLIED", "AWAITING_WRITE_GATE"):
+            for ws in reversed(list(demo_manager._workspaces.values())):
+                if ws.status in ("APPLIED", "AWAITING_WRITE_GATE") or ws.pre_apply_snapshot_id:
                     matching_ws = ws
                     break
+            if not matching_ws and demo_manager._workspaces:
+                matching_ws = list(demo_manager._workspaces.values())[-1]
+
             if matching_ws and matching_ws.orchestrator:
                 if matching_ws.pre_apply_snapshot_id:
                     matching_ws.tm.revert_snapshot(matching_ws.pre_apply_snapshot_id)

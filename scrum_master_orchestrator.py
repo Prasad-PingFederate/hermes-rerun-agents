@@ -434,7 +434,9 @@ class ScrumMasterOrchestrator:
                         "tickets": [],
                     }
 
-            classification = self.sandbox.classify_failure(raw_output)
+            from agents.ci_detective import CIDetectiveAgent
+            intent_context = CIDetectiveAgent.extract_commit_and_pr_intent(workspace_path=self.workspace_path)
+            classification = self.sandbox.classify_failure(raw_output, intent_context=intent_context)
             if classification == "PASSED":
                 return {
                     "status": "PASSED",

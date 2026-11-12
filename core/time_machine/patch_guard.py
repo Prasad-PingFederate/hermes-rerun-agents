@@ -11,6 +11,8 @@ import difflib
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from ts_playwright_ast_guard import PlaywrightASTGuard
+
 
 def is_test_file(rel_path: str) -> bool:
     """Returns True if the file path represents a Python test file."""
@@ -140,6 +142,18 @@ def analyze_proposed_changes(
                 total_lines_added += 1
             elif line.startswith("-") and not line.startswith("---"):
                 total_lines_removed += 1
+
+        # TypeScript / JavaScript test tampering checks
+        if PlaywrightASTGuard.is_supported(rel_path):
+            ts_res = PlaywrightASTGuard.verify_spec_content(
+                rel_path=rel_path,
+                proposed_content=proposed_content,
+                existing_content=existing_content if existing_content else None,
+                allow_test_modification=allow_test_modification,
+            )
+            if not ts_res.valid:
+                tampering_detected = True
+                tampering_reasons.extend(ts_res.reasons)
 
         # Function modifications
         if rel_path.endswith(".py"):
