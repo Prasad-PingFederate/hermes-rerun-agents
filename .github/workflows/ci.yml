@@ -2,7 +2,7 @@ name: CI Suite
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, feat/tester-console, "feat/**" ]
   pull_request:
     branches: [ main ]
 
@@ -30,4 +30,20 @@ jobs:
       - name: Run Full Pytest Suite (Heuristic & Local Wire)
         run: |
           python -m pytest tests/ -q
+
+      - name: Install Playwright Browsers
+        run: |
+          python -m playwright install --with-deps chromium
+
+      - name: Run Hermes Tester Console Playwright E2E
+        run: |
+          python -m pytest console_tests/ -v
+
+      - name: Upload Console E2E Screenshots
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: console-e2e-screenshots
+          path: artifacts/screenshots/*.png
+          if-no-files-found: ignore
 

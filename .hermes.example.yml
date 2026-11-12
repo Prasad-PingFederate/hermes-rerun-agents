@@ -1,0 +1,92 @@
+# ==============================================================================
+# Hermes Enterprise Policy-as-Code & Governance Configuration (.hermes.yml)
+# Copy this file to .hermes.yml in your repository root to enforce security rules.
+# ==============================================================================
+
+version: 1
+
+# ------------------------------------------------------------------------------
+# 1. Security & Governance Boundaries
+# ------------------------------------------------------------------------------
+governance:
+  # No-Heal Zones: File patterns where AI agents are strictly forbidden from proposing code modifications.
+  # When any failure touches these zones, Hermes forces TRIAGE_ONLY mode and alerts the team.
+  no_heal_zones:
+    - "src/auth/**"
+    - "src/billing/**"
+    - "src/crypto/**"
+    - "**/auth/**"
+    - "**/billing/**"
+    - "**/security/**"
+
+  # Tiered Autonomy Mode Overrides:
+  # Enforces directory-specific autonomy levels (TRIAGE_ONLY > SHADOW_SUGGEST > HEAL).
+  mode_overrides:
+    "e2e/ui/**": "HEAL"                      # Allow autonomous heals on UI selector drift
+    "tests/unit/payments/**": "SHADOW_SUGGEST" # Restrict payment tests to 1-click review suggestions
+    "infra/**": "TRIAGE_ONLY"                # Infrastructure code is view-only
+
+  # Strict OIDC Mode (CISO / Compliance):
+  # When true, Hermes strictly forgoes static API keys (OPENAI_API_KEY, ANTHROPIC_API_KEY)
+  # and mandates ambient Workload Identity federation (AWS Bedrock, Azure OpenAI, Google Vertex).
+  require_oidc: false
+
+# ------------------------------------------------------------------------------
+# 2. FinOps Circuit Breakers & Spend Controls
+# ------------------------------------------------------------------------------
+finops:
+  # Maximum LLM tokens consumed per PR before tripping FINOPS_CIRCUIT_OPEN
+  max_tokens_per_pr: 50000
+
+  # Maximum estimated dollar spend permitted per pull request
+  max_usd_per_pr: 10.00
+
+  # Daily organizational budget cap across all parallel CI runs
+  max_usd_per_day: 50.00
+
+  # Maximum number of healing sprint loops permitted per CI run
+  max_heals_per_sprint: 5
+
+# ------------------------------------------------------------------------------
+# 3. Flake Lifecycle Hygiene & Auto-Unquarantine
+# ------------------------------------------------------------------------------
+hygiene:
+  # Consecutive green runs on attempt #1 required to auto-unquarantine a flaky test
+  unquarantine_streak: 50
+
+  # Maximum time-to-live (in days) for a quarantine retry wrapper before raising QUARANTINE_TTL_EXPIRED
+  flake_ttl_days: 14
+
+  # Default notification channel / owner tag for quarantined tests
+  default_owner: "@platform-devops"
+
+# ------------------------------------------------------------------------------
+# 4. Monorepo Scale & Cross-Shard Clustering
+# ------------------------------------------------------------------------------
+clustering:
+  # Collapse identical failures across matrix shards (e.g. shard 1/16...16/16)
+  enabled: true
+
+  # Strip volatile ports, memory addresses, timestamps, and PIDs from stack traces before hashing
+  strip_volatile_noise: true
+
+  # Whitelist of issue-tracker project prefixes for Context Hydration (e.g. PAY-123)
+  allowed_project_keys:
+    - "PAY"
+    - "AUTH"
+    - "CORE"
+    - "HERMES"
+
+# ------------------------------------------------------------------------------
+# 5. Tamper-Evident Audit & OpenTelemetry Exports
+# ------------------------------------------------------------------------------
+audit:
+  # Emit GitHub Code Scanning SARIF v2.1.0 report with SHA-256 cryptographic audit digest
+  sarif_export: true
+
+  # Export OpenTelemetry /v1/traces and /v1/metrics for Datadog, Grafana Cloud, or Splunk
+  otel_export: true
+
+  # OTLP/HTTP collector endpoint (defaults to env var OTEL_EXPORTER_OTLP_ENDPOINT)
+  # otel_endpoint: "https://otlp.datadoghq.com"
+

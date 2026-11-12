@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from context_slicer import ContextSlicer, PytestFixtureIndexer
+from core.governance.assertion_erosion_guard import ZeroAssertionErosionGuard
 from core.orchestrator.scrum_hierarchy import ModelTier, SubTaskTicket
 from sandbox_executor import ExecutionRun, MultiRunResult, SandboxExecutor
 from sprint_state_store import AttemptRecord
@@ -134,6 +135,15 @@ class TestHealerAgent:
             raise ValueError(f"Scope Gate: TestHealerAgent is strictly forbidden from modifying implementation files: {test_file_path}")
 
         if original_content:
+            report = ZeroAssertionErosionGuard.verify(
+                rel_path=test_file_path,
+                proposed_content=healed_content,
+                existing_content=original_content,
+                allow_test_modification=True,
+            )
+            if not report.valid:
+                raise ValueError(f"Zero Assertion Erosion: {'; '.join(report.reasons)}")
+
             orig_asserts = len(re.findall(r"\bassert\b", original_content))
             new_asserts = len(re.findall(r"\bassert\b", healed_content))
             if new_asserts < orig_asserts:
@@ -207,3 +217,7 @@ class RequirementsAgent:
             target_files=ticket.allowed_files,
             max_context_tokens=max_tokens,
         )
+
+
+# Export FlakeQuarantineAgent for worker hierarchy
+from core.quarantine.flake_quarantine_agent import FlakeQuarantineAgent

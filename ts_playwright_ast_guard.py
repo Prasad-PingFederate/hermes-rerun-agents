@@ -32,7 +32,7 @@ class TypeScriptGuardResult:
 class PlaywrightASTGuard:
     """Static analysis and integrity guard for TypeScript/JavaScript Playwright test specifications."""
 
-    # Prohibited skipped or focused test decorators
+    # Prohibited skipped, weakening, or focused test decorators
     PROHIBITED_TEST_PATTERNS = [
         (r"\btest\.skip\s*\(", "Prohibited test.skip() detected"),
         (r"\btest\.fixme\s*\(", "Prohibited test.fixme() detected"),
@@ -41,6 +41,12 @@ class PlaywrightASTGuard:
         (r"\bit\.only\s*\(", "Prohibited it.only() detected"),
         (r"\bdescribe\.skip\s*\(", "Prohibited describe.skip() detected"),
         (r"\bdescribe\.only\s*\(", "Prohibited describe.only() detected"),
+        (r"\bxit\s*\(", "Prohibited xit() skipped test detected"),
+        (r"\bxtest\s*\(", "Prohibited xtest() skipped test detected"),
+        (r"\bxdescribe\s*\(", "Prohibited xdescribe() skipped test suite detected"),
+        (r"\btest\.todo\s*\(", "Prohibited test.todo() placeholder test detected"),
+        (r"\bit\.todo\s*\(", "Prohibited it.todo() placeholder test detected"),
+        (r"\bpage\.pause\s*\(", "Prohibited page.pause() interactive breakpoint detected in CI test"),
     ]
 
     # Prohibited arbitrary timeout patterns
@@ -57,38 +63,49 @@ class PlaywrightASTGuard:
         (r"\bexpect\s*\(\s*1\s*\)\s*\.\s*toBe\s*\(\s*1\s*\)", "Tautological assertion expect(1).toBe(1) detected"),
         (r"\bexpect\s*\(\s*0\s*\)\s*\.\s*toBe\s*\(\s*0\s*\)", "Tautological assertion expect(0).toBe(0) detected"),
         (r"\bexpect\s*\(\s*['\"][^'\"]*['\"]\s*\)\s*\.\s*toBe\s*\(\s*['\"][^'\"]*['\"]\s*\)", "Tautological string identity assertion detected"),
+        (r"\bassert(?:\.equal|\.strictEqual)?\s*\(\s*1\s*,\s*1\s*\)", "Tautological assertion assert(1, 1) detected"),
+        (r"\bassert(?:\.equal|\.strictEqual)?\s*\(\s*true\s*,\s*true\s*\)", "Tautological assertion assert(true, true) detected"),
     ]
-
-    # Pattern to detect expect(...) assertions
-    EXPECT_PATTERN = re.compile(r"\bexpect\s*\([^;{}()]+\)", re.MULTILINE)
 
     @classmethod
     def is_supported(cls, file_path: str) -> bool:
-        """Return True if file path is a TypeScript/JavaScript test or spec file."""
+        """Return True if file path is a TypeScript/JavaScript Jest or Playwright test/spec file."""
         lower = file_path.lower().replace("\\", "/")
         return (
-            lower.endswith(".spec.ts")
-            or lower.endswith(".test.ts")
-            or lower.endswith(".spec.js")
-            or lower.endswith(".test.js")
-            or "/tests/" in lower and (lower.endswith(".ts") or lower.endswith(".js"))
+            lower.endswith((".spec.ts", ".test.ts", ".spec.js", ".test.js", ".spec.tsx", ".test.tsx", ".spec.jsx", ".test.jsx"))
+            or (("tests/" in lower or "test/" in lower or "__tests__/" in lower) and lower.endswith((".ts", ".js", ".tsx", ".jsx", ".mjs", ".cjs")))
         )
 
     @classmethod
     def strip_comments(cls, code: str) -> str:
-        """Strip block and line comments to avoid false positives on commented-out code."""
-        # Strip /* ... */
-        code_no_block = re.sub(r"/\*.*?\*/", "", code, flags=re.DOTALL)
-        # Strip // ...
-        code_clean = re.sub(r"//.*$", "", code_no_block, flags=re.MULTILINE)
-        return code_clean
+        """Strip block and line comments while preserving string literals and URLs."""
+        if not code:
+            return ""
+        # Match string literals (single, double, template) and comments (block, line)
+        pattern = re.compile(
+            r'("(?:\\.|[^"\\])*"'
+            r"|'(?:\\.|[^'\\])*'"
+            r'|`(?:\\.|[^`\\])*`'
+            r'|/\*[\s\S]*?\*/'
+            r'|//[^\r\n]*)'
+        )
+
+        def replacer(match: re.Match) -> str:
+            s = match.group(0)
+            if s.startswith("/*") or s.startswith("//"):
+                return " "
+            return s
+
+        return pattern.sub(replacer, code)
 
     @classmethod
     def count_assertions(cls, code: str) -> int:
-        """Count legitimate expect(...) assertions in code."""
+        """Count legitimate expect(...) and assert(...) assertions in code, stripping comments first."""
         clean = cls.strip_comments(code)
-        matches = re.findall(r"\bexpect\s*\(", clean)
-        return len(matches)
+        expect_matches = re.findall(r"\bexpect\s*\(", clean)
+        assert_matches = re.findall(r"\bassert(?:\.[a-zA-Z0-9_]+)?\s*\(", clean)
+        should_matches = re.findall(r"\.should\s*\(", clean)
+        return len(expect_matches) + len(assert_matches) + len(should_matches)
 
     @classmethod
     def verify_spec_content(
@@ -103,16 +120,20 @@ class PlaywrightASTGuard:
         warnings: List[str] = []
 
         clean_proposed = cls.strip_comments(proposed_content)
+        clean_existing = cls.strip_comments(existing_content) if existing_content else ""
 
-        # 1. Check prohibited test skip/fixme/only
+        # 1. Check prohibited test skip/fixme/only/todo/pause
         for pattern, msg in cls.PROHIBITED_TEST_PATTERNS:
             if re.search(pattern, clean_proposed):
-                reasons.append(f"{rel_path}: {msg}")
+                # If newly added relative to existing content
+                if not re.search(pattern, clean_existing):
+                    reasons.append(f"{rel_path}: {msg}")
 
         # 2. Check prohibited page.waitForTimeout(>0)
         for pattern, msg in cls.PROHIBITED_TIMEOUT_PATTERNS:
             if re.search(pattern, clean_proposed):
-                reasons.append(f"{rel_path}: {msg}")
+                if not re.search(pattern, clean_existing):
+                    reasons.append(f"{rel_path}: {msg}")
 
         # 3. Check tautological assertions
         for pattern, msg in cls.TAUTOLOGICAL_ASSERTIONS:
@@ -124,7 +145,8 @@ class PlaywrightASTGuard:
         proposed_expects = cls.count_assertions(proposed_content)
         delta = proposed_expects - existing_expects
 
-        if existing_content and not allow_test_modification:
+        if existing_content:
+            # Enforce non-decreasing assertion count
             if proposed_expects < existing_expects:
                 reasons.append(
                     f"{rel_path}: Zero Assertion Erosion violated: expect count reduced from "

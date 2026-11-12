@@ -21,6 +21,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+from core.healer.ast_surgical_patcher import ASTSurgicalPatcher
 from core.orchestrator.scrum_hierarchy import ModelTier
 
 
@@ -33,6 +34,7 @@ class AgentRole(str, Enum):
     TEST_HEALER_AGENT = "TestHealerAgent"
     QA_CRITIC_AGENT = "QACriticAgent"
     SECURITY_BLAST_RADIUS_AGENT = "SecurityBlastRadiusAgent"
+    FLAKE_QUARANTINE_AGENT = "FlakeQuarantineAgent"
 
 
 @dataclass
@@ -273,12 +275,38 @@ AGENT_SKILL_REGISTRY: Dict[str, AgentSkillDefinition] = {
     ),
 }
 
+FLAKE_QUARANTINE_SKILL_DEF = AgentSkillDefinition(
+    role_name="FlakeQuarantineAgent",
+    tier=ModelTier.TIER_2_SENIOR_SWE.value,
+    escalation_path="TIER_2 -> TIER_1",
+    role_description=(
+        "Stabilizes non-deterministic and flaky tests by injecting retry policies "
+        "(@pytest.mark.flaky, test.describe.configure, jest.retryTimes) while strictly "
+        "preserving all test assertions and modifying zero product code."
+    ),
+    skills=[
+        "Non-Erosive Retry Quarantine Injection (Pytest, Playwright, Jest)",
+        "Flake Diagnostic Root Cause Profiling (FlakeDiagnosticEvidence)",
+        "Zero Assertion Erosion Enforcement",
+    ],
+    owned_modules=[
+        "core/quarantine/flake_quarantine_agent.py",
+    ],
+    strict_boundaries=[
+        "Never modifies product/application code.",
+        "Never skips or deletes test assertions.",
+        "Never introduces .skip or xfail modifiers.",
+    ],
+)
+
 
 def get_agent_skill_definition(agent_role: Union[str, AgentRole]) -> AgentSkillDefinition:
     """Retrieve skill definition for specified agent role."""
     key = agent_role.value if isinstance(agent_role, AgentRole) else str(agent_role)
     if key in AGENT_SKILL_REGISTRY:
         return AGENT_SKILL_REGISTRY[key]
+    if key in ("FlakeQuarantineAgent", getattr(AgentRole, "FLAKE_QUARANTINE_AGENT", None)):
+        return FLAKE_QUARANTINE_SKILL_DEF
     # Fallback default definition
     return AgentSkillDefinition(
         role_name=key,
@@ -379,7 +407,7 @@ class LocalHeuristicEngine:
 
             # Heuristic for Ledger demo / ledger repairs
             if "ledger" in rel_path.lower() or "ledger" in title:
-                fixed_code = (
+                full_ledger = (
                     "class InMemoryLedger:\n"
                     "    \"\"\"Thread-safe, validated in-memory financial ledger.\"\"\"\n\n"
                     "    def __init__(self, initial_balance: float = 0.0):\n"
@@ -394,7 +422,8 @@ class LocalHeuristicEngine:
                     "        if amount <= 0:\n"
                     "            raise ValueError(\"Deposit amount must be strictly positive\")\n"
                     "        self._balance += amount\n"
-                    "        self._transactions.append(amount)\n"
+                    "        if hasattr(self, \"_transactions\"):\n"
+                    "            self._transactions.append(amount)\n"
                     "        return self._balance\n\n"
                     "    def withdraw(self, amount: float) -> float:\n"
                     "        if amount <= 0:\n"
@@ -402,11 +431,43 @@ class LocalHeuristicEngine:
                     "        if amount > self._balance:\n"
                     "            raise ValueError(\"Insufficient funds\")\n"
                     "        self._balance -= amount\n"
-                    "        self._transactions.append(-amount)\n"
+                    "        if hasattr(self, \"_transactions\"):\n"
+                    "            self._transactions.append(-amount)\n"
                     "        return self._balance\n"
                 )
-                patches[rel_path] = fixed_code
-                continue
+                span = ASTSurgicalPatcher.locate_function_span(current_code, function_name="deposit") if current_code else None
+                if span:
+                    deposit_patch = (
+                        "def deposit(self, amount: float) -> float:\n"
+                        "    if amount <= 0:\n"
+                        "        raise ValueError(\"Deposit amount must be strictly positive\")\n"
+                        "    self._balance += amount\n"
+                        "    if hasattr(self, \"_transactions\"):\n"
+                        "        self._transactions.append(amount)\n"
+                        "    return self._balance\n"
+                    )
+                    patches[rel_path] = ASTSurgicalPatcher.splice_function_patch(current_code, span, deposit_patch)
+                    continue
+                else:
+                    patches[rel_path] = full_ledger
+                    continue
+
+            # Traceback-driven function surgery
+            tb_loc = ASTSurgicalPatcher.parse_traceback_location(instruction or getattr(ticket, "description", ""))
+            if tb_loc and tb_loc.get("function"):
+                func_name = tb_loc["function"]
+                span = ASTSurgicalPatcher.locate_function_span(current_code, function_name=func_name, line_number=tb_loc.get("line"))
+                if span:
+                    func_body = span.original_text
+                    if "raise" not in func_body and "return" in func_body:
+                        # Add defensive guard
+                        guard = "    if amount <= 0:\n        raise ValueError('Invalid argument')\n"
+                        rep = span.original_text.replace("):", f"):\n{guard}")
+                        try:
+                            patches[rel_path] = ASTSurgicalPatcher.splice_function_patch(current_code, span, rep)
+                            continue
+                        except Exception:
+                            pass
 
             # Heuristic for calculator / math repairs
             if "add" in title or "add" in str(criteria).lower():
@@ -438,6 +499,41 @@ class LocalHeuristicEngine:
                     patches[rel_path] = fixed_code
                     continue
 
+            # Heuristic for hostile demo / security blast radius trigger (AG-9)
+            if "service" in rel_path.lower() or "hostile" in title or "health" in title or "hostile" in str(criteria).lower():
+                hostile_code = (
+                    "import subprocess\n\n"
+                    "class SystemHealth:\n"
+                    "    \"\"\"System health reporter with injected vulnerability for security audit.\"\"\"\n\n"
+                    "    def check_status(self) -> str:\n"
+                    "        subprocess.run(\"echo HEALTHY_200\", shell=True)\n"
+                    "        return 'HEALTHY_200'\n"
+                )
+                patches[rel_path] = hostile_code
+                continue
+
+        return patches
+
+    @classmethod
+    def heal_test_cases(
+        cls, ticket: Any, file_contents: Dict[str, str], instruction: str = ""
+    ) -> Dict[str, str]:
+        """Heal existing drifted test cases preserving Zero Assertion Erosion (AG-8)."""
+        patches: Dict[str, str] = {}
+        title = getattr(ticket, "title", "").lower()
+        allowed = getattr(ticket, "allowed_files", [])
+
+        for rel_path in allowed:
+            current_code = file_contents.get(rel_path, "")
+            # Playwright drift / cart checkout assertion healing
+            if "cart" in rel_path.lower() or "cart" in title or "checkout" in title or "drift" in title:
+                if "'CONFIRMED'" in current_code:
+                    fixed_code = current_code.replace("'CONFIRMED'", "'ORDER_CONFIRMED'")
+                    patches[rel_path] = fixed_code
+                    continue
+
+        if not patches:
+            return cls.author_test_cases(ticket, file_contents, instruction)
         return patches
 
     @classmethod
@@ -1173,8 +1269,18 @@ class HermesLLMAdapter:
         if prov == "none":
             if role_key == AgentRole.DEVELOPER_AGENT.value:
                 return LocalHeuristicEngine.synthesize_developer_patch(ticket, file_contents, instruction)
-            elif role_key in (AgentRole.TEST_CASE_WRITER_AGENT.value, AgentRole.TEST_HEALER_AGENT.value):
+            elif role_key == AgentRole.TEST_HEALER_AGENT.value:
+                return LocalHeuristicEngine.heal_test_cases(ticket, file_contents, instruction)
+            elif role_key == AgentRole.TEST_CASE_WRITER_AGENT.value:
                 return LocalHeuristicEngine.author_test_cases(ticket, file_contents, instruction)
+            elif role_key == AgentRole.FLAKE_QUARANTINE_AGENT.value:
+                from core.quarantine.flake_quarantine_agent import FlakeQuarantineAgent
+                q_agent = FlakeQuarantineAgent(self.workspace_path)
+                res: Dict[str, str] = {}
+                for f in getattr(ticket, "allowed_files", []):
+                    curr = file_contents.get(f, "")
+                    res[f] = q_agent.quarantine_code(f, curr)
+                return res
             else:
                 return LocalHeuristicEngine.synthesize_developer_patch(ticket, file_contents, instruction)
 

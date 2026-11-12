@@ -11,6 +11,10 @@ from core.context.active_context_pruner import (
     prune_logs,
     prune_traceback,
 )
+from core.context.ticket_hydrator import (
+    HydratedTicketContext,
+    TicketContextHydrator,
+)
 
 __all__ = [
     "BillionContextManager",
@@ -19,5 +23,7 @@ __all__ = [
     "prune_dom",
     "prune_logs",
     "prune_traceback",
+    "TicketContextHydrator",
+    "HydratedTicketContext",
 ]
 
