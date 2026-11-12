@@ -2,9 +2,9 @@
 
 [![CI Suite](https://github.com/Prasad-PingFederate/hermes-rerun-agents/actions/workflows/ci.yml/badge.svg)](https://github.com/Prasad-PingFederate/hermes-rerun-agents/actions/workflows/ci.yml)
 [![Hermes Healer](https://github.com/Prasad-PingFederate/hermes-rerun-agents/actions/workflows/hermes-heal.yml/badge.svg)](https://github.com/Prasad-PingFederate/hermes-rerun-agents/actions/workflows/hermes-heal.yml)
-[![Tests](https://img.shields.io/badge/unit%20tests-174%20passed%20(100%25)-brightgreen.svg)](https://github.com/Prasad-PingFederate/hermes-rerun-agents/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/badge/unit%20tests-187%20passed%20(100%25)-brightgreen.svg)](https://github.com/Prasad-PingFederate/hermes-rerun-agents/actions/workflows/ci.yml)
 [![Playwright E2E](https://img.shields.io/badge/console%20e2e-7%20passed%20(100%25)-brightgreen.svg)](https://github.com/Prasad-PingFederate/hermes-rerun-agents/actions/workflows/ci.yml)
-[![Syntax Guard](https://img.shields.io/badge/syntax%20guard-91%2F91%20Python%203.10%20passed-success.svg)](scripts/syntax_guard.py)
+[![Syntax Guard](https://img.shields.io/badge/syntax%20guard-98%2F98%20Python%203.10%20passed-success.svg)](scripts/syntax_guard.py)
 [![Governance](https://img.shields.io/badge/governance-Zero%20Assertion%20Erosion-orange.svg)](#-deterministic-5-stage-verification--healing-pipeline)
 [![Security](https://img.shields.io/badge/security-Deterministic%20Delta--SAST-blue.svg)](docs/SECURITY_ARCHITECTURE.md)
 [![GitHub Action](https://img.shields.io/badge/GitHub%20Action-60s%20Install-purple.svg)](#-60-second-install-with-github-actions)
@@ -47,12 +47,13 @@ jobs:
       - name: Install Dependencies
         run: pip install -r requirements.txt
 
-      - name: Run Hermes Healer (Shadow Mode)
+      - name: Run Hermes Healer (Post-Run Artifact Mode — Zero Rerun)
         id: hermes
+        if: failure()
         uses: Prasad-PingFederate/hermes-rerun-agents@v1
         with:
           mode: 'shadow'  # Zero-Write: posts 1-click ```suggestion blocks in PR review
-          test-command: 'pytest tests/ -q'
+          artifact-path: '**/junit*.xml, **/ctrf*.json, **/trace.zip'  # Ingests Pytest, Jest, Playwright traces
           github-token: ${{ secrets.GITHUB_TOKEN }}
           hourly-rate-usd: '125.0'
 
@@ -62,6 +63,8 @@ jobs:
         with:
           sarif_file: ${{ steps.hermes.outputs.sarif-file }}
 ```
+
+> **Zero Reruns & Language Agnostic:** At the end of your test job (`if: failure()`), point `artifact-path` at your existing test reports (**JUnit XML**, **CTRF JSON**, or **Playwright `trace.zip`**). Hermes ingests failures across Python, TypeScript/Node, Java, C#, Go, and Playwright without re-executing your test suite or duplicating dependencies.
 
 ---
 
@@ -211,11 +214,11 @@ Every commit to Hermes is validated against strict verification gates:
 ```bash
 # 1. Syntax Guard: 100% Python 3.10 syntax compatibility
 python scripts/syntax_guard.py
-# Output: ✅ [SYNTAX GUARD PASSED] All 91 files are 100% Python 3.10 compatible.
+# Output: ✅ [SYNTAX GUARD PASSED] All 98 files are 100% Python 3.10 compatible.
 
-# 2. Complete Unit Test Suite (174 tests)
+# 2. Complete Unit Test Suite (187 tests)
 python -m pytest tests/ -q
-# Output: 174 passed in 2m 43s
+# Output: 187 passed
 
 # 3. Playwright Console E2E Suite (7 specifications)
 python -m pytest console_tests/ -v

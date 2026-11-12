@@ -23,6 +23,10 @@ inputs:
     description: 'Command used to run test suite (e.g., "pytest", "npm test", "npx playwright test")'
     required: false
     default: 'python -m pytest'
+  artifact-path:
+    description: 'Glob pattern or file path to post-run test artifacts (e.g., "**/junit*.xml", "**/ctrf*.json", "**/trace.zip"). When provided, test-command execution is skipped.'
+    required: false
+    default: ''
   github-token:
     description: 'GitHub Token for posting review suggestions or opening draft PRs'
     required: false
@@ -109,6 +113,7 @@ runs:
       env:
         INPUT_MODE: ${{ inputs.mode }}
         INPUT_TEST_COMMAND: ${{ inputs.test-command }}
+        INPUT_ARTIFACT_PATH: ${{ inputs.artifact-path }}
         INPUT_GITHUB_TOKEN: ${{ inputs.github-token }}
         INPUT_HOURLY_RATE_USD: ${{ inputs.hourly-rate-usd }}
         HERMES_LLM_PROVIDER: ${{ inputs.llm-provider }}

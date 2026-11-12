@@ -56,37 +56,82 @@ def main() -> int:
     workspace_path = Path.cwd()
     mode = os.environ.get("INPUT_MODE", "shadow").lower().strip()
     test_cmd_raw = os.environ.get("INPUT_TEST_COMMAND", "python -m pytest").strip()
+    artifact_path_raw = os.environ.get("INPUT_ARTIFACT_PATH", "").strip()
+
+    # CLI arg overrides if passed directly
+    for i, arg in enumerate(sys.argv):
+        if arg in ("--mode", "-m") and i + 1 < len(sys.argv):
+            mode = sys.argv[i + 1].lower().strip()
+        elif arg in ("--test-command", "-t") and i + 1 < len(sys.argv):
+            test_cmd_raw = sys.argv[i + 1].strip()
+        elif arg in ("--artifact-path", "-a") and i + 1 < len(sys.argv):
+            artifact_path_raw = sys.argv[i + 1].strip()
+
     github_token = os.environ.get("INPUT_GITHUB_TOKEN") or os.environ.get("GITHUB_TOKEN", "")
     hourly_rate = float(os.environ.get("INPUT_HOURLY_RATE_USD", "125.0"))
     roi_telemetry_engine.update_config(hourly_rate_usd=hourly_rate)
 
     print(f"🚀 Hermes Autonomous Agent Runner initialized in mode: {mode.upper()}")
     print(f"📁 Workspace: {workspace_path}")
-    print(f"🧪 Test Command: {test_cmd_raw}")
 
-    # 1. Execute test suite
-    test_args = test_cmd_raw.split()
-    print("▶️ Executing test command...")
-    test_proc = subprocess.run(test_args, cwd=str(workspace_path), capture_output=True, text=True)
+    combined_output = ""
+    deterministic_override: Optional[str] = None
 
-    if test_proc.returncode == 0:
-        print("✅ [TESTS PASSED] All tests passed cleanly. Zero action or intervention required.")
-        set_action_output("status", "passed")
-        set_action_output("healed", "false")
-        set_action_output("hours_saved", "0.0")
-        set_action_output("dollar_roi", "0.0")
-        return 0
+    # 1. Option A: Decoupled Post-Run Artifact Ingestion (Zero Rerun)
+    if artifact_path_raw:
+        print(f"📦 [ARTIFACT MODE] Ingesting test artifacts: {artifact_path_raw}")
+        from core.ingest.artifact_loader import ArtifactLoader
+        failures = ArtifactLoader.load_artifacts(artifact_path_raw, workspace_root=workspace_path)
 
-    combined_output = f"{test_proc.stdout}\n{test_proc.stderr}".strip()
-    print(f"❌ [TEST FAILURE DETECTED] Exit code: {test_proc.returncode}")
+        if not failures:
+            print("✅ [ARTIFACTS CLEAN] Zero failures detected in test artifacts. CI run passed cleanly.")
+            set_action_output("status", "passed")
+            set_action_output("verdict", "PASSED")
+            set_action_output("healed", "false")
+            set_action_output("hours_saved", "0.0")
+            set_action_output("dollar_roi", "0.0")
+            return 0
+
+        print(f"❌ [FAILURES INGESTED] Found {len(failures)} failing test(s) across artifacts.")
+        trace_blocks = []
+        for f in failures:
+            if f.deterministic_verdict and not deterministic_override:
+                deterministic_override = f.deterministic_verdict
+                print(f"⚡ [DETERMINISTIC FORENSIC OVERRIDE] {f.test_node_id} -> {deterministic_override}")
+            trace_blocks.append(f"FAILED: {f.test_node_id}\n{f.error_message}\n{f.stack_trace}")
+
+        combined_output = "\n\n".join(trace_blocks).strip()
+
+    # 1. Option B: Runner-Coupled Test Execution
+    else:
+        print(f"🧪 [RUNNER MODE] Test Command: {test_cmd_raw}")
+        test_args = test_cmd_raw.split()
+        print("▶️ Executing test command...")
+        test_proc = subprocess.run(test_args, cwd=str(workspace_path), capture_output=True, text=True)
+
+        if test_proc.returncode == 0:
+            print("✅ [TESTS PASSED] All tests passed cleanly. Zero action or intervention required.")
+            set_action_output("status", "passed")
+            set_action_output("verdict", "PASSED")
+            set_action_output("healed", "false")
+            set_action_output("hours_saved", "0.0")
+            set_action_output("dollar_roi", "0.0")
+            return 0
+
+        combined_output = f"{test_proc.stdout}\n{test_proc.stderr}".strip()
+        print(f"❌ [TEST FAILURE DETECTED] Exit code: {test_proc.returncode}")
 
     # 2. Extract commit / PR intent & classify failure
     print("🔍 Ingesting failure logs and extracting commit/PR intent...")
-    intent_context = CIDetectiveAgent.extract_commit_and_pr_intent(workspace_path=workspace_path)
-    classification = CIDetectiveAgent.classify_failure_with_intent(
-        combined_output=combined_output, intent_context=intent_context
-    )
-    print(f"🎯 [FAILURE CLASSIFICATION] {classification}")
+    if deterministic_override:
+        classification = deterministic_override
+        print(f"🎯 [FORENSIC CLASSIFICATION] {classification}")
+    else:
+        intent_context = CIDetectiveAgent.extract_commit_and_pr_intent(workspace_path=workspace_path)
+        classification = CIDetectiveAgent.classify_failure_with_intent(
+            combined_output=combined_output, intent_context=intent_context
+        )
+        print(f"🎯 [FAILURE CLASSIFICATION] {classification}")
 
     if classification == "ENVIRONMENT_NOISE":
         print("⚠️ [ENVIRONMENT NOISE] Failure caused by network/port/missing dependency. Skipping heal.")
