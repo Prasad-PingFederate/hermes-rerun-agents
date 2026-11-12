@@ -25,6 +25,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
 from agents.ci_detective import CIDetectiveAgent
+from core.audit.delta_sast import PatchGuard
 from core.audit.otel_exporter import OTLPExporter
 from core.audit.sarif_exporter import SARIFExporter
 from core.audit.tricorder_feedback import GatingAction, TricorderGate
@@ -167,6 +168,30 @@ def main() -> int:
         return 0
 
     target_file, rep_code = next(iter(proposed_changes.items()))
+
+    # 3b. Phase 3: Delta-SAST & Zero Assertion Erosion Pre-Publication Gate
+    original_content = ""
+    target_path_check = workspace_path / target_file
+    if target_path_check.exists():
+        try:
+            original_content = target_path_check.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+    patch_verdict = PatchGuard.verify(
+        original_code=original_content,
+        proposed_code=rep_code,
+        target_file=target_file,
+        failure_category=classification,
+    )
+    set_action_output("patch_guard_status", patch_verdict.status)
+
+    if not patch_verdict.passed:
+        print(f"⛔ [PATCHGUARD BLOCKED] {patch_verdict.status}: {len(patch_verdict.violations)} violation(s)")
+        for v in patch_verdict.violations:
+            print(f"   - [{v.rule_id}] {v.message}")
+        # Replace executable suggestion with sanitized diagnostic-only message
+        rep_code = patch_verdict.sanitized_suggestion or rep_code
 
     # Read PR context if running inside GitHub Actions event
     gh_event_path = os.environ.get("GITHUB_EVENT_PATH")
