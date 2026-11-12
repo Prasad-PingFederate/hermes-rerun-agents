@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
   pull-requests: write
   id-token: write
   security-events: write
@@ -27,7 +27,7 @@ jobs:
 
       - name: Install Project Dependencies
         run: |
-          pip install -r requirements.txt || true
+          pip install -r requirements.txt
 
       - name: Run Hermes Autonomous Healer (Shadow Mode)
         id: hermes

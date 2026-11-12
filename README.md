@@ -1,10 +1,12 @@
 # 🤖 Hermes: Autonomous Software Engineering & Governed Self-Healing Platform
 
-[![Tests](https://img.shields.io/badge/unit%20tests-174%20passed%20(100%25)-brightgreen.svg)]()
-[![Playwright E2E](https://img.shields.io/badge/console%20e2e-7%20passed%20(100%25)-brightgreen.svg)]()
-[![Syntax Guard](https://img.shields.io/badge/syntax%20guard-91%2F91%20Python%203.10%20passed-success.svg)]()
-[![Governance](https://img.shields.io/badge/governance-Zero%20Assertion%20Erosion-orange.svg)]()
-[![Security](https://img.shields.io/badge/security-Deterministic%20Delta--SAST-blue.svg)]()
+[![CI Suite](https://github.com/Prasad-PingFederate/hermes-rerun-agents/actions/workflows/ci.yml/badge.svg)](https://github.com/Prasad-PingFederate/hermes-rerun-agents/actions/workflows/ci.yml)
+[![Hermes Healer](https://github.com/Prasad-PingFederate/hermes-rerun-agents/actions/workflows/hermes-heal.yml/badge.svg)](https://github.com/Prasad-PingFederate/hermes-rerun-agents/actions/workflows/hermes-heal.yml)
+[![Tests](https://img.shields.io/badge/unit%20tests-174%20passed%20(100%25)-brightgreen.svg)](https://github.com/Prasad-PingFederate/hermes-rerun-agents/actions/workflows/ci.yml)
+[![Playwright E2E](https://img.shields.io/badge/console%20e2e-7%20passed%20(100%25)-brightgreen.svg)](https://github.com/Prasad-PingFederate/hermes-rerun-agents/actions/workflows/ci.yml)
+[![Syntax Guard](https://img.shields.io/badge/syntax%20guard-91%2F91%20Python%203.10%20passed-success.svg)](scripts/syntax_guard.py)
+[![Governance](https://img.shields.io/badge/governance-Zero%20Assertion%20Erosion-orange.svg)](#-deterministic-5-stage-verification--healing-pipeline)
+[![Security](https://img.shields.io/badge/security-Deterministic%20Delta--SAST-blue.svg)](docs/SECURITY_ARCHITECTURE.md)
 [![GitHub Action](https://img.shields.io/badge/GitHub%20Action-60s%20Install-purple.svg)](#-60-second-install-with-github-actions)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
@@ -26,9 +28,9 @@ on:
 permissions:
   contents: read               # Zero-Write in default Shadow Mode
   pull-requests: write         # Required for shadow mode in-diff suggestions
+  security-events: write       # Required for GitHub Code Scanning SARIF upload
   # contents: write            # Optional: Required only for 'heal' mode (opening draft PR branches)
   # id-token: write            # Optional: Required for Option 5 Cloud OIDC Workload Identity
-  # security-events: write     # Optional: Required for GitHub Code Scanning SARIF upload
 
 jobs:
   hermes:
@@ -65,7 +67,7 @@ jobs:
 
 ## 🥊 Why Enterprise Teams Choose Hermes
 
-| Dimension | Naive LLM Coding Bots | Copilot Workspace / Standard CI | Hermes Autonomous Scrum Engine |
+| Dimension | Naive LLM Coding Bots | Copilot Workspace / Standard CI | Hermes Governed CI Engine |
 | :--- | :--- | :--- | :--- |
 | **False-Green Prevention** | ❌ Healed tests pass unconditionally via vacuous assertions (`assert True`) | ❌ No verification against broken code | ✅ **Counterfactual Differential Verification**: Proves test passes on PR HEAD and **fails** against broken base code |
 | **Assertion Specificity** | ❌ Dilutes exact matchers (`toBe(200)` $\to$ `toBeTruthy()`, broad `except Exception`) | ❌ Manual code review required | ✅ **Semantic Assertion Guard (AST v2)**: Scores specificity, blocks value dilution, broad catches & timeout masking |
