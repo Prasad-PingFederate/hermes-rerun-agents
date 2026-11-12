@@ -13,6 +13,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set
 
+from core.context.active_context_pruner import BillionContextManager
 from core.time_machine.engine import TimeMachineEngine
 from core.time_machine.patch_guard import analyze_proposed_changes
 
@@ -95,6 +96,23 @@ class ScrumMasterOrchestrator:
     ):
         self.workspace_path = Path(workspace_path or Path.cwd()).resolve()
         self.tm = tm_engine or TimeMachineEngine(self.workspace_path)
+        self.context_manager = BillionContextManager()
+
+    def get_compacted_ticket_context(self, ticket: SubTaskTicket) -> str:
+        """Returns a token-optimized context summary for workers using Active Context Pruning."""
+        parts = [
+            f"### Ticket {ticket.ticket_id}: {ticket.title}",
+            f"Complexity: {ticket.complexity}/5 | Assigned Tier: {ticket.assigned_tier}",
+            f"Allowed Files: {', '.join(ticket.allowed_files)}",
+        ]
+        if ticket.acceptance_criteria:
+            parts.append("Acceptance Criteria:\n" + "\n".join(f"- {c}" for c in ticket.acceptance_criteria))
+        if ticket.attempt_history:
+            parts.append("Previous Attempt Rejection Reasons (ACP Compacted):")
+            for att in ticket.attempt_history:
+                if att.get("rejection_reason"):
+                    parts.append(f"- Tier {att['tier']} rejected: {att['rejection_reason'][:200]}")
+        return "\n\n".join(parts)
 
     def create_sprint_plan(self, failure_context: Dict[str, Any]) -> Dict[str, Any]:
         """Acts as the Tier-1 Tech Lead / Scrum Master:

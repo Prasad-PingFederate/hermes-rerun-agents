@@ -27,6 +27,13 @@ if str(REPO_ROOT) not in sys.path:
 from agents.breakglass_responder_healer import BreakglassResponderHealerSkill
 from agents.ci_detective import CIDetectiveAgent
 from agents.test_healer_agent import TestHealerAgent
+from core.context.active_context_pruner import (
+    BillionContextManager,
+    estimate_tokens,
+    prune_dom,
+    prune_logs,
+    prune_traceback,
+)
 from core.healer.gemini_flash import GeminiFlashHealer
 from core.orchestrator.scrum_hierarchy import (
     ModelTier,
@@ -39,16 +46,22 @@ from core.time_machine.patch_guard import analyze_proposed_changes
 from scripts.syntax_guard import check_py310_compatibility
 from server import (
     ApplyRequest,
+    ContextCompressRequest,
+    ContextSearchRequest,
     PruneRequest,
     SprintPlanRequest,
     app,
     apply_task,
     approve_task,
+    compress_context_endpoint,
     create_task_sprint_plan,
+    decompress_block_endpoint,
+    get_context_status,
     get_task_sprint_board,
     github_actions_webhook,
     prune_snapshots_endpoint,
     rollback_task,
+    search_context_endpoint,
     snapshot_diff_endpoint,
     validate_task_id,
     validate_test_file_path,
@@ -642,6 +655,10 @@ class TestHermesRerunPlatform(unittest.TestCase):
             "/api/time-machine/prune",
             "/api/tasks",
             "/api/heal",
+            "/api/context/status",
+            "/api/context/search",
+            "/api/context/decompress/{block_id}",
+            "/api/context/compress",
         }
         for route in app.routes:
             if hasattr(route, "path") and route.path in protected_paths:
@@ -990,6 +1007,110 @@ class TestHermesRerunPlatform(unittest.TestCase):
                 apply_task(task.id)
             self.assertEqual(scope_err.exception.status_code, 400)
             self.assertIn("Sprint scope violation", scope_err.exception.detail)
+
+    def test_acp_dom_pruning_reduces_token_overhead(self):
+        """Active Context Pruning (ACP) strips noisy styling/scripts while preserving interactive test locators."""
+        raw_dom = (
+            "<html><head><style>.btn { color: red; margin: 10px; padding: 5px; }</style>"
+            "<script>function track() { console.log('telemetry'); }</script></head>"
+            "<body><div class='flex w-full h-full bg-gray-100 justify-center items-center'>"
+            "<!-- navigation header -->"
+            "<div class='container mx-auto p-4'><header class='border-b'><h1>Dashboard</h1></header>"
+            "<div class='grid grid-cols-3 gap-4'>"
+            "<button data-testid='submit-btn' role='button' class='btn bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded'>Submit</button>"
+            "<input type='text' data-testid='user-input' id='txt-username' placeholder='Enter username' />"
+            "<div class='alert alert-danger error-box'><span>Invalid password</span></div>"
+            "</div></div></div></body></html>"
+        )
+        pruned = prune_dom(raw_dom, max_tokens=100)
+        self.assertNotIn("<style>", pruned)
+        self.assertNotIn("<script>", pruned)
+        self.assertNotIn("telemetry", pruned)
+        self.assertNotIn("<!-- navigation header -->", pruned)
+        self.assertIn("submit-btn", pruned)
+        self.assertIn("txt-username", pruned)
+        self.assertIn("Invalid password", pruned)
+        self.assertLess(estimate_tokens(pruned), estimate_tokens(raw_dom))
+
+    def test_acp_traceback_pruning_collapses_runner_frames(self):
+        """ACP collapses framework test-runner frames while preserving workspace source lines and final errors."""
+        raw_traceback = (
+            "Traceback (most recent call last):\n"
+            "  File \"/usr/lib/python3.10/site-packages/_pytest/runner.py\", line 341, in pytest_runtest_protocol\n"
+            "    runtestprotocol(item, nextitem=nextitem)\n"
+            "  File \"/usr/lib/python3.10/site-packages/pluggy/_hooks.py\", line 513, in __call__\n"
+            "    return self._hookexec(self.name, self._hookimpls, kwargs)\n"
+            "  File \"/usr/lib/python3.10/site-packages/_pytest/runner.py\", line 262, in pytest_runtest_call\n"
+            "    item.runtest()\n"
+            "  File \"/workspace/tests/test_checkout.py\", line 45, in test_payment\n"
+            "    assert payment.is_confirmed() == True\n"
+            "AssertionError: assert False == True\n"
+        )
+        pruned = prune_traceback(raw_traceback)
+        self.assertIn("test_checkout.py", pruned)
+        self.assertIn("AssertionError: assert False == True", pruned)
+        self.assertIn("collapsed", pruned)
+        self.assertNotIn("pytest_runtest_protocol", pruned)
+        self.assertLess(estimate_tokens(pruned), estimate_tokens(raw_traceback))
+
+    def test_billion_context_lsm_compaction_and_reversibility(self):
+        """Multi-generational LSM compaction moves aged items to higher tiers and allows reversible decompression."""
+        mgr = BillionContextManager(max_active_tokens=80)
+
+        # Ingest 4 items exceeding active token limit
+        b1 = mgr.ingest("Detailed event 1 for test execution with long parameters " * 4, label="traceback")
+        b2 = mgr.ingest("Detailed event 2 containing dom snapshot for screen elements " * 4, label="dom_snapshot")
+        b3 = mgr.ingest("Detailed event 3 with intermediate patch diff and analysis " * 4, label="diff")
+        b4 = mgr.ingest("Detailed event 4 active working item " * 4, label="notes")
+
+        # Compaction triggered: older items moved to tier 1
+        self.assertGreater(len(mgr.tier_1_capture), 0)
+        status = mgr.acp_status()
+        self.assertGreater(status["tokens_saved"], 0)
+        self.assertGreaterEqual(status["compression_ratio"], 1.0)
+
+        # Search across historical context
+        hits = mgr.search_context("Detailed event 1")
+        self.assertGreater(len(hits), 0)
+        self.assertIn(b1.block_id, [h["block_id"] for h in hits] + [b for t in mgr.tier_1_capture for b in t.direct_block_ids])
+
+        # Reversible decompression of exact raw content
+        raw_b1 = mgr.decompress(b1.block_id)
+        self.assertEqual(raw_b1, b1.raw_content)
+
+    def test_context_api_endpoints_and_auth(self):
+        """Verify context API endpoints require auth and allow status inspection and compression."""
+        # 1. Unauthenticated request -> 401
+        os.environ["HERMES_API_TOKEN"] = "token123"
+        req_no_auth = MockRequest(b"", {})
+        with self.assertRaises(HTTPException) as ctx:
+            asyncio.run(verify_hermes_token(req_no_auth))
+        self.assertEqual(ctx.exception.status_code, 401)
+
+        # 2. Call status endpoint
+        res = get_context_status()
+        self.assertEqual(res["status"], "success")
+        self.assertIn("acp", res)
+        self.assertIn("compression_ratio", res["acp"])
+
+        # 3. Call compress endpoint
+        comp_res = compress_context_endpoint(
+            ContextCompressRequest(
+                content="<button data-testid='login'>Login</button><style>.bad{}</style>",
+                label="dom",
+            )
+        )
+        self.assertEqual(comp_res["status"], "compressed")
+        block_id = comp_res["block"]["block_id"]
+
+        # 4. Search and decompress
+        search_res = search_context_endpoint(ContextSearchRequest(query="login"))
+        self.assertEqual(search_res["status"], "success")
+
+        decomp_res = decompress_block_endpoint(block_id)
+        self.assertEqual(decomp_res["status"], "success")
+        self.assertEqual(decomp_res["block_id"], block_id)
+        self.assertIn("<button data-testid='login'>", decomp_res["raw_content"])
 
 
 if __name__ == "__main__":

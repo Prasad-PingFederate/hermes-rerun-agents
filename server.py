@@ -60,6 +60,17 @@ class PruneRequest(BaseModel):
     keep_last: int = 10
 
 
+class ContextSearchRequest(BaseModel):
+    query: str
+    tier: Optional[int] = None
+
+
+class ContextCompressRequest(BaseModel):
+    content: str
+    label: str = "custom"
+    metadata: Optional[Dict[str, Any]] = None
+
+
 def compute_failure_fingerprint(
     repo_or_branch: str,
     test_or_workflow: str,
@@ -591,6 +602,56 @@ def prune_snapshots_endpoint(req: PruneRequest = PruneRequest()):
         "kept": res["kept"],
         "deleted": res["deleted"],
         "pinned_ids": list(pinned_ids),
+    }
+
+
+@app.get("/api/context/status", dependencies=[Depends(verify_hermes_token)])
+def get_context_status():
+    """Active Context Pruning (ACP) / Billion-Context memory telemetry."""
+    return {
+        "status": "success",
+        "acp": healer_agent.context_manager.acp_status(),
+    }
+
+
+@app.post("/api/context/search", dependencies=[Depends(verify_hermes_token)])
+def search_context_endpoint(req: ContextSearchRequest):
+    """Query compressed context memory blocks without active window inflation."""
+    results = healer_agent.context_manager.search_context(req.query, tier=req.tier)
+    return {
+        "status": "success",
+        "query": req.query,
+        "results": results,
+    }
+
+
+@app.post("/api/context/decompress/{block_id}", dependencies=[Depends(verify_hermes_token)])
+def decompress_block_endpoint(block_id: str):
+    """Reversibly retrieve unabridged raw content for any historical block."""
+    try:
+        raw = healer_agent.context_manager.decompress(block_id)
+        return {
+            "status": "success",
+            "block_id": block_id,
+            "raw_content": raw,
+        }
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.post("/api/context/compress", dependencies=[Depends(verify_hermes_token)])
+def compress_context_endpoint(req: ContextCompressRequest):
+    """Ingest and compress context using Active Context Pruning."""
+    from dataclasses import asdict
+    blk = healer_agent.context_manager.ingest(
+        content=req.content,
+        label=req.label,
+        metadata=req.metadata,
+    )
+    return {
+        "status": "compressed",
+        "block": asdict(blk),
+        "acp": healer_agent.context_manager.acp_status(),
     }
 
 

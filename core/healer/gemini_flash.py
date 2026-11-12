@@ -13,6 +13,13 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from core.context.active_context_pruner import (
+    BillionContextManager,
+    prune_dom,
+    prune_logs,
+    prune_traceback,
+)
+
 try:
     import requests
 except ImportError:
@@ -33,6 +40,7 @@ class GeminiFlashHealer:
         self.api_key = api_key or os.environ.get("GEMINI_API_KEY")
         self.ollama_base_url = ollama_base_url or os.environ.get("OLLAMA_BASE_URL")
         self.ollama_model = ollama_model or os.environ.get("OLLAMA_MODEL", "qwen2.5-coder:latest")
+        self.context_manager = BillionContextManager()
 
     def diagnose_failure(
         self,
@@ -153,9 +161,21 @@ class GeminiFlashHealer:
         console_errors: List[str],
         recent_diff: str,
     ) -> str:
+        # Active Context Pruning (Billion-Context) preprocessing
+        clean_dom = prune_dom(dom_snippet, max_tokens=600) if dom_snippet else "Not captured"
+        clean_tb = prune_traceback(traceback_str, max_tokens=500) if traceback_str else "None"
+        clean_con = prune_logs(console_errors, max_tokens=250)
+        clean_net = prune_logs(network_errors, max_tokens=250)
+
+        # Ingest into BillionContextManager for session tracking and memory status
+        if dom_snippet:
+            self.context_manager.ingest(dom_snippet, label="dom_snapshot", metadata={"test_name": test_name})
+        if traceback_str:
+            self.context_manager.ingest(traceback_str, label="traceback", metadata={"test_name": test_name})
+
         nl = chr(10)
-        net_str = nl.join(network_errors[:5]) if network_errors else "None"
-        con_str = nl.join(console_errors[:5]) if console_errors else "None"
+        net_str = nl.join(clean_net) if clean_net else "None"
+        con_str = nl.join(clean_con) if clean_con else "None"
 
         return f"""You are an expert Playwright automation engineer and automated test healer.
 Analyze the following test failure and propose an exact code fix.
@@ -173,12 +193,12 @@ Analyze the following test failure and propose an exact code fix.
 
 ### Traceback:
 ```text
-{traceback_str[-1200:]}
+{clean_tb}
 ```
 
 ### DOM State:
 ```html
-{dom_snippet[-800:] if dom_snippet else "Not captured"}
+{clean_dom}
 ```
 
 ### Browser Console Errors:

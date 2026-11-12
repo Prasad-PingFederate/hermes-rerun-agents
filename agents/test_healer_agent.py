@@ -34,6 +34,7 @@ class TestHealerAgent:
         self.sandbox = SandboxRunner(self.workspace_path)
         self.orchestrator = RerunOrchestrator(self.workspace_path / ".rerun_tasks")
         self.scrum = ScrumMasterOrchestrator(self.workspace_path, tm_engine=self.tm)
+        self.context_manager = self.healer.context_manager
 
     def run_and_heal(
         self,
