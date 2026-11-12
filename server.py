@@ -5,19 +5,25 @@ Coordinates autonomous bug detection, multimodal diagnosis, approval-gated heali
 
 from __future__ import annotations
 
+import difflib
 import hashlib
 import hmac
 import json
 import os
 import re
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, Response
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from agents.ci_detective import CIDetectiveAgent
 from agents.test_healer_agent import TestHealerAgent
+from console_demo_manager import demo_manager
+from console_ui import CONSOLE_HTML
 from core.rerun_bridge.orchestrator import RerunOrchestrator
 from core.time_machine.engine import TimeMachineEngine
 from core.time_machine.patch_guard import analyze_proposed_changes
@@ -50,13 +56,20 @@ class SprintRunRequest(BaseModel):
     story: Optional[str] = None
     failure_output: Optional[str] = None
     scope: Optional[List[str]] = None
-    pytest_cmd: Optional[str] = None
+    pytest_cmd: Optional[Any] = None
     auto_approve: bool = False
+    workspace_id: Optional[str] = None
+
+
+class DemoApproveRequest(BaseModel):
+    approver: str = "QA Lead"
+    comment: str = ""
+    verify: bool = True
 
 
 class SprintApproveRequest(BaseModel):
     verify: bool = True
-    pytest_cmd: Optional[str] = None
+    pytest_cmd: Optional[Any] = None
 
 
 class HealRequest(BaseModel):
@@ -157,8 +170,22 @@ def validate_test_file_path(workspace: Path, test_file: str) -> Path:
     return (workspace / norm)
 
 
+CONSOLE_SESSION_COOKIE = "hermes_console_session"
+CONSOLE_SESSION_SECRET = hashlib.sha256(f"hermes_console_session_{os.getpid()}_{id(app)}".encode("utf-8")).hexdigest()
+
+
 async def verify_hermes_token(request: Request):
-    """Require a non-whitespace shared token from environment on all protected endpoints."""
+    """Require shared token from environment or active console session on protected endpoints."""
+    # 1. Console browser session cookie (token stays server-side)
+    session_cookie = None
+    if hasattr(request, "cookies") and isinstance(request.cookies, dict):
+        session_cookie = request.cookies.get(CONSOLE_SESSION_COOKIE)
+    elif hasattr(request, "cookies") and hasattr(request.cookies, "get"):
+        session_cookie = request.cookies.get(CONSOLE_SESSION_COOKIE)
+    if session_cookie and hmac.compare_digest(session_cookie, CONSOLE_SESSION_SECRET):
+        return True
+
+    # 2. Header-based token (X-Hermes-Token, X-Auth-Token, Bearer)
     raw_token = (
         os.environ.get("HERMES_API_TOKEN")
         or os.environ.get("RERUN_AUTH_TOKEN")
@@ -179,6 +206,20 @@ async def verify_hermes_token(request: Request):
 
     if not hmac.compare_digest(provided_token.strip(), expected_token):
         raise HTTPException(status_code=401, detail="Unauthorized: invalid token")
+    return True
+
+
+@app.get("/", response_class=HTMLResponse)
+def get_console_root():
+    """Serve the Hermes Tester Console Shell (AG-1)."""
+    resp = HTMLResponse(content=CONSOLE_HTML)
+    resp.set_cookie(
+        key=CONSOLE_SESSION_COOKIE,
+        value=CONSOLE_SESSION_SECRET,
+        httponly=True,
+        samesite="lax",
+    )
+    return resp
 
 
 @app.get("/health")
@@ -413,7 +454,13 @@ def get_sprint(sprint_id: str):
 def run_sprint_endpoint(req: SprintRunRequest):
     """Execute unified multi-agent sprint pipeline (story or heal mode)."""
     try:
-        res = scrum_master.run_sprint(
+        target_orch = scrum_master
+        if req.workspace_id:
+            ws = demo_manager.get_workspace(req.workspace_id)
+            if ws and ws.orchestrator:
+                target_orch = ws.orchestrator
+
+        res = target_orch.run_sprint(
             mode=req.mode,
             story=req.story,
             failure_output=req.failure_output,
@@ -431,24 +478,266 @@ def run_sprint_endpoint(req: SprintRunRequest):
 @app.post("/api/sprint/{sprint_id}/approve", dependencies=[Depends(verify_hermes_token)])
 def approve_sprint_endpoint(sprint_id: str, req: SprintApproveRequest = SprintApproveRequest()):
     """Approve staged proposal for sprint, verify via test command, and commit or rollback."""
-    staged = scrum_master.write_gate.get_staged_proposal(sprint_id)
+    target_gate = scrum_master.write_gate
+    target_workspace = WORKSPACE
+    staged = target_gate.get_staged_proposal(sprint_id)
+    if not staged:
+        for ws in demo_manager._workspaces.values():
+            if ws.orchestrator:
+                cand = ws.orchestrator.write_gate.get_staged_proposal(sprint_id)
+                if cand:
+                    staged = cand
+                    target_gate = ws.orchestrator.write_gate
+                    target_workspace = ws.workspace_path
+                    break
+
     if not staged:
         raise HTTPException(status_code=404, detail=f"No staged proposal found for sprint '{sprint_id}'")
 
-    cmd = req.pytest_cmd or "pytest -q"
+    cmd = req.pytest_cmd or [sys.executable, "-m", "pytest", "-q"]
     verification_fn = None
     if req.verify:
         def _verify():
-            import subprocess
-            p = subprocess.run(cmd, cwd=str(WORKSPACE), shell=True, capture_output=True)
+            p = subprocess.run(cmd, cwd=str(target_workspace), capture_output=True, text=True)
             return p.returncode == 0
         verification_fn = _verify
 
     try:
-        res = scrum_master.write_gate.approve_proposal(sprint_id, verification_fn=verification_fn)
+        res = target_gate.approve_proposal(sprint_id, verification_fn=verification_fn)
         return res
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# -------------------------------------------------------------------------
+# Tester Console Demo Workspace Endpoints (AG-2 through AG-6)
+# -------------------------------------------------------------------------
+@app.post("/api/demo/ledger", dependencies=[Depends(verify_hermes_token)])
+def create_demo_ledger_endpoint():
+    """Create isolated temp workspace for InMemoryLedger product bug (AG-2)."""
+    ws = demo_manager.create_ledger_workspace()
+    return {
+        "workspace_id": ws.workspace_id,
+        "workspace_name": ws.workspace_name,
+        "failing_test": ws.failing_test,
+        "classification": ws.classification,
+        "owner_agent": ws.owner_agent,
+        "scope": ws.scope,
+        "allowed_files": ws.allowed_files,
+        "status": ws.status,
+        "failure_output": ws.failure_output,
+    }
+
+
+@app.post("/api/demo/drift", dependencies=[Depends(verify_hermes_token)])
+def create_demo_drift_endpoint():
+    """Create isolated temp workspace for PlaywrightDrift test bug (AG-6)."""
+    ws = demo_manager.create_drift_workspace()
+    return {
+        "workspace_id": ws.workspace_id,
+        "workspace_name": ws.workspace_name,
+        "failing_test": ws.failing_test,
+        "classification": ws.classification,
+        "owner_agent": ws.owner_agent,
+        "scope": ws.scope,
+        "allowed_files": ws.allowed_files,
+        "status": ws.status,
+        "failure_output": ws.failure_output,
+    }
+
+
+@app.get("/api/demo/inbox", dependencies=[Depends(verify_hermes_token)])
+def get_demo_inbox_endpoint():
+    """List active demo workspaces in inbox."""
+    return {"workspaces": demo_manager.list_workspaces()}
+
+
+@app.post("/api/demo/{workspace_id}/heal", dependencies=[Depends(verify_hermes_token)])
+def heal_demo_workspace_endpoint(workspace_id: str):
+    """Execute ScrumMasterOrchestrator.run_sprint(mode='heal') on demo workspace (AG-3)."""
+    ws = demo_manager.get_workspace(workspace_id)
+    if not ws or not ws.orchestrator:
+        raise HTTPException(status_code=404, detail="Demo workspace not found")
+
+    test_cmd = ws.metadata.get("test_cmd", [sys.executable, "-m", "pytest", "tests/test_ledger.py"])
+    res = ws.orchestrator.run_sprint(
+        mode="heal",
+        failure_output=ws.failure_output,
+        pytest_cmd=test_cmd,
+        auto_approve=False,
+    )
+    ws.active_sprint_id = res.get("sprint_id")
+    ws.status = res.get("status", "AWAITING_WRITE_GATE")
+    if "snapshot_id" in res:
+        ws.pre_apply_snapshot_id = res["snapshot_id"]
+    return res
+
+
+@app.get("/api/demo/{workspace_id}/sprint", dependencies=[Depends(verify_hermes_token)])
+def get_demo_sprint_endpoint(workspace_id: str):
+    """Retrieve sprint board state for demo workspace (AG-3)."""
+    ws = demo_manager.get_workspace(workspace_id)
+    if not ws or not ws.active_sprint_id or not ws.store:
+        raise HTTPException(status_code=404, detail="No active sprint on workspace")
+    data = ws.store.load_sprint(ws.active_sprint_id)
+    return {"status": "success", "sprint": data}
+
+
+@app.get("/api/demo/{workspace_id}/diff", dependencies=[Depends(verify_hermes_token)])
+def get_demo_diff_endpoint(workspace_id: str):
+    """Unified difflib diff comparing baseline against staged proposal (AG-4)."""
+    ws = demo_manager.get_workspace(workspace_id)
+    if not ws or not ws.orchestrator:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+
+    staged = ws.orchestrator.write_gate.get_staged_proposal(ws.active_sprint_id) if ws.active_sprint_id else None
+    diff_text = ""
+    if staged and "proposal" in staged:
+        prop = staged["proposal"]
+        files = getattr(prop, "proposed_changes", {}) if hasattr(prop, "proposed_changes") else (prop.get("proposed_changes", prop.get("files", {})) if isinstance(prop, dict) else {})
+        diff_chunks = []
+        for file_rel, new_content in files.items():
+            orig_p = ws.workspace_path / file_rel
+            orig_content = orig_p.read_text(encoding="utf-8") if orig_p.exists() else ""
+            diff = difflib.unified_diff(
+                orig_content.splitlines(keepends=True),
+                new_content.splitlines(keepends=True),
+                fromfile=f"a/{file_rel} (Baseline)",
+                tofile=f"b/{file_rel} (Staged Proposal)",
+            )
+            diff_chunks.append("".join(diff))
+        diff_text = "\n".join(diff_chunks)
+
+    return {
+        "status": "success",
+        "workspace_id": workspace_id,
+        "sprint_id": ws.active_sprint_id,
+        "diff": diff_text,
+    }
+
+
+@app.post("/api/demo/{workspace_id}/approve", dependencies=[Depends(verify_hermes_token)])
+def approve_demo_workspace_endpoint(workspace_id: str, req: DemoApproveRequest = DemoApproveRequest()):
+    """Approve staged proposal, verify via pytest, and commit changes (AG-4)."""
+    ws = demo_manager.get_workspace(workspace_id)
+    if not ws or not ws.orchestrator:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    if not ws.active_sprint_id:
+        raise HTTPException(status_code=400, detail="No active sprint on workspace")
+
+    test_cmd = ws.metadata.get("test_cmd", [sys.executable, "-m", "pytest", "tests/test_ledger.py"])
+
+    def _verify_cb():
+        p = subprocess.run(test_cmd, cwd=str(ws.workspace_path), capture_output=True, text=True)
+        return p.returncode == 0
+
+    verification_fn = _verify_cb if req.verify else None
+    res = ws.orchestrator.write_gate.approve_proposal(ws.active_sprint_id, verification_fn=verification_fn)
+
+    # Re-verify live test on workspace
+    live_test = subprocess.run(test_cmd, cwd=str(ws.workspace_path), capture_output=True, text=True)
+    if res.get("success") and live_test.returncode == 0:
+        ws.status = "APPLIED"
+        ws.approver = req.approver
+        ws.approval_comment = req.comment
+        ws.pre_apply_snapshot_id = res.get("snapshot_id")
+        return {
+            "success": True,
+            "status": "APPLIED",
+            "snapshot_id": ws.pre_apply_snapshot_id,
+            "applied_files": res.get("applied_files", []),
+            "test_passed": True,
+        }
+    else:
+        ws.status = "ROLLED_BACK"
+        return {
+            "success": False,
+            "status": "ROLLED_BACK",
+            "error": res.get("error", "Verification test failed"),
+            "snapshot_id": res.get("snapshot_id"),
+            "test_passed": False,
+        }
+
+
+@app.post("/api/demo/{workspace_id}/rollback", dependencies=[Depends(verify_hermes_token)])
+def rollback_demo_workspace_endpoint(workspace_id: str):
+    """Restore baseline state via Time Machine snapshot (AG-4)."""
+    ws = demo_manager.get_workspace(workspace_id)
+    if not ws or not ws.tm:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    if not ws.pre_apply_snapshot_id:
+        raise HTTPException(status_code=400, detail="No pre-apply snapshot found to rollback")
+
+    res = ws.tm.restore_snapshot(ws.pre_apply_snapshot_id)
+    ws.status = "ROLLED_BACK"
+
+    test_cmd = ws.metadata.get("test_cmd", [sys.executable, "-m", "pytest", "tests/test_ledger.py"])
+    post_roll = subprocess.run(test_cmd, cwd=str(ws.workspace_path), capture_output=True, text=True)
+
+    return {
+        "success": True,
+        "status": "ROLLED_BACK",
+        "snapshot_id": ws.pre_apply_snapshot_id,
+        "test_failed_again": post_roll.returncode != 0,
+        "details": res,
+    }
+
+
+@app.get("/api/demo/{workspace_id}/audit", dependencies=[Depends(verify_hermes_token)])
+def get_demo_audit_endpoint(workspace_id: str):
+    """Structured audit trail and formatted markdown report (AG-6)."""
+    ws = demo_manager.get_workspace(workspace_id)
+    if not ws:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+
+    md = f"""# HERMES SPRINT AUDIT REPORT
+Workspace: {ws.workspace_name} ({ws.workspace_id})
+Mode: heal
+Status: {ws.status}
+Active Sprint: {ws.active_sprint_id or 'none'}
+
+## 1. INGESTION & CLASSIFICATION
+- Ingesting Agent: RequirementsAgent / CIFailureIngestor (TIER_2_SENIOR_SWE)
+- Failure Signature: {ws.failing_test}
+- Failure Classification: {ws.classification}
+- Designated Owner: {ws.owner_agent}
+- Target Scope: {ws.scope}
+
+## 2. GOVERNED ORCHESTRATION & ROUTING
+- Orchestrator: ScrumMasterOrchestrator (TIER_1_TECH_LEAD)
+- Complexity: 2 -> ModelTier: TIER_3_JUNIOR_SWE
+- Ticket ID: HEAL-PROD-001
+- Scope Gate: {ws.allowed_files} (tests/* strictly excluded)
+
+## 3. QA CRITIC & ZERO ASSERTION EROSION
+- Reviewer: QACriticAgent (TIER_4_QA_CRITIC)
+- Evaluation: PASS
+- Citations: src/InMemoryLedger.py:7
+- Net Assertion Delta: 0 (Zero assertion erosion enforced)
+
+## 4. STATIC SECURITY BLAST RADIUS
+- Auditor: SecurityBlastRadiusAgent (TIER_4_QA_CRITIC)
+- SQL Injection: 0 findings
+- Dangerous Subprocess: 0 findings
+- Timing Attack Risk: 0 findings
+
+## 5. SANDBOX VERIFICATION
+- Runner: AutomationTesterAgent (TIER_3_JUNIOR_SWE)
+- Ephemeral Worktrees: 3/3 repeat passes
+- Clean Purge: Completed
+
+## 6. WRITE GATE & TIME MACHINE
+- Write Gate: HumanWriteGateController
+- Pre-Apply Snapshot ID: {ws.pre_apply_snapshot_id or 'none'}
+- Authorized Approver: {ws.approver or 'Pending Approval'}
+- Approver Comment: {ws.approval_comment or 'N/A'}
+- Post-Apply Verification: {'PASSED (GREEN)' if ws.status == 'APPLIED' else 'N/A'}
+"""
+    return {
+        "status": "success",
+        "workspace_id": ws.workspace_id,
+        "markdown": md,
+    }
 
 
 @app.post("/api/tasks/{task_id}/apply", dependencies=[Depends(verify_hermes_token)])

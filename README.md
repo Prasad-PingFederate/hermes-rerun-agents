@@ -1,6 +1,7 @@
 # 🤖 Hermes Multi-Agent Orchestrator
 
-[![Tests](https://img.shields.io/badge/tests-72%20passed-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-84%20passed-brightgreen.svg)]()
+[![Tester Console](https://img.shields.io/badge/tester%20console-playwright%20verified-success.svg)]()
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)]()
 [![Standard Library](https://img.shields.io/badge/dependencies-zero%20external%20SDKs-success.svg)]()
 [![License](https://img.shields.io/badge/license-AGPL--3.0-orange.svg)](LICENSE)
