@@ -20,12 +20,8 @@ from core.context.active_context_pruner import (
     prune_traceback,
 )
 
-try:
-    import requests
-except ImportError:
-    requests = None
 
-GEMINI_MODELS = ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-flash"]
+GEMINI_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-flash"]
 
 
 class GeminiFlashHealer:
@@ -37,9 +33,9 @@ class GeminiFlashHealer:
         ollama_base_url: Optional[str] = None,
         ollama_model: Optional[str] = None,
     ):
-        self.api_key = api_key or os.environ.get("GEMINI_API_KEY")
-        self.ollama_base_url = ollama_base_url or os.environ.get("OLLAMA_BASE_URL")
-        self.ollama_model = ollama_model or os.environ.get("OLLAMA_MODEL", "qwen2.5-coder:latest")
+        self.api_key = api_key
+        self.ollama_base_url = ollama_base_url
+        self.ollama_model = ollama_model
         self.context_manager = BillionContextManager()
 
     def diagnose_failure(
@@ -65,25 +61,13 @@ class GeminiFlashHealer:
         if specialized_analysis:
             return specialized_analysis
 
-        # Attempt Gemini Flash multimodal query
-        if self.api_key and requests:
-            res = self._diagnose_with_gemini(
-                test_name=test_name,
-                error_message=error_message,
-                traceback_str=traceback_str,
-                code_snippet=code_snippet,
-                dom_snippet=dom_snippet,
-                screenshot_path=screenshot_path,
-                network_errors=network_errors or [],
-                console_errors=console_errors or [],
-                recent_diff=recent_diff or "",
-            )
-            if res:
-                return res
+        # Attempt diagnosis via HermesLLMAdapter
+        from llm_provider_adapter import AgentRole, HermesLLMAdapter
+        adapter = HermesLLMAdapter()
+        provider = adapter.resolve_provider(AgentRole.TEST_HEALER_AGENT)
 
-        # Attempt Ollama local model query
-        if self.ollama_base_url and requests:
-            res = self._diagnose_with_ollama(
+        if provider != "none":
+            prompt = self._build_prompt(
                 test_name=test_name,
                 error_message=error_message,
                 traceback_str=traceback_str,
@@ -93,8 +77,23 @@ class GeminiFlashHealer:
                 console_errors=console_errors or [],
                 recent_diff=recent_diff or "",
             )
-            if res:
-                return res
+            system_prompt = (
+                "You are an expert Playwright automation engineer and automated test healer. "
+                "Analyze the failure and output ONLY valid JSON matching the schema."
+            )
+            raw_text = adapter.complete(
+                role=AgentRole.TEST_HEALER_AGENT.value,
+                tier="TIER_3_JUNIOR_SWE",
+                system_prompt=system_prompt,
+                user_prompt=prompt,
+            )
+            parsed = self._parse_json_response(raw_text)
+            if parsed:
+                parsed["test_name"] = test_name
+                parsed["engine"] = f"Hermes LLM ({provider})"
+                parsed["ai_powered"] = True
+                return parsed
+            raise RuntimeError(f"Failed to parse JSON response from LLM provider '{provider}': {raw_text[:200]}")
 
         # Robust heuristic fallback
         return self._heuristic_fallback(
@@ -243,126 +242,6 @@ Follow this exact JSON structure:
             data = json.loads(text)
             if isinstance(data, dict):
                 return data
-        except Exception:
-            pass
-        return None
-
-    def _diagnose_with_gemini(
-        self,
-        test_name: str,
-        error_message: str,
-        traceback_str: str,
-        code_snippet: str,
-        dom_snippet: str,
-        screenshot_path: Optional[str | Path],
-        network_errors: List[str],
-        console_errors: List[str],
-        recent_diff: str,
-    ) -> Optional[Dict[str, Any]]:
-        prompt = self._build_prompt(
-            test_name=test_name,
-            error_message=error_message,
-            traceback_str=traceback_str,
-            code_snippet=code_snippet,
-            dom_snippet=dom_snippet,
-            network_errors=network_errors,
-            console_errors=console_errors,
-            recent_diff=recent_diff,
-        )
-
-        screenshot_bytes = None
-        if screenshot_path and Path(screenshot_path).is_file():
-            try:
-                screenshot_bytes = Path(screenshot_path).read_bytes()
-            except Exception:
-                pass
-
-        parts: List[Dict[str, Any]] = []
-        if screenshot_bytes:
-            parts.append({
-                "inline_data": {
-                    "mime_type": "image/png",
-                    "data": base64.b64encode(screenshot_bytes).decode("utf-8"),
-                }
-            })
-        parts.append({"text": prompt})
-
-        payload = {
-            "contents": [{"parts": parts}],
-            "generationConfig": {"temperature": 0.2, "maxOutputTokens": 2048},
-        }
-
-        for model in GEMINI_MODELS:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={self.api_key}"
-            try:
-                resp = requests.post(url, json=payload, timeout=30)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    candidates = data.get("candidates", [])
-                    if candidates:
-                        text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "")
-                        parsed = self._parse_json_response(text)
-                        if parsed:
-                            parsed["test_name"] = test_name
-                            parsed["engine"] = f"Google {model} (Multimodal)"
-                            parsed["ai_powered"] = True
-                            return parsed
-                        elif text:
-                            return {
-                                "test_name": test_name,
-                                "engine": f"Google {model} (Multimodal)",
-                                "category": "AI Diagnosed",
-                                "root_cause": text[:300],
-                                "files": [],
-                                "ai_powered": True,
-                            }
-            except Exception:
-                continue
-        return None
-
-    def _diagnose_with_ollama(
-        self,
-        test_name: str,
-        error_message: str,
-        traceback_str: str,
-        code_snippet: str,
-        dom_snippet: str,
-        network_errors: List[str],
-        console_errors: List[str],
-        recent_diff: str,
-    ) -> Optional[Dict[str, Any]]:
-        prompt = self._build_prompt(
-            test_name=test_name,
-            error_message=error_message,
-            traceback_str=traceback_str,
-            code_snippet=code_snippet,
-            dom_snippet=dom_snippet,
-            network_errors=network_errors,
-            console_errors=console_errors,
-            recent_diff=recent_diff,
-        )
-
-        url = f"{self.ollama_base_url.rstrip('/')}/chat/completions"
-        payload = {
-            "model": self.ollama_model,
-            "messages": [
-                {"role": "system", "content": "You are an automated Playwright testing diagnostician. Always reply with valid JSON only."},
-                {"role": "user", "content": prompt},
-            ],
-            "temperature": 0.2,
-        }
-
-        try:
-            resp = requests.post(url, json=payload, timeout=45)
-            if resp.status_code == 200:
-                res_data = resp.json()
-                content = res_data.get("choices", [{}])[0].get("message", {}).get("content", "")
-                parsed = self._parse_json_response(content)
-                if parsed:
-                    parsed["test_name"] = test_name
-                    parsed["engine"] = f"Local Ollama ({self.ollama_model})"
-                    parsed["ai_powered"] = True
-                    return parsed
         except Exception:
             pass
         return None

@@ -105,72 +105,21 @@ def run_demo() -> int:
         print(f"      Exit Code: {res1.returncode} (Failure Confirmed)")
         assert res1.returncode != 0, "Initial test should have failed"
 
-        # [3/6] Hermes Ingestion & Sprint Planning
-        print("\n[3/6] RequirementsAgent ingesting traceback & building sprint plan...")
-        ingestor = CIFailureIngestor(demo_dir)
-        failure_data = ingestor.ingest_failure_output(res1.stdout + "\n" + res1.stderr)
-        print(f"      Identified allowed_files: {failure_data['allowed_files']}")
-        print(f"      Acceptance Criteria: {failure_data['acceptance_criteria']}")
-
+        # [3/6 - 5/6] Single Pipeline Execution: ScrumMasterOrchestrator.run_sprint
+        print("\n[3-5/6] Executing unified pipeline ScrumMasterOrchestrator.run_sprint (auto_approve=True)...")
         orchestrator = ScrumMasterOrchestrator(demo_dir)
-        sprint_plan = orchestrator.create_sprint_plan({
-            "tickets": [
-                {
-                    "ticket_id": "DEMO-LEAD-001",
-                    "title": "Repair InMemoryLedger negative deposit handling",
-                    "complexity": 2,
-                    "allowed_files": ["src/InMemoryLedger.py"],
-                    "acceptance_criteria": failure_data["acceptance_criteria"],
-                }
-            ]
-        })
-        sprint_id = sprint_plan["sprint_id"]
-        ticket_data = sprint_plan["tickets"][0]
-        ticket_obj = orchestrator.router.route_ticket(
-            ticket_id=ticket_data["ticket_id"],
-            title=ticket_data["title"],
-            complexity=ticket_data["complexity"],
-            allowed_files=ticket_data["allowed_files"],
-            acceptance_criteria=ticket_data["acceptance_criteria"],
+        sprint_res = orchestrator.run_sprint(
+            mode="heal",
+            failure_output=res1.stdout + "\n" + res1.stderr,
+            pytest_cmd=[sys.executable, "-m", "pytest", "tests/test_ledger.py"],
+            auto_approve=True,
         )
 
-        # [4/6] Worker Patch Synthesis, QA Critic & Sandbox Verification
-        print("\n[4/6] DeveloperAgent synthesizing fix & running sandbox multi-pass verification (repeat=3)...")
-        adapter = HermesLLMAdapter(demo_dir)
-        gate_controller = HumanWriteGateController(demo_dir, orchestrator.tm, orchestrator.store)
-        file_contents = gate_controller.reader.read_allowed_files(ticket_obj.allowed_files)
-
-        proposed_changes = adapter.propose_patch(
-            AgentRole.DEVELOPER_AGENT, ticket_obj, ticket_obj.assigned_tier, file_contents
-        )
-        proposal = WorkerProposal(
-            ticket_id=ticket_obj.ticket_id,
-            worker_agent=AgentRole.DEVELOPER_AGENT.value,
-            model_tier=ticket_obj.assigned_tier,
-            proposed_changes=proposed_changes,
-        )
-
-        # Check AST & QA Critic gates
-        ast_res = ASTPatchGuard.analyze(demo_dir, proposed_changes, ticket=ticket_obj)
-        assert ast_res["valid"], f"AST Guard failed: {ast_res['reasons']}"
-
-        qa_res = QACriticAgent.review_worker_output(ticket_obj, proposed_changes)
-        assert qa_res.approved, f"QA Critic failed: {qa_res.rejection_reasons}"
-
-        # Sandbox multi-pass test
-        sandbox = SandboxExecutor(demo_dir)
-        multi_run = sandbox.run_tests([sys.executable, "-m", "pytest", "tests/test_ledger.py"], repeat=3, proposed_changes=proposed_changes)
-        print(f"      Sandbox Result: {multi_run.classification} ({multi_run.pass_count}/3 passed)")
-        assert multi_run.classification == "PASSED", "Sandbox tests must pass 3/3"
-
-        # [5/6] HumanWriteGate & TimeMachine Pre-Apply Snapshot
-        print("\n[5/6] HumanWriteGate creating TimeMachine snapshot & applying verified patch...")
-        gate_controller.stage_proposal(sprint_id, ticket_obj, proposal)
-        apply_res = gate_controller.approve_and_apply(sprint_id, auto_approve=True)
-        assert apply_res["success"], f"Failed to apply: {apply_res}"
-        snapshot_id = apply_res["snapshot_id"]
-        print(f"      Snapshot Created: {snapshot_id}")
-        print(f"      Files Atomically Written: {apply_res['applied_files']}")
+        assert sprint_res.get("success") or sprint_res.get("status") in ("APPLIED", "COMPLETED"), f"Sprint run failed: {sprint_res}"
+        snapshot_id = sprint_res["snapshot_id"]
+        print(f"      Sprint Status:            {sprint_res.get('status')}")
+        print(f"      Pre-Apply Snapshot ID:    {snapshot_id}")
+        print(f"      Atomically Written Files: {sprint_res.get('applied_files')}")
 
         # Confirm tests are now green on live workspace
         res2 = subprocess.run([sys.executable, "-m", "pytest", "tests/test_ledger.py", "-v"], cwd=str(demo_dir), capture_output=True, text=True)
@@ -179,7 +128,7 @@ def run_demo() -> int:
 
         # [6/6] Verify TimeMachine Surgical Rollback
         print("\n[6/6] Testing TimeMachine rollback to restore baseline...")
-        gate_controller.rollback_snapshot(snapshot_id)
+        orchestrator.write_gate.rollback_snapshot(snapshot_id)
         current_ledger = (src_dir / "InMemoryLedger.py").read_text(encoding="utf-8")
         assert "BUG: Fails to reject" in current_ledger, "Rollback must restore original baseline"
 
@@ -198,3 +147,4 @@ def run_demo() -> int:
 
 if __name__ == "__main__":
     sys.exit(run_demo())
+

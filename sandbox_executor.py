@@ -22,7 +22,7 @@ import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Generator, List, Optional, Tuple
+from typing import Any, Dict, Generator, List, Optional, Tuple, Union
 
 
 @dataclass
@@ -318,50 +318,81 @@ class SandboxExecutor:
             summary=summary,
         )
 
-    def classify_failure(self, runs: List[ExecutionRun]) -> str:
+    def classify_failure(self, runs: Union[List[ExecutionRun], str]) -> str:
         """Classify test execution outcome into clean categories:
         
         - PASSED: All runs passed.
         - FLAKY_TEST: Some runs passed, some failed.
         - ENVIRONMENT_NOISE: Failed due to network, port, missing dependencies, or OS env.
-        - TEST_BUG: Assertion failures, test fixture errors, or test assertion erosion.
         - PRODUCT_BUG: Unhandled exceptions or failures originating in application/product code.
+        - TEST_BUG: Assertion failures in tests, test fixture errors, or obsolete tests.
         """
-        if not runs:
-            return "ENVIRONMENT_NOISE"
+        if isinstance(runs, str):
+            combined_output = runs
+            if not combined_output.strip() or ("passed" in combined_output.lower() and "failed" not in combined_output.lower()):
+                return "PASSED"
+        else:
+            if not runs:
+                return "ENVIRONMENT_NOISE"
 
-        pass_count = sum(1 for r in runs if r.passed)
-        if pass_count == len(runs):
-            return "PASSED"
+            pass_count = sum(1 for r in runs if r.passed)
+            if pass_count == len(runs):
+                return "PASSED"
 
-        # Intermittent pass/fail
-        if 0 < pass_count < len(runs):
-            return "FLAKY_TEST"
+            # Intermittent pass/fail
+            if 0 < pass_count < len(runs):
+                return "FLAKY_TEST"
 
-        # All runs failed (3/3). Analyze output to distinguish noise vs test bug vs product bug
-        combined_output = "\n".join(f"{r.stdout}\n{r.stderr}" for r in runs)
+            combined_output = "\n".join(f"{r.stdout}\n{r.stderr}" for r in runs)
 
-        # 1. Environment Noise patterns
+        # 1. Environment Noise patterns (network, port, permissions, missing binaries)
         env_patterns = [
             r"ConnectionRefusedError",
             r"address already in use",
-            r"No such file or directory: '.*(?:node|git|docker|playwright)'",
+            r"No such file or directory: '.*(?:node|git|docker|playwright|npm|yarn)'",
             r"PermissionError",
             r"ENOSPC",
             r"EADDRINUSE",
-            r"ModuleNotFoundError: No module named '.*'",
-            r"ImportError: cannot import name",
             r"timed out after \d+ seconds",
             r"NetworkError",
-            r"socket.gaierror",
+            r"socket\.gaierror",
         ]
         for pattern in env_patterns:
             if re.search(pattern, combined_output, re.IGNORECASE):
-                # Verify if it's not a test asserting on ModuleNotFoundError
                 if "AssertionError" not in combined_output:
                     return "ENVIRONMENT_NOISE"
 
-        # 2. Test Bug patterns (assertions in test_* files or pytest fixture errors)
+        # 2. Product Bug patterns (exceptions originating in application/product code)
+        product_bug_patterns = [
+            r'File "(?:src|core|app|lib|pkg)/[^"]+\.py", line \d+',
+            r"AttributeError: '.*' object has no attribute",
+            r"KeyError: '.*'",
+            r"TypeError: .* missing \d+ required",
+            r"ZeroDivisionError",
+            r"IndexError: list index out of range",
+            r"ValueError: (?!Zero Assertion Erosion)",
+            r"Failed: DID NOT RAISE",
+            r"DID NOT RAISE",
+        ]
+        # Check if traceback includes product code or product failed to raise expected exception
+        has_product_frames = bool(
+            re.search(r'File "[^"]*(?:src|core|app|lib|pkg)[/\\].*?\.py", line \d+', combined_output, re.IGNORECASE)
+            or re.search(r'(?:src|core|app|lib|pkg)[/\\].*?\.py:\d+', combined_output, re.IGNORECASE)
+            or re.search(r'(?:^|\n)\s*(?!tests?[/\\_])[a-zA-Z0-9_-]+\.py:\d+:', combined_output, re.IGNORECASE)
+        )
+        did_not_raise = bool(re.search(r"DID NOT RAISE", combined_output))
+        if has_product_frames or did_not_raise:
+            # If product code is in traceback and not an import error inside the test
+            if not re.search(r'ImportError: cannot import name .* from', combined_output):
+                return "PRODUCT_BUG"
+
+        for pattern in product_bug_patterns:
+            if re.search(pattern, combined_output, re.IGNORECASE):
+                # If exception is in product code
+                if has_product_frames:
+                    return "PRODUCT_BUG"
+
+        # 3. Test Bug patterns (assertions in test_* files or pytest fixture errors)
         test_bug_patterns = [
             r"AssertionError",
             r"assert .* == .*",
@@ -370,23 +401,14 @@ class SandboxExecutor:
             r"tests/.*\.py:\d+: AssertionError",
             r"test_.*\.py:\d+: AssertionError",
             r"expect\(.*\)\.to",
+            r"ImportError: cannot import name",
         ]
         for pattern in test_bug_patterns:
             if re.search(pattern, combined_output, re.IGNORECASE):
                 return "TEST_BUG"
 
-        # 3. Product Bug patterns (exceptions in src/, core/, app/, etc.)
-        product_bug_patterns = [
-            r"File \"(?:src|core|app|lib|pkg)/.*\.py\", line \d+",
-            r"AttributeError: '.*' object has no attribute",
-            r"KeyError: '.*'",
-            r"TypeError: .* missing \d+ required",
-            r"ZeroDivisionError",
-            r"IndexError: list index out of range",
-        ]
-        for pattern in product_bug_patterns:
-            if re.search(pattern, combined_output, re.IGNORECASE):
-                return "PRODUCT_BUG"
+        # Fallback if product frames exist
+        if has_product_frames:
+            return "PRODUCT_BUG"
 
-        # Fallback if unhandled error
         return "TEST_BUG"

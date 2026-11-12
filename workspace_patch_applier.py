@@ -209,3 +209,4 @@ class AtomicPatchApplier:
                 except Exception:
                     pass
             raise RuntimeError(f"Atomic application failed, rolled back changes: {str(e)}") from e
+

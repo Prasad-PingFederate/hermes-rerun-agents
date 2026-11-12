@@ -82,6 +82,10 @@ class TestCaseWriterAgent:
         explanation: str = "Authored new test suite",
     ) -> WorkerProposal:
         """Generate test cases, verifying that assertions are present and not eroded."""
+        clean_path = test_file_path.replace("\\", "/").lstrip("/")
+        if not (clean_path.startswith("tests/") or Path(clean_path).name.startswith("test_") or clean_path.endswith("_test.py") or clean_path.endswith(".ts")):
+            raise ValueError(f"Scope Gate: TestCaseWriterAgent is strictly forbidden from modifying implementation files: {test_file_path}")
+
         # Enforce that proposed test code contains legitimate assertions
         has_python_assert = bool(re.search(r"\bassert\b", test_code))
         has_js_expect = bool(re.search(r"\bexpect\s*\(", test_code))
@@ -90,8 +94,12 @@ class TestCaseWriterAgent:
             raise ValueError(f"Zero Assertion Erosion: Proposed test file '{test_file_path}' contains zero assertions.")
 
         # Check for banned test skipping
-        if "@pytest.mark.skip" in test_code or "test.skip" in test_code:
-            raise ValueError("Zero Assertion Erosion: Prohibited test.skip or @pytest.mark.skip detected.")
+        for p in ("@pytest.mark.skip", "pytest.xfail", "test.skip", "test.fixme", "test.only"):
+            if p in test_code:
+                raise ValueError(f"Zero Assertion Erosion: Prohibited {p} detected.")
+
+        if re.search(r"\bassert\s+(?:True|1|1\s*==\s*1|True\s+is\s+not\s+False)\b", test_code):
+            raise ValueError("Zero Assertion Erosion: Trivial assertion (assert True / assert 1 == 1) detected.")
 
         return WorkerProposal(
             ticket_id=ticket.ticket_id,
@@ -121,6 +129,10 @@ class TestHealerAgent:
         explanation: str = "Healed failing test",
     ) -> WorkerProposal:
         """Repair test content and verify assertion count is preserved."""
+        clean_path = test_file_path.replace("\\", "/").lstrip("/")
+        if not (clean_path.startswith("tests/") or Path(clean_path).name.startswith("test_") or clean_path.endswith("_test.py") or clean_path.endswith(".ts")):
+            raise ValueError(f"Scope Gate: TestHealerAgent is strictly forbidden from modifying implementation files: {test_file_path}")
+
         if original_content:
             orig_asserts = len(re.findall(r"\bassert\b", original_content))
             new_asserts = len(re.findall(r"\bassert\b", healed_content))
@@ -129,8 +141,12 @@ class TestHealerAgent:
                     f"Zero Assertion Erosion: Healer cannot reduce assertions from {orig_asserts} to {new_asserts}."
                 )
 
-        if "@pytest.mark.skip" in healed_content or "test.skip" in healed_content:
-            raise ValueError("Zero Assertion Erosion: Healer cannot inject skip decorators.")
+        for p in ("@pytest.mark.skip", "pytest.xfail", "test.skip", "test.fixme", "test.only"):
+            if p in healed_content:
+                raise ValueError(f"Zero Assertion Erosion: Healer cannot inject skip/xfail decorators: {p}")
+
+        if re.search(r"\bassert\s+(?:True|1|1\s*==\s*1|True\s+is\s+not\s+False)\b", healed_content):
+            raise ValueError("Zero Assertion Erosion: Trivial assertion (assert True) detected.")
 
         return WorkerProposal(
             ticket_id=ticket.ticket_id,
@@ -163,6 +179,8 @@ class DeveloperAgent:
             clean_f = f.replace("\\", "/").lstrip("/")
             if clean_f not in allowed_set:
                 raise ValueError(f"Scope Gate: DeveloperAgent modified unauthorized file: {clean_f}. Allowed: {allowed_set}")
+            if clean_f.startswith("tests/") or Path(clean_f).name.startswith("test_") or clean_f.endswith("_test.py"):
+                raise ValueError(f"Scope Gate: DeveloperAgent is strictly forbidden from modifying test files: {clean_f}")
 
         return WorkerProposal(
             ticket_id=ticket.ticket_id,

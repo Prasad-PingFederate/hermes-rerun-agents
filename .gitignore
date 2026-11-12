@@ -28,6 +28,10 @@ playwright-report/
 .tm_snapshots/
 .rerun_tasks/
 .hermes/
+.hermes_artifacts/
+*.db
+*.sqlite
+*.sqlite3
 
 # IDE & OS
 .vscode/

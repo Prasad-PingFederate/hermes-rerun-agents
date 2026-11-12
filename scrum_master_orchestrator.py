@@ -20,7 +20,10 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
+import subprocess
+import sys
 from ast_patch_guard import ASTPatchGuard
+from ci_failure_ingestor import CIFailureIngestor
 from core.context.active_context_pruner import BillionContextManager
 from core.orchestrator.scrum_hierarchy import (
     ESCALATION_CHAIN,
@@ -37,115 +40,17 @@ from hermes_workers import (
     TestHealerAgent,
     WorkerProposal,
 )
+from llm_provider_adapter import AgentRole, HermesLLMAdapter
 from qa_critic_reviewer import EscalationPromptBuilder, QACriticAgent, QACriticReview
 from sandbox_executor import SandboxExecutor
 from security_blast_radius import SecurityBlastRadiusAgent
 from sprint_dag_scheduler import PatchConflictError, SprintDAGScheduler, StagedPatchComposer
 from sprint_state_store import AttemptRecord, SprintStateStore
 from ticket_router import TicketRouter
+from write_gate_controller import HumanWriteGateController
 
-
-class HumanWriteGate:
-    """Final Safety Layer: Holds approved proposals and creates a reversible TimeMachine snapshot before workspace mutation."""
-
-    def __init__(
-        self,
-        workspace_path: Path,
-        tm_engine: TimeMachineEngine,
-        store: Optional[SprintStateStore] = None,
-    ):
-        self.workspace_path = Path(workspace_path).resolve()
-        self.tm = tm_engine
-        self.store = store or SprintStateStore()
-        self.staged_proposals: Dict[str, Dict[str, Any]] = {}
-
-    def stage_proposal(
-        self,
-        sprint_id: str,
-        ticket: SubTaskTicket,
-        proposal: WorkerProposal,
-    ) -> str:
-        """Stage an approved proposal awaiting explicit human or API write approval."""
-        stage_id = f"stage_{ticket.ticket_id}_{int(time.time())}"
-        self.staged_proposals[stage_id] = {
-            "sprint_id": sprint_id,
-            "ticket_id": ticket.ticket_id,
-            "proposal": proposal,
-            "staged_at": time.time(),
-            "status": "AWAITING_WRITE_GATE",
-        }
-        self.store.update_sprint_status(sprint_id, "AWAITING_WRITE_GATE")
-        return stage_id
-
-    def approve_and_apply(
-        self,
-        stage_id: str,
-        label: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Explicitly approve and write staged changes to workspace with safety snapshot."""
-        if stage_id not in self.staged_proposals:
-            raise KeyError(f"No staged proposal found with ID '{stage_id}'")
-
-        item = self.staged_proposals[stage_id]
-        proposal: WorkerProposal = item["proposal"]
-        sprint_id = item["sprint_id"]
-        ticket_id = item["ticket_id"]
-
-        # 1. Take safety pre-apply snapshot before touching workspace (Invariant 5)
-        snap_label = label or f"safety_pre_apply_{ticket_id}_{int(time.time())}"
-        snapshot_meta = self.tm.create_snapshot(label=snap_label)
-        snapshot_id = snapshot_meta.id if hasattr(snapshot_meta, "id") else snapshot_meta["id"]
-
-        # Record snapshot in durable store
-        files_manifest = {}
-        if hasattr(snapshot_meta, "files_tracked") and snapshot_meta.files_tracked:
-            files_manifest = {f: {} for f in snapshot_meta.files_tracked}
-        elif isinstance(snapshot_meta, dict):
-            files_manifest = snapshot_meta.get("files", {})
-
-        self.store.save_snapshot(
-            snapshot_id=snapshot_id,
-            sprint_id=sprint_id,
-            ticket_id=ticket_id,
-            label=snap_label,
-            manifest=files_manifest,
-        )
-
-        applied_files: List[str] = []
-        try:
-            # 2. Safely write files with path validation and symlink defenses
-            for rel_path, content in proposal.proposed_changes.items():
-                dest_path = self.tm._validate_safe_workspace_path(rel_path, allow_missing=True)
-                dest_path.parent.mkdir(parents=True, exist_ok=True)
-                if dest_path.is_symlink() or dest_path.exists():
-                    dest_path.unlink()
-                dest_path.write_text(content, encoding="utf-8")
-                applied_files.append(rel_path)
-
-            item["status"] = "APPLIED"
-            self.store.update_sprint_status(sprint_id, "COMPLETED")
-
-            return {
-                "success": True,
-                "stage_id": stage_id,
-                "ticket_id": ticket_id,
-                "snapshot_id": snapshot_id,
-                "applied_files": applied_files,
-                "status": "APPLIED",
-            }
-        except Exception as e:
-            # 3. Surgical instant rollback on failure
-            self.tm.restore_snapshot(snapshot_id)
-            item["status"] = "ROLLED_BACK"
-            self.store.update_sprint_status(sprint_id, "ROLLED_BACK")
-            return {
-                "success": False,
-                "stage_id": stage_id,
-                "ticket_id": ticket_id,
-                "snapshot_id": snapshot_id,
-                "error": str(e),
-                "rolled_back": True,
-            }
+# GAP-22: Single source of truth: alias HumanWriteGate to HumanWriteGateController
+HumanWriteGate = HumanWriteGateController
 
 
 class ScrumMasterOrchestrator:
@@ -321,6 +226,7 @@ class ScrumMasterOrchestrator:
                 ticket=ticket,
                 proposed_changes=proposal.proposed_changes,
                 allow_test_modification=allow_test_modification,
+                workspace_path=self.workspace_path,
             )
             if not qa_review.approved:
                 att = AttemptRecord(
@@ -365,3 +271,220 @@ class ScrumMasterOrchestrator:
 
         ticket.status = "FAILED"
         return ticket, None
+
+    def run_sprint(
+        self,
+        *,
+        mode: str,                         # "story" | "heal"
+        story: Optional[str] = None,
+        failure_output: Optional[str] = None,
+        scope: Optional[List[str]] = None,
+        pytest_cmd: Optional[List[str]] = None,
+        auto_approve: bool = False,
+    ) -> Dict[str, Any]:
+        """Single unified sprint pipeline coordinating decomposition, topological execution,
+        multi-gate validation, sandboxing, write-gate staging, and safety snapshots.
+        """
+        ingestor = CIFailureIngestor(self.workspace_path)
+        tickets: List[SubTaskTicket] = []
+
+        if mode == "story":
+            story_text = story or "Implement feature requirements"
+            story_context = ingestor.ingest_user_story(story_text, target_scope=scope)
+            all_allowed = story_context.get("allowed_files", [])
+            test_files = [f for f in all_allowed if "test" in f.lower() or f.endswith("_test.py")]
+            impl_files = [f for f in all_allowed if not ("test" in f.lower() or f.endswith("_test.py"))]
+
+            if not test_files:
+                test_files = ["tests/test_feature.py"]
+            if not impl_files:
+                impl_files = ["src/feature.py"]
+
+            # 1. TestCaseWriter ticket (tests/* only)
+            t_writer = self.router.route_ticket(
+                ticket_id="TICK-WRITER-001",
+                title=f"Author test cases: {story_text[:50]}",
+                complexity=2,
+                allowed_files=test_files,
+                acceptance_criteria=story_context.get("acceptance_criteria", []),
+                depends_on=[],
+            )
+            # 2. Developer ticket (impl files only, depends on writer)
+            t_dev = self.router.route_ticket(
+                ticket_id="TICK-DEV-001",
+                title=f"Implement functionality: {story_text[:50]}",
+                complexity=3,
+                allowed_files=impl_files,
+                acceptance_criteria=story_context.get("acceptance_criteria", []),
+                depends_on=["TICK-WRITER-001"],
+            )
+            tickets = [t_writer, t_dev]
+
+        elif mode == "heal":
+            raw_output = failure_output or ""
+            if not raw_output and pytest_cmd:
+                proc = subprocess.run(pytest_cmd, cwd=str(self.workspace_path), capture_output=True, text=True)
+                raw_output = f"{proc.stdout}\n{proc.stderr}"
+                if proc.returncode == 0:
+                    return {
+                        "status": "PASSED",
+                        "classification": "PASSED",
+                        "message": "All tests passed cleanly. No healing needed.",
+                        "tickets": [],
+                    }
+
+            classification = self.sandbox.classify_failure(raw_output)
+            if classification == "PASSED":
+                return {
+                    "status": "PASSED",
+                    "classification": "PASSED",
+                    "message": "All tests passed cleanly. No healing needed.",
+                    "tickets": [],
+                }
+            if classification == "ENVIRONMENT_NOISE":
+                return {
+                    "status": "ENVIRONMENT_NOISE",
+                    "classification": "ENVIRONMENT_NOISE",
+                    "message": "Environment issue detected (missing dependency, port in use, or permissions). Aborting heal.",
+                    "tickets": [],
+                }
+
+            failure_context = ingestor.ingest_failure_output(raw_output)
+            all_allowed = failure_context.get("allowed_files", [])
+
+            if classification == "PRODUCT_BUG":
+                impl_files = [
+                    f for f in all_allowed
+                    if not (f.startswith("tests/") or Path(f).name.startswith("test_") or f.endswith("_test.py"))
+                ]
+                if not impl_files:
+                    for fail in failure_context.get("failures", []):
+                        for off in fail.get("offending_files", []):
+                            clean = off.replace("\\", "/").lstrip("/")
+                            if not (clean.startswith("tests/") or Path(clean).name.startswith("test_") or clean.endswith("_test.py")):
+                                impl_files.append(clean)
+                if not impl_files:
+                    impl_files = ["src/main.py"]
+
+                t_heal = self.router.route_ticket(
+                    ticket_id="HEAL-PROD-001",
+                    title="Repair product bug causing test failure",
+                    complexity=2,
+                    allowed_files=list(dict.fromkeys(impl_files)),
+                    acceptance_criteria=failure_context.get("acceptance_criteria", []),
+                    depends_on=[],
+                )
+                tickets = [t_heal]
+            else:  # TEST_BUG or FLAKY_TEST
+                test_files = [
+                    f for f in all_allowed
+                    if (f.startswith("tests/") or Path(f).name.startswith("test_") or f.endswith("_test.py"))
+                ]
+                if not test_files:
+                    test_files = ["tests/test_calc.py"]
+
+                t_heal = self.router.route_ticket(
+                    ticket_id="HEAL-TEST-001",
+                    title=f"Repair test file ({classification})",
+                    complexity=2,
+                    allowed_files=list(dict.fromkeys(test_files)),
+                    acceptance_criteria=failure_context.get("acceptance_criteria", []),
+                    depends_on=[],
+                )
+                tickets = [t_heal]
+        else:
+            raise ValueError(f"Unknown sprint mode '{mode}'. Must be 'story' or 'heal'.")
+
+        # 2. Schedule tickets with SprintDAGScheduler.topological_sort
+        ordered_tickets = SprintDAGScheduler.topological_sort(tickets)
+        sprint_id = f"sprint_{int(time.time())}"
+        self.store.save_sprint(
+            sprint_id=sprint_id,
+            status="ACTIVE",
+            failure_context={"mode": mode, "raw_output": failure_output or ""},
+            tickets=ordered_tickets,
+        )
+
+        adapter = HermesLLMAdapter(self.workspace_path)
+        reader = self.write_gate.reader
+        accumulated_patches: Dict[str, str] = {}
+
+        # 3. Execute tickets with escalation loop
+        for ticket in ordered_tickets:
+            if "WRITER" in ticket.ticket_id:
+                agent_role = AgentRole.TEST_CASE_WRITER_AGENT
+            elif "HEAL-TEST" in ticket.ticket_id:
+                agent_role = AgentRole.TEST_HEALER_AGENT
+            else:
+                agent_role = AgentRole.DEVELOPER_AGENT
+
+            def worker_fn(t: SubTaskTicket, tier: str, esc_prompt: Optional[str]) -> WorkerProposal:
+                f_contents = reader.read_allowed_files(t.allowed_files)
+                for f, content in accumulated_patches.items():
+                    if f in t.allowed_files:
+                        f_contents[f] = content
+                patch_map = adapter.propose_patch(
+                    agent_role=agent_role,
+                    ticket=t,
+                    tier=tier,
+                    file_contents=f_contents,
+                    instruction=esc_prompt or "",
+                )
+                return WorkerProposal(
+                    ticket_id=t.ticket_id,
+                    worker_agent=agent_role.value,
+                    model_tier=tier,
+                    proposed_changes=patch_map,
+                )
+
+            allow_tests = agent_role in (AgentRole.TEST_CASE_WRITER_AGENT, AgentRole.TEST_HEALER_AGENT)
+            executed_ticket, proposal = self.execute_ticket_with_escalation(
+                sprint_id=sprint_id,
+                ticket=ticket,
+                worker_fn=worker_fn,
+                allow_test_modification=allow_tests,
+            )
+
+            if executed_ticket.status != "DONE" or not proposal:
+                return {
+                    "status": "FAILED",
+                    "sprint_id": sprint_id,
+                    "ticket_id": ticket.ticket_id,
+                    "error": f"Ticket failed all escalation tiers: {ticket.ticket_id}",
+                    "attempts": ticket.attempt_history,
+                }
+
+            accumulated_patches.update(proposal.proposed_changes)
+
+        # 4. Stage approved changes into HumanWriteGateController
+        combined_proposal = WorkerProposal(
+            ticket_id=ordered_tickets[-1].ticket_id,
+            worker_agent="ScrumMasterOrchestrator",
+            model_tier=ordered_tickets[-1].assigned_tier,
+            proposed_changes=accumulated_patches,
+        )
+        stage_id = self.write_gate.stage_proposal(
+            sprint_id=sprint_id,
+            ticket=ordered_tickets[-1],
+            proposal=combined_proposal,
+        )
+
+        # 5. Handle approval / verification
+        cmd = pytest_cmd or [sys.executable, "-m", "pytest", "-q"]
+
+        def verify_fn() -> bool:
+            v_proc = subprocess.run(cmd, cwd=str(self.workspace_path), capture_output=True, text=True)
+            return v_proc.returncode == 0
+
+        if auto_approve:
+            res = self.write_gate.approve_proposal(sprint_id, verification_fn=verify_fn)
+            return res
+
+        # 6. Awaiting manual approval
+        return {
+            "status": "AWAITING_APPROVAL",
+            "sprint_id": sprint_id,
+            "proposal_id": stage_id,
+            "diff": self.write_gate.get_diff_summary(sprint_id),
+            "tickets": [asdict(t) for t in ordered_tickets],
+        }

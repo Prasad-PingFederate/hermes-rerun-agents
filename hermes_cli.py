@@ -26,7 +26,16 @@ from ast_patch_guard import ASTPatchGuard
 from ci_failure_ingestor import CIFailureIngestor
 from core.time_machine.engine import TimeMachineEngine
 from hermes_workers import AutomationTesterAgent, DeveloperAgent, WorkerProposal
-from llm_provider_adapter import AGENT_SKILL_REGISTRY, AgentRole, HermesLLMAdapter
+from llm_provider_adapter import (
+    AGENT_SKILL_REGISTRY,
+    ORDERED_PROVIDERS,
+    PROVIDERS_CONFIG,
+    ROLE_CALLS_LLM,
+    AgentRole,
+    HermesLLMAdapter,
+    resolve_model_for_call,
+    resolve_provider,
+)
 from qa_critic_reviewer import QACriticAgent
 from sandbox_executor import SandboxExecutor
 from scrum_master_orchestrator import ScrumMasterOrchestrator
@@ -35,14 +44,31 @@ from write_gate_controller import HumanWriteGateController
 
 
 def print_agents_table() -> None:
-    """Print the 8-Agent Role, Tier, Skills & Boundaries table."""
+    """Print the 8-Agent Role, Tier, Skills & Boundaries table with resolved provider and model."""
     print("=" * 80)
     print("               HERMES MULTI-AGENT ORCHESTRATOR — 8-AGENT REGISTRY")
     print("=" * 80)
 
     for idx, (role_name, defn) in enumerate(AGENT_SKILL_REGISTRY.items(), 1):
+        calls_llm = ROLE_CALLS_LLM.get(role_name, False)
+        prov = resolve_provider(role_name)
+        if calls_llm and prov != "none":
+            try:
+                resolved_prov, resolved_model = resolve_model_for_call(role_name, defn.tier, prov)
+            except Exception:
+                resolved_prov, resolved_model = prov, "unconfigured"
+        elif calls_llm:
+            resolved_prov = "none"
+            resolved_model = "LocalHeuristicEngine"
+        else:
+            resolved_prov = "none"
+            resolved_model = "No LLM (Deterministic Code / Python Gate)"
+
         print(f"\n[{idx}] {role_name.upper()}")
         print(f"    Tier:             {defn.tier}")
+        print(f"    Calls LLM:        {calls_llm}")
+        print(f"    Provider:         {resolved_prov}")
+        print(f"    Model:            {resolved_model}")
         print(f"    Escalation Path:  {defn.escalation_path}")
         print(f"    Role:             {defn.role_description}")
         print("    Core Skills:")
@@ -57,6 +83,26 @@ def print_agents_table() -> None:
 
 def cmd_agents(args: argparse.Namespace) -> int:
     print_agents_table()
+    return 0
+
+
+def cmd_providers(args: argparse.Namespace) -> int:
+    active = resolve_provider()
+    print("=" * 105)
+    print("                 HERMES MULTI-AGENT ORCHESTRATOR — LLM PROVIDER REGISTRY")
+    print("=" * 105)
+    print(f"{'PROVIDER':<18} | {'WIRE':<12} | {'BASE URL ENV / DEFAULT':<35} | {'KEY ENV':<20} | {'MODEL ENV'}")
+    print("-" * 105)
+    for p in ORDERED_PROVIDERS:
+        cfg = PROVIDERS_CONFIG[p]
+        wire = cfg["wire"]
+        base = cfg.get("base_url_env") or cfg.get("default_base_url") or "custom"
+        key = cfg.get("key_env") or "none"
+        model = cfg.get("model_env") or "none"
+        marker = " [*ACTIVE*]" if p == active else ""
+        print(f"{p:<18} | {wire:<12} | {base:<35} | {key:<20} | {model}{marker}")
+    print("-" * 105)
+    print(f"\nActive / Resolved Provider: {active.upper() if active != 'none' else 'NONE (LocalHeuristicEngine offline)'}")
     return 0
 
 
@@ -93,141 +139,53 @@ def cmd_run(args: argparse.Namespace) -> int:
     auto_approve = args.auto_approve
 
     print(f"🚀 [Hermes Run] Initializing proactive sprint for story: '{story}'")
-    print(f"   Scope: {scope or 'auto-inferred'}")
-
-    ingestor = CIFailureIngestor(workspace)
-    story_context = ingestor.ingest_user_story(story, target_scope=scope)
-
     orchestrator = ScrumMasterOrchestrator(workspace)
-    sprint_data = orchestrator.create_sprint_plan({
-        "tickets": [
-            {
-                "ticket_id": "STORY-001",
-                "title": f"Implement story: {story[:40]}",
-                "complexity": 3,
-                "allowed_files": story_context["allowed_files"],
-                "acceptance_criteria": story_context["acceptance_criteria"],
-            }
-        ]
-    })
-    sprint_id = sprint_data["sprint_id"]
-    tickets = sprint_data["tickets"]
-    ticket_obj = orchestrator.router.route_ticket(
-        ticket_id=tickets[0]["ticket_id"],
-        title=tickets[0]["title"],
-        complexity=tickets[0]["complexity"],
-        allowed_files=tickets[0]["allowed_files"],
-        acceptance_criteria=tickets[0]["acceptance_criteria"],
+    res = orchestrator.run_sprint(
+        mode="story",
+        story=story,
+        scope=scope,
+        auto_approve=auto_approve,
     )
-
-    # DeveloperAgent synthesizes solution
-    adapter = HermesLLMAdapter(workspace)
-    gate_controller = HumanWriteGateController(workspace, orchestrator.tm, orchestrator.store)
-
-    file_contents = gate_controller.reader.read_allowed_files(ticket_obj.allowed_files)
-    proposed_files = adapter.propose_patch(AgentRole.DEVELOPER_AGENT, ticket_obj, ticket_obj.assigned_tier, file_contents)
-
-    proposal = WorkerProposal(
-        ticket_id=ticket_obj.ticket_id,
-        worker_agent=AgentRole.DEVELOPER_AGENT.value,
-        model_tier=ticket_obj.assigned_tier,
-        proposed_changes=proposed_files,
-    )
-
-    # Review with AST Patch Guard and QA Critic
-    ast_res = ASTPatchGuard.analyze(workspace, proposed_files, ticket=ticket_obj)
-    if not ast_res["valid"]:
-        print(f"❌ AST Patch Guard Rejected: {ast_res['reasons']}")
-        return 1
-
-    qa_res = QACriticAgent.review_worker_output(ticket_obj, proposed_files)
-    if not qa_res.approved:
-        print(f"❌ QA Critic Rejected: {qa_res.rejection_reasons}")
-        return 1
-
-    # Stage proposal
-    gate_controller.stage_proposal(sprint_id, ticket_obj, proposal)
-    print(f"✅ Staged proposal for sprint '{sprint_id}' awaiting write gate.")
-
-    # Approve and Apply
-    res = gate_controller.approve_and_apply(sprint_id, auto_approve=auto_approve, interactive=not auto_approve)
-    if res["success"]:
-        print(f"🎉 Applied changes safely! Pre-apply snapshot: {res['snapshot_id']}")
+    if res.get("status") in ("APPLIED", "COMPLETED") or res.get("success"):
+        print(f"🎉 Applied changes safely! Snapshot: {res.get('snapshot_id')}")
+        return 0
+    elif res.get("status") == "AWAITING_APPROVAL":
+        print(f"⚠️ Staged proposal awaiting approval. Proposal ID: {res.get('proposal_id')}")
+        print(res.get("diff", ""))
         return 0
     else:
-        print(f"⚠️ Staged: {res.get('status')} - {res.get('message', res.get('error'))}")
-        return 0 if res.get("status") == "AWAITING_APPROVAL" else 1
+        print(f"❌ Sprint failed: {res.get('error', res.get('status'))}")
+        return 1
 
 
 def cmd_heal(args: argparse.Namespace) -> int:
     workspace = Path.cwd().resolve()
-    pytest_cmd = args.pytest_cmd.split()
+    pytest_cmd = args.pytest_cmd.split() if args.pytest_cmd else ["pytest", "-q"]
     auto_approve = args.auto_approve
 
     print(f"🔍 [Hermes Heal] Running test suite: {' '.join(pytest_cmd)}")
-    proc = subprocess.run(pytest_cmd, cwd=str(workspace), capture_output=True, text=True)
-
-    if proc.returncode == 0:
+    orchestrator = ScrumMasterOrchestrator(workspace)
+    res = orchestrator.run_sprint(
+        mode="heal",
+        pytest_cmd=pytest_cmd,
+        auto_approve=auto_approve,
+    )
+    if res.get("status") in ("APPLIED", "COMPLETED") or res.get("success"):
+        print(f"🎉 Heal complete and verified! Snapshot: {res.get('snapshot_id')}")
+        return 0
+    elif res.get("status") == "PASSED":
         print("✅ All tests passed! No test healing required.")
         return 0
-
-    print("⚠️ Test failure detected. Initiating Hermes reactive healing...")
-    ingestor = CIFailureIngestor(workspace)
-    failure_context = ingestor.ingest_failure_output(proc.stdout + "\n" + proc.stderr)
-
-    orchestrator = ScrumMasterOrchestrator(workspace)
-    sprint_data = orchestrator.create_sprint_plan({
-        "tickets": [
-            {
-                "ticket_id": "HEAL-001",
-                "title": "Repair failing tests and offending application code",
-                "complexity": 3,
-                "allowed_files": failure_context["allowed_files"],
-                "acceptance_criteria": failure_context["acceptance_criteria"],
-            }
-        ]
-    })
-    sprint_id = sprint_data["sprint_id"]
-    ticket_dict = sprint_data["tickets"][0]
-    ticket_obj = orchestrator.router.route_ticket(
-        ticket_id=ticket_dict["ticket_id"],
-        title=ticket_dict["title"],
-        complexity=ticket_dict["complexity"],
-        allowed_files=ticket_dict["allowed_files"],
-        acceptance_criteria=ticket_dict["acceptance_criteria"],
-    )
-
-    adapter = HermesLLMAdapter(workspace)
-    gate_controller = HumanWriteGateController(workspace, orchestrator.tm, orchestrator.store)
-    file_contents = gate_controller.reader.read_allowed_files(ticket_obj.allowed_files)
-
-    proposed_files = adapter.propose_patch(AgentRole.DEVELOPER_AGENT, ticket_obj, ticket_obj.assigned_tier, file_contents)
-    proposal = WorkerProposal(
-        ticket_id=ticket_obj.ticket_id,
-        worker_agent=AgentRole.DEVELOPER_AGENT.value,
-        model_tier=ticket_obj.assigned_tier,
-        proposed_changes=proposed_files,
-    )
-
-    # Test proposal in isolated sandbox first (repeat=3)
-    sandbox = SandboxExecutor(workspace)
-    print("🧪 Testing proposed fix in isolated ephemeral sandbox (repeat=3)...")
-    multi_res = sandbox.run_tests(pytest_cmd, repeat=3, proposed_changes=proposed_files)
-
-    if multi_res.classification != "PASSED":
-        print(f"❌ Sandbox verification failed: {multi_res.classification} ({multi_res.pass_count}/3 passed)")
-        return 1
-
-    print("✅ Sandbox tests passed (3/3 green). Staging at write gate...")
-    gate_controller.stage_proposal(sprint_id, ticket_obj, proposal)
-
-    res = gate_controller.approve_and_apply(sprint_id, auto_approve=auto_approve, interactive=not auto_approve)
-    if res["success"]:
-        print(f"🎉 Healed successfully! Snapshot ID: {res['snapshot_id']}")
+    elif res.get("status") == "ENVIRONMENT_NOISE":
+        print(f"⚠️ {res.get('message', 'Environment noise detected')}")
+        return 0
+    elif res.get("status") == "AWAITING_APPROVAL":
+        print(f"⚠️ Staged heal proposal awaiting approval. Proposal ID: {res.get('proposal_id')}")
+        print(res.get("diff", ""))
         return 0
     else:
-        print(f"ℹ️ Status: {res.get('status')} - {res.get('message', res.get('error'))}")
-        return 0 if res.get("status") == "AWAITING_APPROVAL" else 1
+        print(f"❌ Heal failed: {res.get('error', res.get('status'))}")
+        return 1
 
 
 def cmd_approve(args: argparse.Namespace) -> int:
@@ -261,6 +219,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     # agents
     subparsers.add_parser("agents", help="List the 8 agent roles, tiers, skills, and safety boundaries")
+
+    # providers
+    subparsers.add_parser("providers", help="List supported LLM providers and show active provider")
 
     # status
     subparsers.add_parser("status", help="Show sprint store status and audit events")
@@ -297,6 +258,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     commands = {
         "agents": cmd_agents,
+        "providers": cmd_providers,
         "status": cmd_status,
         "run": cmd_run,
         "heal": cmd_heal,
@@ -313,3 +275,4 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+

@@ -493,7 +493,19 @@ class TestHermesFullPipeline(unittest.TestCase):
                     model_tier=tier,
                     proposed_changes={
                         "calculator.py": "def multiply(a: int, b: int) -> int:\n    return a * b\n",
-                        "tests/test_calc.py": "from calculator import multiply\ndef test_multiply():\n    assert multiply(3, 4) == 12\n",
+                        "tests/test_calc.py": (
+                            "from calculator import add, divide, multiply\n"
+                            "import pytest\n\n"
+                            "def test_add(sample_numbers):\n"
+                            "    a, b = sample_numbers\n"
+                            "    assert add(a, b) == 15\n\n"
+                            "def test_divide():\n"
+                            "    assert divide(10, 2) == 5.0\n"
+                            "    with pytest.raises(ZeroDivisionError):\n"
+                            "        divide(10, 0)\n\n"
+                            "def test_multiply():\n"
+                            "    assert multiply(3, 4) == 12\n"
+                        ),
                     },
                 )
 

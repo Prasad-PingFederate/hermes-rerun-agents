@@ -12,6 +12,7 @@ import sys
 import tempfile
 import time
 from dataclasses import dataclass
+from sandbox_executor import ExecutionRun, SandboxExecutor
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -35,6 +36,7 @@ class SandboxRunner:
     def __init__(self, workspace_path: Optional[str | Path] = None, timeout_seconds: int = 300):
         self.workspace_path = Path(workspace_path or Path.cwd()).resolve()
         self.timeout_seconds = timeout_seconds
+        self.executor = SandboxExecutor(self.workspace_path)
 
     @staticmethod
     def is_pytest_available() -> bool:

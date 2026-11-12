@@ -1,170 +1,240 @@
-# 🤖 Hermes + Rerun Healer Agents
+# 🤖 Hermes Multi-Agent Orchestrator
 
-> **Local Healer Experiment**
-
-[![Tests](https://img.shields.io/badge/tests-passing-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-72%20passed-brightgreen.svg)]()
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)]()
+[![Standard Library](https://img.shields.io/badge/dependencies-zero%20external%20SDKs-success.svg)]()
 [![License](https://img.shields.io/badge/license-AGPL--3.0-orange.svg)](LICENSE)
 
-This repository is a local healer experiment with its own `.tm_snapshots` store, separate from the Hermes catalog plugin `time-machine`. It explores automated failure triage, multimodal diagnosis, and non-destructive snapshot/rollback mechanisms.
-
-> **Notice**: This is an experimental local project and is completely separate from the approved Hermes catalog plugin `time-machine` (and `ddaikodaiko/hermes-time-machine`).
-
-> **Note on Rerun Orchestration**: By default, task state and human approval gates are managed locally via a lightweight, deterministic JSON-backed orchestrator stored in `.rerun_tasks/tasks.json`. External Rerun servers are only queried if `RERUN_SERVER_URL` is explicitly configured.
+**Hermes Multi-Agent Orchestrator** is an enterprise-grade autonomous software engineering and self-healing system built on a hierarchical multi-model architecture. It coordinates 8 specialized agent roles across 4 competence tiers with deterministic Scope Gates, an AST Test-Tampering Guard, automated multi-tier escalation, a durable SQLite state store, and a safety-first Human Write-Gate backed by a SHA-256 TimeMachine snapshot engine.
 
 ---
 
-## 🎯 The Core Problem & Solution
+## 🏗️ The 8-Agent Hierarchy & Allowed Scopes
 
-* **The Problem with Autonomous AI Agents**: When AI agents are given freedom to write code, edit tests, or execute terminal commands, they can introduce silent regressions, syntax breakages, line-ending corruption, or infinite retry loops.
-* **The Solution**: 
-  1. **Orchestrator & Human Write Gate**: Tasks advance through explicit states (`PENDING -> RUNNING -> AWAITING_APPROVAL -> COMPLETED / ROLLED_BACK`). **Patches are never written to the caller's working tree while a fix is only proposed.** Changes are tested strictly inside an isolated sandbox copy, holding for human approval before promotion.
-  2. **Local Time Machine Engine**: Deterministic, non-destructive file tree snapshots stored in `.tm_snapshots/store/<id>/` before every mutating action. Does not execute destructive `git reset --hard` or `git clean`. If an attempted fix fails or regresses the codebase, the engine executes a safe rollback by copying snapshot files back, including an automated "rollback-of-a-rollback" safety snapshot.
-  3. **Multimodal Failure Diagnosis**: Accepts screenshots, DOM state, traceback logs, and code context to diagnose root causes and propose minimal unified diffs via Google Gemini Flash (using direct REST API calls) or local Ollama models.
+Every agent role is governed by a strict system prompt, explicit ModelTier, assigned tools, and inviolable scope boundaries enforced at the Python layer:
 
----
-
-## 🏗️ System Architecture
-
-```text
-┌───────────────────────────────────────────────────────────────────────┐
-│                        Rerun Supervisor & Web UI                       │
-│    (Task Scheduling, Webhook Triggers, Human Approval Review Card)     │
-└───────────────────────────────┬───────────────────────────────────────┘
-                                    │ Dispatches Task
-                                    ▼
-┌────────────────────────────────────────────────────────────────────────┐
-│                      Hermes Sandbox Controller                         │
-│   1. Snapshot Baseline T0 (.tm_snapshots/ledger.json)                  │
-│   2. Execute Test in Isolated Workspace Copy                           │
-│   3. Gemini Flash / Ollama Multimodal Root Cause Diagnosis             │
-│   4. Apply Agent Remediation Patch strictly in Isolated Sandbox        │
-│   5. Re-run Verification Suite in Sandbox Copy                         │
-│   6. On Success: Task -> AWAITING_APPROVAL (Caller Workspace Untouched)│
-│   7. On Approval: Promote Verified Fix -> COMPLETED                   │
-│   8. On Rejection: Rollback to Baseline T0 -> ROLLED_BACK              │
-└─────────────────────────────────────────────────────────────────────┘
-```
+| Agent Role | Model Tier | Calls LLM | Allowed Scope | Key Responsibilities & Invariants |
+| :--- | :--- | :---: | :--- | :--- |
+| **ScrumMasterOrchestrator** | `TIER_1_TECH_LEAD` | Yes | Global governance | Owns sprint planning (`create_sprint_plan`), topological DAG scheduling, ticket routing, escalation governance, and write-gate lifecycle. Never bypasses security or QA gates. |
+| **RequirementsAgent** | `TIER_2_SENIOR_SWE` | Yes | Read-only workspace | Slices user stories and stack traces into deterministic Acceptance Criteria (`AC-1..N`), Edge Cases (`EC-1..N`), and context slices using AST analysis. Read-only; never edits files. |
+| **DeveloperAgent** | `TIER_3_JUNIOR_SWE` | Yes | Implementation files only (`src/`, `lib/`, etc.) | Implements features and resolves product defects. **Forbidden from modifying test files (`tests/*`)** to make failing code pass. |
+| **TestCaseWriterAgent** | `TIER_3_JUNIOR_SWE` | Yes | Test files only (`tests/*`) | Proactively authors unit, integration, and Playwright tests from acceptance criteria. **Forbidden from eroding assertions or skipping tests.** |
+| **TestHealerAgent** | `TIER_3_JUNIOR_SWE` | Yes | Test files only (`tests/*`) | Surgically repairs selectors, mocks, and fixtures for confirmed `TEST_BUG` or `FLAKY_TEST` tickets. **Forbidden from editing implementation code or weakening assertions.** |
+| **AutomationTesterAgent** | `TIER_3_JUNIOR_SWE` | **No** (Python) | Ephemeral Git Worktree | Executes test suites 3x (`repeat=3`) in isolated worktrees, collects JUnit XML/traces, classifies failures, and triggers healer tickets only for confirmed test bugs. |
+| **QACriticAgent** | `TIER_4_QA_CRITIC` | **No** (Python) | Read-only proposal review | Evaluates proposals against acceptance criteria rubrics and edge-case error paths. Rejection forces escalation (`TIER_3 -> TIER_2 -> TIER_1`). |
+| **SecurityBlastRadiusAgent** | `TIER_4_QA_CRITIC` | **No** (Python) | Read-only AST audit | Audits proposals for constant-time crypto (`hmac.compare_digest`), SQL injection, `shell=True`, and path traversal. Blocks write-gate on critical findings. |
 
 ---
 
-## 📁 Repository Structure
+## 🌐 Any Model Can Be Any Agent (18 LLM Providers)
 
-```text
-hermes-rerun-agents/
-├── core/
-│   ├── time_machine/
-│   │   ├── engine.py              # Safe tree snapshots, surgical restore & rollback safety
-│   ├── healer/
-│   │   ├── gemini_flash.py        # Gemini Flash multimodal vision & Ollama diagnostician
-│   ├── rerun_bridge/
-│   │   ├── orchestrator.py        # Task queue, status lifecycle & human approval gates
-│   └── sandbox/
-│       └── runner.py              # Isolated subprocess execution & temporary copy isolation
-├── agents/
-│   ├── breakglass_responder_healer.py # Optional domain skill. Not part of the public example.
-│   ├── ci_detective.py            # CI triage, log parser & parallel job isolation router
-│   └── test_healer_agent.py       # Full Try → Diagnose → Verify → Approval Write-Gate pipeline
-├── demo/
-│   └── simulate_stage_breakglass_heal.py # Legacy demo. Prefer scripts/run_live_demo.py
-├── scripts/
-│   ├── run_live_demo.py           # Generic ledger heal: sandbox, write gate, rollback
-│   └── syntax_guard.py            # Preflight Python 3.10 syntax compatibility checker
-├── tests/
-│   ├── fixtures/
-│   │   ├── bad_py310_fstring.py.txt          # Fixture with illegal Py3.10 f-string backslash
-│   │   └── gha_workflow_job_failure.json     # GitHub Actions workflow_job failure payload
-│   └── test_platform.py           # Comprehensive unit and integration test suite
-├── server.py                      # FastAPI server for GitHub Actions webhooks & manual triggers
-├── requirements.txt               # Package dependencies (FastAPI, Uvicorn, Pydantic, Requests, Pytest)
-├── .env.example                   # Environment configuration template
-├── LICENSE                        # AGPL-3.0 License
-└── README.md
-```
+Hermes uses standard library `urllib.request` exclusively—**no OpenAI, Anthropic, or Google SDKs are required**. A single unified client (`HermesLLMAdapter.complete`) routes to any local engine or cloud provider across three wire protocols:
+* `openai_chat`: Standard OpenAI-compatible chat completions (`POST {base}/chat/completions`)
+* `gemini`: Google Generative Language REST API (`POST https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent`)
+* `anthropic`: Anthropic Messages REST API (`POST https://api.anthropic.com/v1/messages`)
 
----
+### Supported Provider Registry
 
-## 🚀 Quickstart
+| Provider | Wire Protocol | Default Base URL | Base URL Env Var | API Key Env Var | Default Model Env Var |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| `ollama` | `openai_chat` | `http://127.0.0.1:11434/v1` | `OLLAMA_BASE_URL` | *(None / local)* | `OLLAMA_MODEL` |
+| `lmstudio` | `openai_chat` | `http://127.0.0.1:1234/v1` | `LMSTUDIO_BASE_URL` | *(None / local)* | `LOCAL_LLM_MODEL` |
+| `llamacpp` | `openai_chat` | `http://127.0.0.1:8080/v1` | `LLAMACPP_BASE_URL` | *(None / local)* | `LOCAL_LLM_MODEL` |
+| `vllm` | `openai_chat` | `http://127.0.0.1:8000/v1` | `LOCAL_LLM_BASE_URL` | `LOCAL_LLM_API_KEY` | `LOCAL_LLM_MODEL` |
+| `tgi` | `openai_chat` | `http://127.0.0.1:8080/v1` | `LOCAL_LLM_BASE_URL` | `LOCAL_LLM_API_KEY` | `LOCAL_LLM_MODEL` |
+| `localai` | `openai_chat` | `http://127.0.0.1:8080/v1` | `LOCALAI_BASE_URL` | `LOCAL_LLM_API_KEY` | `LOCAL_LLM_MODEL` |
+| `openai_compatible` | `openai_chat` | `http://127.0.0.1:8000/v1` | `LOCAL_LLM_BASE_URL` | `LOCAL_LLM_API_KEY` | `LOCAL_LLM_MODEL` |
+| `openai` | `openai_chat` | `https://api.openai.com/v1` | `OPENAI_BASE_URL` | `OPENAI_API_KEY` | `OPENAI_MODEL` |
+| `grok` | `openai_chat` | `https://api.x.ai/v1` | `XAI_BASE_URL` | `XAI_API_KEY` | `XAI_MODEL` |
+| `groq` | `openai_chat` | `https://api.groq.com/openai/v1` | `GROQ_BASE_URL` | `GROQ_API_KEY` | `GROQ_MODEL` |
+| `openrouter` | `openai_chat` | `https://openrouter.ai/api/v1` | `OPENROUTER_BASE_URL` | `OPENROUTER_API_KEY` | `OPENROUTER_MODEL` |
+| `mistral` | `openai_chat` | `https://api.mistral.ai/v1` | `MISTRAL_BASE_URL` | `MISTRAL_API_KEY` | `MISTRAL_MODEL` |
+| `deepseek` | `openai_chat` | `https://api.deepseek.com/v1` | `DEEPSEEK_BASE_URL` | `DEEPSEEK_API_KEY` | `DEEPSEEK_MODEL` |
+| `together` | `openai_chat` | `https://api.together.xyz/v1` | `TOGETHER_BASE_URL` | `TOGETHER_API_KEY` | `TOGETHER_MODEL` |
+| `fireworks` | `openai_chat` | `https://api.fireworks.ai/inference/v1` | `FIREWORKS_BASE_URL` | `FIREWORKS_API_KEY` | `FIREWORKS_MODEL` |
+| `azure_openai` | `openai_chat` | `https://{resource}.openai.azure.com` | `AZURE_OPENAI_BASE_URL` | `AZURE_OPENAI_API_KEY` | `AZURE_OPENAI_DEPLOYMENT` |
+| `gemini` | `gemini` | `https://generativelanguage.googleapis.com`| `GEMINI_BASE_URL` | `GEMINI_API_KEY` | `GEMINI_MODEL` |
+| `anthropic` | `anthropic` | `https://api.anthropic.com` | `ANTHROPIC_BASE_URL` | `ANTHROPIC_API_KEY` | `ANTHROPIC_MODEL` |
 
-### 1. Set Up Environment
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-```
+> **Offline Fallback**: `LocalHeuristicEngine` runs **only** when `resolve_provider()` returns `"none"` (no API keys and no local server configured). If a provider is configured and returns an HTTP error, the system raises an exception immediately without falling back to heuristics.
 
-### 2. Configure API Keys & Tokens
-Copy `.env.example` to `.env`:
-```powershell
-Copy-Item .env.example .env
-```
-Key configuration settings:
+### Mixed-Team Configuration Example (`.env`)
+
+Assign different models and providers to individual agents (e.g. Groq for Tech Lead, local Ollama for junior workers, Claude for QA):
+
 ```env
-# 1. AI Diagnostician
-GEMINI_API_KEY=your_actual_key_here
-GEMINI_MODEL=gemini-2.5-flash
+# Global Default Provider
+HERMES_LLM_PROVIDER=ollama
+OLLAMA_BASE_URL=http://127.0.0.1:11434
+OLLAMA_MODEL=qwen2.5-coder:7b
 
-# 2. Server & Security Gate
-RERUN_SERVER_HOST=127.0.0.1
-RERUN_SERVER_PORT=8000
-HERMES_API_TOKEN=your_secure_token_here
-WEBHOOK_SECRET=your_github_webhook_secret_here
+# Tier Model Defaults
+RERUN_TIER1_MODEL=llama-3.3-70b-versatile
+RERUN_TIER2_MODEL=qwen2.5-coder:14b
+RERUN_TIER3_MODEL=qwen2.5-coder:7b
+RERUN_TIER4_MODEL=claude-3-7-sonnet-20250219
 
-# 3. Target Workspace (defaults to current working directory)
-TARGET_WORKSPACE_PATH=.
+# Per-Agent Overrides (provider:model syntax)
+HERMES_AGENT_SCRUM_MASTER_ORCHESTRATOR_MODEL=groq:llama-3.3-70b-versatile
+HERMES_AGENT_DEVELOPER_AGENT_MODEL=ollama:qwen2.5-coder:7b
+HERMES_AGENT_QA_CRITIC_AGENT_MODEL=anthropic:claude-3-7-sonnet-20250219
+
+# Provider Credentials
+GROQ_API_KEY=gsk_your_groq_key
+ANTHROPIC_API_KEY=sk-ant-your_claude_key
 ```
 
-### 3. Run the Test Suite & Syntax Guard
+---
+
+## 🚦 Failure Classification & Scope Gate Routing
+
+When a test failure is ingested, `SandboxExecutor.classify_failure` analyzes the multi-run output across 5 deterministic categories:
+
+```text
+               pytest execution failure
+                          │
+          ┌───────────────┴───────────────┐
+          ▼                               ▼
+Intermittent pass/fail           Deterministic failure
+    [FLAKY_TEST]                          │
+          │                     Is environment broken?
+          │                     (Port, network, bin)
+          │                               │
+          │                   ┌───────────┴───────────┐
+          │                   ▼                       ▼
+          │          [ENVIRONMENT_NOISE]     Traceback inspection
+          │           (Aborts sprint;                 │
+          │            zero file edits)       ┌───────┴───────┐
+          │                                   ▼               ▼
+          │                            Product frames?   Test frames only?
+          │                            (src/, lib/, etc) (tests/ only)
+          │                                   │               │
+          │                                   ▼               ▼
+          │                            [PRODUCT_BUG]     [TEST_BUG]
+          │                                   │               │
+          │                                   ▼               ▼
+          │                            DeveloperAgent   TestHealerAgent
+          │                            (impl files only)(test files only)
+          ▼                                   │               │
+  TestHealerAgent                             └───────┬───────┘
+  (test files only)                                   ▼
+                                            Scope Gate Verification
+                                            (Rejects unauthorized paths)
+```
+
+1. **`PRODUCT_BUG`**: Exceptions originating in implementation files (`src/`, `lib/`, `app/`) or `DID NOT RAISE` failures.
+   * **Target Agent**: `DeveloperAgent`
+   * **Allowed Scope**: Implementation files only. Tests are strictly forbidden from `allowed_files`.
+2. **`TEST_BUG`**: Syntax errors in tests, fixture resolution failures, or assertions failing strictly inside `tests/`.
+   * **Target Agent**: `TestHealerAgent`
+   * **Allowed Scope**: Test files only. Implementation files are strictly forbidden from `allowed_files`.
+3. **`FLAKY_TEST`**: Intermittent pass/fail across 3 sandbox executions.
+   * **Target Agent**: `TestHealerAgent` (timing, locator drift, race condition repair).
+4. **`ENVIRONMENT_NOISE`**: Network timeouts, port collisions (`EADDRINUSE`), or missing system binaries.
+   * **Action**: Aborts the sprint immediately. Prevents hallucinated code changes.
+
+---
+
+## 🛡️ Zero Assertion Erosion
+
+`ASTPatchGuard` enforces zero assertion erosion across all test modifications:
+* **Forbidden**: Replacing assertions with `assert True`, `assert 1`, `1 == 1`, or `assert True is not False`.
+* **Forbidden**: Deleting existing test functions (`def test_*`).
+* **Forbidden**: Decreasing the count of assertions in any test file.
+* **Forbidden**: Injecting `@pytest.mark.skip`, `@pytest.mark.xfail`, `test.skip`, `test.fixme`, or `test.only`.
+
+---
+
+## 🔄 The Single Unified Pipeline
+
+All interfaces—`hermes_cli.py`, `scripts/run_live_demo.py`, and `server.py`—route through a single unified pipeline in `ScrumMasterOrchestrator.run_sprint`:
+
+```mermaid
+flowchart TD
+    A["Trigger: Story or CI Failure"] --> B{"Sprint Mode"}
+    B -->|"story"| C["Decompose into Writer + Developer Tickets"]
+    B -->|"heal"| D["SandboxExecutor: 3x Test Execution & 5-Way Triage"]
+    D -->|"ENVIRONMENT_NOISE"| E["Abort Sprint (Zero Edits)"]
+    D -->|"PRODUCT_BUG / TEST_BUG"| F["Route Ticket with Partitioned Allowed Files"]
+    C --> G["SprintDAGScheduler: Topological DAG Sort"]
+    F --> G
+    G --> H["Worker Attempt (TIER_3 / TIER_2 / TIER_1)"]
+    H --> I{"Scope Gate Check"}
+    I -->|"Violation"| J["Escalate Tier (TIER_3 -> TIER_2 -> TIER_1)"]
+    I -->|"Pass"| K{"ASTPatchGuard & Security Audit"}
+    K -->|"Tampering / SEC finding"| J
+    K -->|"Pass"| L{"QACriticAgent (TIER_4 Rubric)"}
+    L -->|"Unaddressed AC"| J
+    L -->|"All Criteria PASS"| M["SprintStateStore: Persist Staged Proposal (SQLite)"]
+    J -->|"Tiers Exhausted"| N["Sprint Status: FAILED"]
+    J -->|"Higher Tier Available"| H
+    M --> O{"HumanWriteGate Approval"}
+    O -->|"Manual CLI / API"| P["Interactive Diff Review ([y/N])"]
+    O -->|"--auto-approve"| Q["TimeMachine Safety Snapshot (SHA-256 Manifest)"]
+    P -->|"Approved"| Q
+    P -->|"Rejected"| R["Sprint Status: REJECTED_BY_USER"]
+    Q --> S["Atomic Workspace File Application"]
+    S --> T{"Post-Apply Verification Test"}
+    T -->|"Pass (Exit 0)"| U["Sprint Status: APPLIED / COMPLETED 🎉"]
+    T -->|"Fail (Exit != 0)"| V["TimeMachine Surgical Rollback"]
+    V --> W["Sprint Status: ROLLED_BACK 🔄"]
+```
+
+---
+
+## 💻 CLI Commands
+
+The unified Hermes CLI provides full control over the multi-agent pipeline:
+
 ```powershell
-python -m unittest tests/test_platform.py -v
+# 1. Inspect the 8-Agent Registry, ModelTiers, and boundaries
+python hermes_cli.py agents
+
+# 2. Inspect the 18 LLM Providers and active configuration
+python hermes_cli.py providers
+
+# 3. Execute a Feature Story sprint (proactive test authoring + implementation)
+python hermes_cli.py run --story "Implement JWT authentication in auth.py" --scope "auth.py" "tests/test_auth.py" --auto-approve
+
+# 4. Execute an Autonomous Self-Healing sprint
+python hermes_cli.py heal --target-test "tests/test_ledger.py" --auto-approve
+
+# 5. Programmatically approve a staged sprint proposal
+python hermes_cli.py approve <sprint-id>
+
+# 6. Surgically rollback workspace to any TimeMachine snapshot
+python hermes_cli.py rollback <snapshot-id>
+```
+
+---
+
+## 🌐 FastAPI Server Endpoints
+
+The FastAPI server (`python server.py`) exposes unified endpoints backed by SQLite persistence (`SprintStateStore`):
+
+* `POST /api/sprint/run`: Run unified sprint pipeline (`mode="story"` or `mode="heal"`).
+* `GET /api/sprint/{id}`: Load sprint state, ticket DAG, and attempt history from SQLite.
+* `POST /api/sprint/{id}/approve`: Approve staged proposal, verify via test runner, and commit or rollback.
+* `GET /api/time-machine/snapshots`: List non-destructive snapshots in the integrity ledger.
+* `POST /api/time-machine/restore/{id}`: Restore workspace to any snapshot.
+* `GET /api/time-machine/snapshots/{id}/diff`: Git-free snapshot diffing via Python `difflib`.
+
+---
+
+## 🧪 Verification & Unit Testing
+
+Hermes is verified by 72 automated unit and integration tests:
+
+```powershell
+# Run the full test suite
+python -m pytest tests/ -v
+
+# Run the Phase 4 single-pipeline tests
+python -m pytest tests/test_phase4_single_pipeline.py -v
+
+# Run the live self-healing smoke demo (6 phases end-to-end)
+python scripts/run_live_demo.py
+
+# Verify Python 3.10 standard library compatibility
 python scripts/syntax_guard.py
 ```
-
-### 4. Run the End-to-End Simulation Demo
-Creates a temporary repo with a buggy in-memory ledger, heals it inside a sandbox, leaves the caller workspace untouched until approval, then rolls the fix back:
-```powershell
-python scripts/run_live_demo.py
-```
-
-### 5. Start the Webhook Server
-```powershell
-python server.py
-```
-API endpoints available at `http://127.0.0.1:8000`:
-* `POST /api/webhook/github-actions` - Webhook receiver (verifies `X-Hub-Signature-256` HMAC SHA256)
-* `POST /api/heal` - Trigger healing on a test file (requires `X-Hermes-Token`)
-* `GET /api/tasks` - List tasks and pending human approvals (requires `X-Hermes-Token`)
-* `POST /api/tasks/{task_id}/approve` - Human approval: Marks task COMPLETED (requires `X-Hermes-Token`)
-* `POST /api/tasks/{task_id}/apply` - Explicit apply: Promotes verified fix to workspace (requires `X-Hermes-Token`)
-* `POST /api/tasks/{task_id}/rollback` - Human rejection: Restores workspace to baseline snapshot (requires `X-Hermes-Token`)
-* `GET /api/time-machine/snapshots` - Query snapshots in ledger (requires `X-Hermes-Token`)
-
----
-
-## Worked Example: In-memory ledger deposit
-
-A pytest file expects `deposit` to reject a non-positive amount. The product code adds the amount anyway, so the suite fails.
-
-1. **Detection**
-   The sandbox run reports:
-   ```text
-   Failed: DID NOT RAISE ValueError
-   tests/test_ledger.py::test_deposit_rejects_negative
-   ```
-2. **Analysis**
-   Automation Tester classifies this as a product bug. The Developer ticket may change `src/InMemoryLedger.py` only. Test files stay out of scope.
-3. **Patch, still inside the sandbox**
-   The worker proposes a guard before the balance changes:
-   ```python
-   def deposit(self, amount: float) -> float:
-       if amount <= 0:
-           raise ValueError("Deposit amount must be strictly positive")
-       self._balance += amount
-       return self._balance
-   ```
-4. **Verification**
-   The same pytest command is run three times in an ephemeral worktree. The caller workspace is not modified.
-5. **Write gate**
-   A human, or `--auto-approve` in CI, accepts the diff. Time Machine writes a SHA-256 snapshot, then the patch is applied.
-6. **Rollback**
-   Rejecting the proposal, or a failed post-apply run, restores that snapshot. The suite fails again, which confirms the restore.

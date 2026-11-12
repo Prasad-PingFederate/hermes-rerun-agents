@@ -21,6 +21,9 @@ from agents.test_healer_agent import TestHealerAgent
 from core.rerun_bridge.orchestrator import RerunOrchestrator
 from core.time_machine.engine import TimeMachineEngine
 from core.time_machine.patch_guard import analyze_proposed_changes
+from scrum_master_orchestrator import ScrumMasterOrchestrator
+from sprint_state_store import SprintStateStore
+from write_gate_controller import HumanWriteGateController
 
 app = FastAPI(
     title="Hermes + Rerun Autonomous AI Platform",
@@ -32,8 +35,28 @@ WORKSPACE = Path(os.environ.get("TARGET_WORKSPACE_PATH", Path.cwd())).resolve()
 tm = TimeMachineEngine(WORKSPACE)
 orchestrator = RerunOrchestrator(WORKSPACE / ".rerun_tasks")
 healer_agent = TestHealerAgent(WORKSPACE)
+sprint_store = SprintStateStore(WORKSPACE / ".hermes_sprint_state.db")
+scrum_master = ScrumMasterOrchestrator(
+    workspace_path=WORKSPACE,
+    tm_engine=tm,
+    store=sprint_store,
+)
 
 TASK_ID_REGEX = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
+
+
+class SprintRunRequest(BaseModel):
+    mode: str = "story"
+    story: Optional[str] = None
+    failure_output: Optional[str] = None
+    scope: Optional[List[str]] = None
+    pytest_cmd: Optional[str] = None
+    auto_approve: bool = False
+
+
+class SprintApproveRequest(BaseModel):
+    verify: bool = True
+    pytest_cmd: Optional[str] = None
 
 
 class HealRequest(BaseModel):
@@ -373,6 +396,57 @@ def get_task_sprint_board(task_id: str):
         }
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/sprint/{sprint_id}", dependencies=[Depends(verify_hermes_token)])
+def get_sprint(sprint_id: str):
+    """Retrieve sprint details and ticket states from SprintStateStore."""
+    data = sprint_store.load_sprint(sprint_id)
+    if not data:
+        raise HTTPException(status_code=404, detail=f"Sprint '{sprint_id}' not found")
+    return {"status": "success", "sprint": data}
+
+
+@app.post("/api/sprint/run", dependencies=[Depends(verify_hermes_token)])
+def run_sprint_endpoint(req: SprintRunRequest):
+    """Execute unified multi-agent sprint pipeline (story or heal mode)."""
+    try:
+        res = scrum_master.run_sprint(
+            mode=req.mode,
+            story=req.story,
+            failure_output=req.failure_output,
+            scope=req.scope,
+            pytest_cmd=req.pytest_cmd,
+            auto_approve=req.auto_approve,
+        )
+        return res
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/sprint/{sprint_id}/approve", dependencies=[Depends(verify_hermes_token)])
+def approve_sprint_endpoint(sprint_id: str, req: SprintApproveRequest = SprintApproveRequest()):
+    """Approve staged proposal for sprint, verify via test command, and commit or rollback."""
+    staged = scrum_master.write_gate.get_staged_proposal(sprint_id)
+    if not staged:
+        raise HTTPException(status_code=404, detail=f"No staged proposal found for sprint '{sprint_id}'")
+
+    cmd = req.pytest_cmd or "pytest -q"
+    verification_fn = None
+    if req.verify:
+        def _verify():
+            import subprocess
+            p = subprocess.run(cmd, cwd=str(WORKSPACE), shell=True, capture_output=True)
+            return p.returncode == 0
+        verification_fn = _verify
+
+    try:
+        res = scrum_master.write_gate.approve_proposal(sprint_id, verification_fn=verification_fn)
+        return res
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

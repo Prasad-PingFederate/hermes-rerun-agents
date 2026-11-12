@@ -49,44 +49,73 @@ class HumanWriteGateController:
         proposal: WorkerProposal,
     ) -> str:
         """Stage an approved proposal for write-gate review."""
-        stage_id = f"stage_{ticket.ticket_id}_{int(time.time())}"
-        self._staged[sprint_id] = {
+        ticket_id = getattr(ticket, "ticket_id", str(ticket))
+        stage_id = f"stage_{ticket_id}_{int(time.time())}"
+        staged_data = {
             "stage_id": stage_id,
             "sprint_id": sprint_id,
-            "ticket_id": ticket.ticket_id,
+            "ticket_id": ticket_id,
             "ticket": ticket,
             "proposal": proposal,
             "staged_at": time.time(),
             "status": "AWAITING_WRITE_GATE",
         }
-        self.store.update_sprint_status(sprint_id, "AWAITING_WRITE_GATE")
+        self._staged[sprint_id] = staged_data
+        self._staged[stage_id] = staged_data
+        # Persist proposed_changes_json in SQLite store for restart durability
+        self.store.stage_proposal_state(
+            sprint_id=sprint_id,
+            ticket_id=ticket_id,
+            proposed_changes=proposal.proposed_changes,
+            assigned_tier=proposal.model_tier,
+            worker_agent=proposal.worker_agent,
+        )
         return stage_id
 
     def get_staged_proposal(self, sprint_id: str) -> Optional[Dict[str, Any]]:
-        """Retrieve staged proposal data for a sprint."""
+        """Retrieve staged proposal data for a sprint, falling back to disk store."""
         if sprint_id in self._staged:
             return self._staged[sprint_id]
+        for v in self._staged.values():
+            if v.get("stage_id") == sprint_id or v.get("sprint_id") == sprint_id:
+                return v
 
-        # Check disk store
+        # Check disk store across process restarts
         sprint_data = self.store.load_sprint(sprint_id)
-        if sprint_data and sprint_data.get("status") == "AWAITING_WRITE_GATE":
+        if sprint_data and sprint_data.get("status") in ("AWAITING_WRITE_GATE", "ACTIVE"):
             tickets = sprint_data.get("tickets", [])
-            if tickets:
-                t = tickets[0]
-                return {
-                    "stage_id": f"stage_{t.get('ticket_id')}",
-                    "sprint_id": sprint_id,
-                    "ticket_id": t.get("ticket_id"),
-                    "ticket": t,
-                    "proposal": WorkerProposal(
-                        ticket_id=t.get("ticket_id", ""),
-                        worker_agent="DeveloperAgent",
-                        model_tier=t.get("assigned_tier", "TIER_2_SENIOR_SWE"),
-                        proposed_changes=t.get("proposed_changes", {}),
-                    ),
-                    "status": "AWAITING_WRITE_GATE",
-                }
+            for t in tickets:
+                p_changes = t.get("proposed_changes", {})
+                if p_changes:
+                    reconstructed = {
+                        "stage_id": f"stage_{t.get('ticket_id')}",
+                        "sprint_id": sprint_id,
+                        "ticket_id": t.get("ticket_id"),
+                        "ticket": t,
+                        "proposal": WorkerProposal(
+                            ticket_id=t.get("ticket_id", ""),
+                            worker_agent=t.get("worker_agent", "DeveloperAgent"),
+                            model_tier=t.get("assigned_tier", "TIER_3_JUNIOR_SWE"),
+                            proposed_changes=p_changes,
+                        ),
+                        "status": "AWAITING_WRITE_GATE",
+                    }
+                    self._staged[sprint_id] = reconstructed
+                    return reconstructed
         return None
+
+    def approve_proposal(
+        self,
+        sprint_id: str,
+        verification_fn: Optional[Callable[[], bool]] = None,
+    ) -> Dict[str, Any]:
+        """Approve staged proposal, create TimeMachine snapshot, write files, and verify."""
+        return self.approve_and_apply(
+            sprint_id=sprint_id,
+            auto_approve=True,
+            interactive=False,
+            verification_fn=verification_fn,
+        )
 
     def get_diff_summary(self, sprint_id: str) -> str:
         """Generate human-readable unified diff summary for staged proposals."""
@@ -117,7 +146,7 @@ class HumanWriteGateController:
     def approve_and_apply(
         self,
         sprint_id: str,
-        auto_approve: bool = False,
+        auto_approve: bool = True,
         interactive: bool = False,
         verification_fn: Optional[Callable[[], bool]] = None,
     ) -> Dict[str, Any]:
@@ -201,3 +230,4 @@ class HumanWriteGateController:
     def rollback_snapshot(self, snapshot_id: str) -> Dict[str, Any]:
         """Restore workspace to specified TimeMachine snapshot."""
         return self.store.rollback_snapshot(snapshot_id, self.tm)
+

@@ -168,26 +168,26 @@ class QACriticAgent:
 
         # 1. Discover existing test content if DeveloperAgent only touched production files
         existing_test_files: Dict[str, str] = {}
-        candidate_dirs = [Path.cwd()]
-        if workspace_path:
-            candidate_dirs.append(Path(workspace_path))
+        ws = Path(workspace_path) if workspace_path else Path.cwd()
         allowed = getattr(ticket, "allowed_files", []) or []
 
-        for candidate_dir in candidate_dirs:
-            for f in allowed:
-                if "test" in f.lower() and f not in proposed_changes:
-                    target_p = candidate_dir / f.replace("\\", "/").lstrip("/")
-                    if target_p.is_file():
-                        try:
-                            existing_test_files[f] = target_p.read_text(encoding="utf-8")
-                        except Exception:
-                            pass
-            # Also search for tests/ directory if tests were not in allowed_files
-            tests_dir = candidate_dir / "tests"
+        # Check allowed_files for test files
+        for f in allowed:
+            if "test" in f.lower() and f not in proposed_changes:
+                target_p = ws / f.replace("\\", "/").lstrip("/")
+                if target_p.is_file():
+                    try:
+                        existing_test_files[f] = target_p.read_text(encoding="utf-8")
+                    except Exception:
+                        pass
+
+        # If DeveloperAgent was scoped to prod files only, discover test suite in ws / "tests"
+        if not existing_test_files and ws.is_dir():
+            tests_dir = ws / "tests"
             if tests_dir.is_dir():
                 for tp in tests_dir.glob("*.py"):
-                    rel_tp = str(tp.relative_to(candidate_dir)).replace("\\", "/")
-                    if rel_tp not in existing_test_files:
+                    rel_tp = str(tp.relative_to(ws)).replace("\\", "/")
+                    if rel_tp not in existing_test_files and rel_tp not in proposed_changes:
                         try:
                             existing_test_files[rel_tp] = tp.read_text(encoding="utf-8")
                         except Exception:

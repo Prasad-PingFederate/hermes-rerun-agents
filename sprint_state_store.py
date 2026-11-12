@@ -196,6 +196,75 @@ class SprintStateStore:
             conn.commit()
         self._append_audit("UPDATE_SPRINT_STATUS", {"sprint_id": sprint_id, "status": status})
 
+    def stage_proposal_state(
+        self,
+        sprint_id: str,
+        ticket_id: str,
+        proposed_changes: Dict[str, str],
+        assigned_tier: str = "TIER_3_JUNIOR_SWE",
+        worker_agent: str = "DeveloperAgent",
+    ) -> None:
+        """Persist staged proposal to database so it can be resumed/approved across process restarts."""
+        now = time.time()
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            # Ensure sprint exists or update status
+            cursor.execute("SELECT sprint_id FROM sprints WHERE sprint_id = ?", (sprint_id,))
+            if cursor.fetchone():
+                cursor.execute(
+                    "UPDATE sprints SET status = 'AWAITING_WRITE_GATE', updated_at = ? WHERE sprint_id = ?",
+                    (now, sprint_id),
+                )
+            else:
+                cursor.execute(
+                    "INSERT INTO sprints (sprint_id, status, failure_context_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                    (sprint_id, "AWAITING_WRITE_GATE", "{}", now, now),
+                )
+
+            cursor.execute(
+                "SELECT ticket_id FROM tickets WHERE ticket_id = ? AND sprint_id = ?",
+                (ticket_id, sprint_id),
+            )
+            if cursor.fetchone():
+                cursor.execute(
+                    """
+                    UPDATE tickets SET
+                        proposed_changes_json = ?,
+                        status = 'AWAITING_WRITE_GATE'
+                    WHERE ticket_id = ? AND sprint_id = ?
+                    """,
+                    (json.dumps(proposed_changes), ticket_id, sprint_id),
+                )
+            else:
+                cursor.execute(
+                    """
+                    INSERT INTO tickets (
+                        ticket_id, sprint_id, title, complexity, assigned_tier,
+                        allowed_files_json, acceptance_criteria_json, depends_on_json,
+                        status, proposed_changes_json
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        ticket_id,
+                        sprint_id,
+                        f"Staged Ticket {ticket_id}",
+                        2,
+                        assigned_tier,
+                        json.dumps(list(proposed_changes.keys())),
+                        json.dumps(["AC-1: Staged change approval"]),
+                        json.dumps([]),
+                        "AWAITING_WRITE_GATE",
+                        json.dumps(proposed_changes),
+                    ),
+                )
+            conn.commit()
+        self._append_audit("STAGE_PROPOSAL", {
+            "sprint_id": sprint_id,
+            "ticket_id": ticket_id,
+            "files": list(proposed_changes.keys()),
+        })
+
     def record_attempt(
         self,
         ticket_id: str,

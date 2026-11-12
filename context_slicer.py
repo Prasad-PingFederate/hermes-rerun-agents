@@ -230,6 +230,22 @@ class ContextSlicer:
                     if candidate_pkg.is_file() and candidate_pkg != target_path:
                         resolved.append(candidate_pkg)
 
+                    # Also check common source roots (src, lib, app, core, pkg) and workspace rglob
+                    if not candidate.is_file() and not candidate_pkg.is_file():
+                        found = False
+                        for sdir in ("src", "lib", "app", "core", "pkg"):
+                            sub_cand = workspace / sdir / Path(*parts).with_suffix(".py")
+                            if sub_cand.is_file() and sub_cand != target_path:
+                                resolved.append(sub_cand)
+                                found = True
+                                break
+                        if not found:
+                            base_name = f"{parts[-1]}.py"
+                            for match in workspace.rglob(base_name):
+                                if match.is_file() and match != target_path and not any(part.startswith(".") for part in match.parts):
+                                    resolved.append(match)
+                                    break
+
         return list(dict.fromkeys(resolved))  # preserve order without duplicates
 
     @classmethod

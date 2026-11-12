@@ -30,7 +30,7 @@ def extract_test_functions(tree: ast.AST) -> Set[str]:
 
 
 def extract_skip_indicators(tree: ast.AST) -> List[str]:
-    """Detect skip decorators (@unittest.skip, @pytest.mark.skip) or skip calls."""
+    """Detect skip/xfail decorators (@unittest.skip, @pytest.mark.skip, @pytest.mark.xfail) or skip calls."""
     skips: List[str] = []
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
@@ -40,7 +40,7 @@ def extract_skip_indicators(tree: ast.AST) -> List[str]:
                 except Exception:
                     dec_str = ""
                 dec_lower = dec_str.lower()
-                if any(k in dec_lower for k in ("skip", "skipif")):
+                if any(k in dec_lower for k in ("skip", "skipif", "xfail", "fixme")):
                     skips.append(f"{node.name}:{dec_str}")
         if isinstance(node, ast.Call):
             try:
@@ -48,21 +48,30 @@ def extract_skip_indicators(tree: ast.AST) -> List[str]:
             except Exception:
                 call_str = ""
             call_lower = call_str.lower()
-            if "skip" in call_lower:
+            if any(k in call_lower for k in ("skip", "xfail", "fixme")):
                 skips.append(f"call:{call_str}")
     return skips
 
 
 def count_assertions_and_check_weakened(tree: ast.AST) -> Tuple[int, bool]:
-    """Counts assert statements and checks if any assertion is weakened to assert True or 1."""
+    """Counts assert statements and checks if any assertion is weakened to assert True, 1, or trivial checks."""
     assert_count = 0
     has_trivial_assert = False
 
     for node in ast.walk(tree):
         if isinstance(node, ast.Assert):
             assert_count += 1
+            # Check trivial constants: assert True, assert 1
             if isinstance(node.test, ast.Constant) and node.test.value in (True, 1):
                 has_trivial_assert = True
+            # Check trivial comparison: assert 1 == 1, assert True is not False
+            elif isinstance(node.test, ast.Compare):
+                try:
+                    expr_str = ast.unparse(node.test).strip()
+                    if expr_str in ("1 == 1", "True is not False", "True == True", "0 == 0"):
+                        has_trivial_assert = True
+                except Exception:
+                    pass
         elif isinstance(node, ast.Call):
             try:
                 call_func = ast.unparse(node.func)
@@ -144,42 +153,60 @@ def analyze_proposed_changes(
                 functions_modified_count += len(diff_funcs)
 
                 # Test tampering checks if this is a test file
-                if is_test_file(rel_path) and exist_tree:
-                    # Check deleted tests
-                    exist_tests = extract_test_functions(exist_tree)
-                    prop_tests = extract_test_functions(prop_tree)
-                    deleted_tests = exist_tests - prop_tests
-                    if deleted_tests:
-                        tampering_detected = True
-                        tampering_reasons.append(
-                            f"Deleted test function(s) in {rel_path}: {sorted(list(deleted_tests))}"
-                        )
-
-                    # Check added skips
-                    exist_skips = set(extract_skip_indicators(exist_tree))
-                    prop_skips = set(extract_skip_indicators(prop_tree))
-                    new_skips = prop_skips - exist_skips
-                    if new_skips:
-                        tampering_detected = True
-                        tampering_reasons.append(
-                            f"Added skip decorator/call in {rel_path}: {sorted(list(new_skips))}"
-                        )
-
-                    # Check weakened assertions
-                    exist_asserts, _ = count_assertions_and_check_weakened(exist_tree)
+                if is_test_file(rel_path):
                     prop_asserts, prop_trivial = count_assertions_and_check_weakened(prop_tree)
+                    prop_skips = set(extract_skip_indicators(prop_tree))
 
-                    if prop_asserts < exist_asserts:
-                        tampering_detected = True
-                        tampering_reasons.append(
-                            f"Weakened assertions in {rel_path}: assert count decreased from {exist_asserts} to {prop_asserts}"
-                        )
+                    if exist_tree:
+                        # Check deleted tests
+                        exist_tests = extract_test_functions(exist_tree)
+                        prop_tests = extract_test_functions(prop_tree)
+                        deleted_tests = exist_tests - prop_tests
+                        if deleted_tests:
+                            tampering_detected = True
+                            tampering_reasons.append(
+                                f"Deleted test function(s) in {rel_path}: {sorted(list(deleted_tests))}"
+                            )
 
-                    if prop_trivial:
-                        tampering_detected = True
-                        tampering_reasons.append(
-                            f"Weakened assertions in {rel_path}: trivial assert True / assert 1 detected"
-                        )
+                        # Check added skips
+                        exist_skips = set(extract_skip_indicators(exist_tree))
+                        new_skips = prop_skips - exist_skips
+                        if new_skips:
+                            tampering_detected = True
+                            tampering_reasons.append(
+                                f"Added skip decorator/call in {rel_path}: {sorted(list(new_skips))}"
+                            )
+
+                        # Check weakened assertions
+                        exist_asserts, _ = count_assertions_and_check_weakened(exist_tree)
+                        if prop_asserts < exist_asserts:
+                            tampering_detected = True
+                            tampering_reasons.append(
+                                f"Weakened assertions in {rel_path}: assert count decreased from {exist_asserts} to {prop_asserts}"
+                            )
+
+                        if prop_trivial:
+                            tampering_detected = True
+                            tampering_reasons.append(
+                                f"Weakened assertions in {rel_path}: trivial assert True / assert 1 detected"
+                            )
+                    else:
+                        # New test file authored
+                        if prop_skips:
+                            tampering_detected = True
+                            tampering_reasons.append(
+                                f"Added skip decorator/call in {rel_path}: {sorted(list(prop_skips))}"
+                            )
+                        if prop_trivial:
+                            tampering_detected = True
+                            tampering_reasons.append(
+                                f"Weakened assertions in {rel_path}: trivial assert True / assert 1 detected"
+                            )
+                        if prop_asserts == 0:
+                            tampering_detected = True
+                            tampering_reasons.append(
+                                f"Proposed test file {rel_path} contains zero assertions"
+                            )
             except Exception as e:
                 if isinstance(e, ValueError):
                     raise
@@ -204,9 +231,7 @@ def analyze_proposed_changes(
         "risk_level": risk_level,
     }
 
-    is_valid = True
-    if tampering_detected and not allow_test_modification:
-        is_valid = False
+    is_valid = not tampering_detected
 
     return {
         "valid": is_valid,
