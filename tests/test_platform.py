@@ -24,7 +24,6 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from agents.breakglass_responder_healer import BreakglassResponderHealerSkill
 from agents.ci_detective import CIDetectiveAgent
 from agents.test_healer_agent import TestHealerAgent
 from core.context.active_context_pruner import (
@@ -37,9 +36,10 @@ from core.context.active_context_pruner import (
 from core.healer.gemini_flash import GeminiFlashHealer
 from core.orchestrator.scrum_hierarchy import (
     ModelTier,
-    ScrumMasterOrchestrator,
     SubTaskTicket,
 )
+from llm_provider_adapter import LocalHeuristicEngine
+from scrum_master_orchestrator import ScrumMasterOrchestrator
 from core.rerun_bridge.orchestrator import RerunOrchestrator
 from core.time_machine.engine import TimeMachineEngine
 from core.time_machine.patch_guard import analyze_proposed_changes
@@ -140,32 +140,35 @@ class TestHermesRerunPlatform(unittest.TestCase):
         self.assertFalse(res["ai_powered"])
         self.assertIn("Locator Drift", res["category"])
 
-    def test_breakglass_responder_skill_detection(self):
-        is_match = BreakglassResponderHealerSkill.is_matching_failure(
-            test_name="test_breakglass_responder_full_flow",
-            error_message="AssertionError: Could not find the 'Click here' link on the Breakglass preview page",
-            stdout="[RESP_BROWSER] QR Expired – Emergency Profile",
+    def test_ledger_failure_detection(self):
+        """Verify ledger failure detection with DID NOT RAISE ValueError."""
+        healer = GeminiFlashHealer()
+        diagnosis = healer.diagnose_failure(
+            test_name="tests/test_ledger.py::test_negative_deposit_raises",
+            error_message="Failed: DID NOT RAISE <class 'ValueError'>",
+            traceback_str="tests/test_ledger.py:10: in test_negative_deposit_raises\n    ledger.deposit(-50.0)\nE   Failed: DID NOT RAISE <class 'ValueError'>",
         )
-        self.assertTrue(is_match)
+        self.assertIsNotNone(diagnosis)
+        self.assertEqual(diagnosis["test_name"], "tests/test_ledger.py::test_negative_deposit_raises")
 
-    def test_breakglass_responder_skill_patch_application(self):
-        test_file = self.workspace / "test_breakglass.py"
-        test_file.write_text(
-            "def test_foo():\n"
-            "    breakglass_url = _derive_breakglass_url(owner_page)\n"
-            "    print('\\n[STEP 4] Initiating Responder Registration...')\n"
-            "    if click_here:\n"
-            "        pass\n"
-            "    else:\n"
-            "        raise AssertionError('Could not find Click here')\n",
-            encoding="utf-8",
+    def test_ledger_patch_application(self):
+        """Verify patch generation for product file src/InMemoryLedger.py."""
+        ticket = SubTaskTicket(
+            ticket_id="TICK-LEDGER-01",
+            title="Fix negative deposit validation in InMemoryLedger",
+            complexity=2,
+            assigned_tier="TIER_3",
+            allowed_files=["src/InMemoryLedger.py"],
+            acceptance_criteria=["Raise ValueError on non-positive deposit"],
         )
-        ok, msg = BreakglassResponderHealerSkill.apply_recovery_patch(test_file)
-        self.assertTrue(ok)
-        patched = test_file.read_text(encoding="utf-8")
-        self.assertIn("owner_user_id = \"\"", patched)
-        self.assertIn("qr_expired", patched)
-        self.assertIn("responderSignupCallback", patched)
+        patches = LocalHeuristicEngine.generate_patch(
+            ticket=ticket,
+            file_contents={"src/InMemoryLedger.py": "class InMemoryLedger:\n    def deposit(self, amount): pass\n"},
+        )
+        self.assertIn("src/InMemoryLedger.py", patches)
+        patched = patches["src/InMemoryLedger.py"]
+        self.assertIn("class InMemoryLedger", patched)
+        self.assertIn("raise ValueError(\"Deposit amount must be strictly positive\")", patched)
 
     def test_ci_detective_routing_isolation(self):
         reg_routing = CIDetectiveAgent.get_recommended_ci_routing("A_Role_Accounts_Registration_Playwright.py")
@@ -173,7 +176,7 @@ class TestHermesRerunPlatform(unittest.TestCase):
         self.assertTrue(reg_routing["is_critical_prerequisite"])
         self.assertFalse(reg_routing["continue_on_error"])
 
-        resp_routing = CIDetectiveAgent.get_recommended_ci_routing("Breakglass_Responder_Signup_Stage_Playwright.py")
+        resp_routing = CIDetectiveAgent.get_recommended_ci_routing("Responder_Signup_Stage_Playwright.py")
         self.assertEqual(resp_routing["target_job"], "rolebased-subscribers")
         self.assertFalse(resp_routing["is_critical_prerequisite"])
         self.assertTrue(resp_routing["continue_on_error"])
@@ -324,65 +327,58 @@ class TestHermesRerunPlatform(unittest.TestCase):
 
     def test_approve_writes_and_rollback_leaves_tree_at_baseline(self):
         """Verify write gate: Caller workspace is untouched until approval, applied by apply, and rollback restores baseline."""
-        test_file = self.workspace / "test_breakglass_gate.py"
-        initial_content = (
-            "import pytest\n"
-            "BASE_URL = 'https://www.stage.b4igo.com'\n"
-            "class MockLoc:\n"
-            "    @property\n"
-            "    def first(self):\n"
-            "        return self\n"
-            "class MockPage:\n"
-            "    url = 'https://www.stage.b4igo.com/m?b=key'\n"
-            "    def evaluate(self, s, *a):\n"
-            "        return 'usr_test' if 'userId' in s else None\n"
-            "    def reload(self, **kw):\n"
-            "        pass\n"
-            "    def wait_for_timeout(self, ms):\n"
-            "        pass\n"
-            "    def goto(self, u, **kw):\n"
-            "        self.url = u\n"
-            "    def locator(self, s):\n"
-            "        return MockLoc()\n"
-            "def _is_visible(l, timeout=3000):\n"
-            "    return False\n"
-            "def _derive_breakglass_url(p):\n"
-            "    return 'https://www.stage.b4igo.com/m?b=key'\n"
-            "def test_flow():\n"
-            "    owner_page = MockPage()\n"
-            "    resp_page = MockPage()\n"
-            "    breakglass_url = _derive_breakglass_url(owner_page)\n"
-            "    print('\\n[STEP 4] Initiating Responder Registration...')\n"
-            "    click_here = None\n"
-            "    if click_here and _is_visible(click_here):\n"
-            "        pass\n"
-            "    else:\n"
-            "        raise AssertionError('Could not find Click here link on preview page')\n"
+        src_dir = self.workspace / "src"
+        src_dir.mkdir(parents=True, exist_ok=True)
+        tests_dir = self.workspace / "tests"
+        tests_dir.mkdir(parents=True, exist_ok=True)
+
+        product_file = src_dir / "InMemoryLedger.py"
+        initial_ledger = (
+            "class InMemoryLedger:\n"
+            "    def __init__(self, initial_balance: float = 0.0):\n"
+            "        self._balance = initial_balance\n\n"
+            "    def deposit(self, amount: float) -> float:\n"
+            "        self._balance += amount\n"
+            "        return self._balance\n"
         )
-        test_file.write_text(initial_content, encoding="utf-8")
+        product_file.write_text(initial_ledger, encoding="utf-8")
+
+        test_file = tests_dir / "test_ledger.py"
+        test_content = (
+            "import pytest\n"
+            "import sys\n"
+            "from pathlib import Path\n"
+            "sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'src'))\n"
+            "from InMemoryLedger import InMemoryLedger\n\n"
+            "def test_negative_deposit_raises():\n"
+            "    ledger = InMemoryLedger(100.0)\n"
+            "    with pytest.raises(ValueError):\n"
+            "        ledger.deposit(-50.0)\n"
+        )
+        test_file.write_text(test_content, encoding="utf-8")
 
         agent = TestHealerAgent(workspace_path=self.workspace)
-        result = agent.run_and_heal("test_breakglass_gate.py", auto_rollback_on_failure=False, auto_apply_fix=True)
+        result = agent.run_and_heal("tests/test_ledger.py", auto_rollback_on_failure=False, auto_apply_fix=True)
 
         self.assertEqual(result["status"], "HEALED_VERIFIED")
 
         # Write Gate Check: caller workspace must NOT have the fix yet
-        self.assertEqual(test_file.read_text(encoding="utf-8"), initial_content)
+        self.assertEqual(product_file.read_text(encoding="utf-8"), initial_ledger)
 
         # Human Approval: Transitions to APPROVED; must not write files
         app_res = agent.approve_task(result["task_id"])
         self.assertEqual(app_res["status"], "APPROVED")
-        self.assertEqual(test_file.read_text(encoding="utf-8"), initial_content, "Approve must not write files!")
+        self.assertEqual(product_file.read_text(encoding="utf-8"), initial_ledger, "Approve must not write files!")
 
         # Explicit Apply: applies patch to workspace and marks COMPLETED
         apply_res = agent.apply_task(result["task_id"])
         self.assertEqual(apply_res["status"], "COMPLETED")
-        self.assertIn("owner_user_id", test_file.read_text(encoding="utf-8"))
+        self.assertIn("Deposit amount must be strictly positive", product_file.read_text(encoding="utf-8"))
 
         # Rejection / Rollback: restores workspace to baseline
         rb_res = agent.rollback_task(result["task_id"])
         self.assertEqual(rb_res["status"], "ROLLED_BACK")
-        self.assertEqual(test_file.read_text(encoding="utf-8"), initial_content)
+        self.assertEqual(product_file.read_text(encoding="utf-8"), initial_ledger)
 
     def test_webhook_bad_signature_401_and_fixture_resolution(self):
         """Verify webhook 401 on bad signature, reject when secret missing, and fixture resolution to rolebased-subscribers."""
@@ -412,9 +408,9 @@ class TestHermesRerunPlatform(unittest.TestCase):
         self.assertEqual(res["status"], "triaged")
         self.assertTrue(res["triaged"])
         self.assertIn("task_id", res)
-        self.assertEqual(res["event"]["recommended_job"], "rolebased-subscribers")
+        self.assertEqual(res["event"]["recommended_job"], "functional-vaults")
         self.assertTrue(res["event"]["continue_on_error"])
-        self.assertIn("Breakglass_Responder_Signup_Stage_Playwright.py", res["event"]["failing_test"])
+        self.assertIn("test_ledger.py", res["event"]["failing_test"])
 
         # 4. Unknown test name returns triaged=false
         unknown_body = json.dumps({"workflow_job": {"conclusion": "failure", "name": "Some Generic Job"}}).encode()
@@ -442,14 +438,20 @@ class TestHermesRerunPlatform(unittest.TestCase):
         self.assertEqual(routing2["target_job"], "registration")
         self.assertFalse(routing2["continue_on_error"])
 
-    def test_breakglass_patch_returns_false_on_zero_anchors(self):
-        """Verify apply_recovery_patch returns (False, reason) when zero anchors match."""
-        generic_file = self.workspace / "generic_math.py"
-        generic_file.write_text("def add(a: int, b: int) -> int:\n    return a + b\n", encoding="utf-8")
-
-        ok, reason = BreakglassResponderHealerSkill.apply_recovery_patch(generic_file)
-        self.assertFalse(ok)
-        self.assertIn("zero", reason.lower())
+    def test_ledger_patch_empty_on_unrelated_file(self):
+        """Verify LocalHeuristicEngine does not patch unrelated files."""
+        ticket = SubTaskTicket(
+            ticket_id="TICK-OTHER-01",
+            title="Unrelated task",
+            complexity=1,
+            assigned_tier="TIER_3",
+            allowed_files=["src/other_module.py"],
+        )
+        patches = LocalHeuristicEngine.generate_patch(
+            ticket=ticket,
+            file_contents={"src/other_module.py": "def other(): pass\n"},
+        )
+        self.assertNotIn("src/other_module.py", patches)
 
     def test_syntax_guard_catches_bad_py310_fstring(self):
         """Verify syntax guard detects backslash inside f-string expression in fixture without tokenize.FSTRING_*."""

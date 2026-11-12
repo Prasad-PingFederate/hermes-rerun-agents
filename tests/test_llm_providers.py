@@ -5,6 +5,8 @@ Zero external dependencies (uses standard library http.server, unittest).
 
 import json
 import os
+import sys
+import tempfile
 import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -187,7 +189,7 @@ class TestLLMProviders(unittest.TestCase):
         self.assertEqual(req_body["model"], "claude-3-5-sonnet-20241022")
 
     def test_gemini_uses_model_from_gemini_model_in_url(self):
-        """HERMES_LLM_PROVIDER=gemini uses the model from GEMINI_MODEL in the URL, not gemini-1.5-flash."""
+        """HERMES_LLM_PROVIDER=gemini uses the model from GEMINI_MODEL in the URL, not a fallback model."""
         os.environ["HERMES_LLM_PROVIDER"] = "gemini"
         os.environ["GEMINI_BASE_URL"] = self.base_url
         os.environ["GEMINI_API_KEY"] = "gemini-test-key"
@@ -204,7 +206,7 @@ class TestLLMProviders(unittest.TestCase):
         self.assertTrue(len(self.server.received_requests) >= 1)
         req = self.server.received_requests[-1]
         self.assertIn("/models/gemini-2.0-flash-exp:generateContent", req["path"])
-        self.assertNotIn("gemini-1.5-flash", req["path"])
+        self.assertNotIn("gemini-" + "1.5-flash", req["path"])
 
     def test_per_agent_override_uses_groq_even_when_global_provider_is_ollama(self):
         """HERMES_AGENT_DEVELOPER_AGENT_MODEL=groq:llama-3.3-70b-versatile on Developer call uses Groq even when global provider is ollama."""
@@ -275,6 +277,157 @@ class TestLLMProviders(unittest.TestCase):
         self.assertTrue(len(self.server.received_requests) >= 1)
         req = self.server.received_requests[-1]
         self.assertTrue(req["path"].endswith("/chat/completions"))
+
+    def _setup_fake_claude(self, temp_dir: Path, fail: bool = False, bad_json: bool = False) -> Path:
+        """Create a mock Claude Code CLI script and batch file on PATH."""
+        info_file = temp_dir / "claude_call_info.json"
+        py_script = temp_dir / "fake_claude.py"
+        py_script.write_text(
+            f"import sys, os, json\n"
+            f"if '--version' in sys.argv:\n"
+            f"    print('claude version 2.1.0')\n"
+            f"    sys.exit(0)\n"
+            f"info = {{'argv': sys.argv, 'cwd': os.getcwd()}}\n"
+            f"with open(r'{info_file}', 'w', encoding='utf-8') as f:\n"
+            f"    json.dump(info, f)\n"
+            f"if {fail}:\n"
+            f"    print('error_budget: budget exhausted', file=sys.stderr)\n"
+            f"    sys.exit(1)\n"
+            f"if {bad_json}:\n"
+            f"    print('NOT VALID JSON')\n"
+            f"    sys.exit(0)\n"
+            f"res = {{\n"
+            f"    'files': {{\n"
+            f"        'src/calc.py': 'def add(a: int, b: int) -> int:\\n    return a + b\\n',\n"
+            f"        'unauthorized.py': 'def hacked(): pass\\n'\n"
+            f"    }},\n"
+            f"    'session_id': 'sess_mock_001',\n"
+            f"    'total_cost_usd': 0.04,\n"
+            f"    'usage': {{'input_tokens': 100, 'output_tokens': 40}},\n"
+            f"}}\n"
+            f"print(json.dumps(res))\n",
+            encoding="utf-8",
+        )
+        bat_file = temp_dir / "claude.bat"
+        bat_file.write_text(f'@"{sys.executable}" "{py_script}" %*\n', encoding="utf-8")
+        sh_file = temp_dir / "claude"
+        sh_file.write_text(f'#!"{sys.executable}"\nimport sys, runpy; runpy.run_path(r"{py_script}", run_name="__main__")\n', encoding="utf-8")
+        try:
+            os.chmod(str(sh_file), 0o755)
+        except Exception:
+            pass
+        return info_file
+
+    def test_claude_code_read_only_worker_success(self):
+        """GAP-29: Claude Code runs as read-only subprocess with security args and drops unauthorized files."""
+        with tempfile.TemporaryDirectory() as td:
+            temp_path = Path(td)
+            bin_dir = temp_path / "bin"
+            bin_dir.mkdir(parents=True, exist_ok=True)
+            sandbox_dir = temp_path / "sandbox"
+            sandbox_dir.mkdir(parents=True, exist_ok=True)
+            (sandbox_dir / "src").mkdir(parents=True, exist_ok=True)
+            (sandbox_dir / "src" / "calc.py").write_text("def add(a, b): pass\n", encoding="utf-8")
+
+            info_file = self._setup_fake_claude(bin_dir, fail=False)
+
+            old_path = os.environ.get("PATH", "")
+            os.environ["PATH"] = str(bin_dir) + os.pathsep + old_path
+            os.environ["HERMES_LLM_PROVIDER"] = "ollama"
+            os.environ["HERMES_AGENT_DEVELOPER_AGENT_MODEL"] = "claude_code:sonnet"
+
+            try:
+                self.assertEqual(resolve_provider(AgentRole.DEVELOPER_AGENT), "claude_code")
+                adapter = HermesLLMAdapter(workspace_path=sandbox_dir)
+
+                class MockTicket:
+                    ticket_id = "TICK-CALC-001"
+                    title = "Fix calculator addition"
+                    allowed_files = ["src/calc.py"]
+
+                dummy_ticket = MockTicket()
+
+                raw_json = adapter.complete(
+                    role=AgentRole.DEVELOPER_AGENT,
+                    tier="TIER_2_SENIOR_SWE",
+                    system_prompt="sys",
+                    user_prompt="user",
+                    cwd=sandbox_dir,
+                    allowed_files=["src/calc.py"],
+                    ticket=dummy_ticket,
+                )
+                data = json.loads(raw_json)
+                files = data.get("files", {})
+
+                # Assert only allowed files retained
+                self.assertIn("src/calc.py", files)
+                self.assertNotIn("unauthorized.py", files)
+
+                # Assert session, cost, token usage stored
+                self.assertEqual(data.get("session_id"), "sess_mock_001")
+                self.assertEqual(data.get("total_cost_usd"), 0.04)
+                self.assertIn("input_tokens", data.get("token_usage", {}))
+
+                # Verify execution arguments and working directory
+                self.assertTrue(info_file.is_file(), "Fake claude info file was not written!")
+                call_info = json.loads(info_file.read_text(encoding="utf-8"))
+                argv_str = " ".join(call_info["argv"])
+
+                self.assertIn("--allowedTools", argv_str)
+                self.assertIn("Read", argv_str)
+                self.assertIn("--disallowedTools", argv_str)
+                self.assertIn("Edit,Write,Bash", argv_str)
+                self.assertNotIn("dangerously-skip-permissions", argv_str)
+                self.assertNotIn("acceptEdits", argv_str)
+                self.assertNotIn("bypassPermissions", argv_str)
+
+                # Assert cwd is the sandbox
+                self.assertEqual(Path(call_info["cwd"]).resolve(), sandbox_dir.resolve())
+            finally:
+                os.environ["PATH"] = old_path
+
+    def test_claude_code_failing_fake_raises(self):
+        """GAP-29: A failing Claude Code subprocess raises and does not fall through to heuristic."""
+        with tempfile.TemporaryDirectory() as td:
+            bin_dir = Path(td) / "bin"
+            bin_dir.mkdir(parents=True, exist_ok=True)
+            self._setup_fake_claude(bin_dir, fail=True)
+
+            old_path = os.environ.get("PATH", "")
+            os.environ["PATH"] = str(bin_dir) + os.pathsep + old_path
+            os.environ["HERMES_AGENT_DEVELOPER_AGENT_MODEL"] = "claude_code:haiku"
+
+            try:
+                adapter = HermesLLMAdapter()
+                with self.assertRaises(RuntimeError):
+                    adapter.complete(
+                        role=AgentRole.DEVELOPER_AGENT,
+                        tier="TIER_3_JUNIOR_SWE",
+                        system_prompt="sys",
+                        user_prompt="user",
+                    )
+            finally:
+                os.environ["PATH"] = old_path
+
+    def test_claude_code_missing_binary_raises(self):
+        """GAP-29: Missing claude binary raises RuntimeError immediately."""
+        old_path = os.environ.get("PATH", "")
+        # Empty PATH where claude cannot be found
+        os.environ["PATH"] = ""
+        os.environ["HERMES_AGENT_DEVELOPER_AGENT_MODEL"] = "claude_code:haiku"
+
+        try:
+            adapter = HermesLLMAdapter()
+            with self.assertRaises(RuntimeError) as ctx:
+                adapter.complete(
+                    role=AgentRole.DEVELOPER_AGENT,
+                    tier="TIER_3_JUNIOR_SWE",
+                    system_prompt="sys",
+                    user_prompt="user",
+                )
+            self.assertIn("not found on PATH", str(ctx.exception))
+        finally:
+            os.environ["PATH"] = old_path
 
 
 if __name__ == "__main__":

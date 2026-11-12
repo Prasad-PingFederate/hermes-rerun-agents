@@ -104,18 +104,8 @@ class HumanWriteGateController:
                     return reconstructed
         return None
 
-    def approve_proposal(
-        self,
-        sprint_id: str,
-        verification_fn: Optional[Callable[[], bool]] = None,
-    ) -> Dict[str, Any]:
-        """Approve staged proposal, create TimeMachine snapshot, write files, and verify."""
-        return self.approve_and_apply(
-            sprint_id=sprint_id,
-            auto_approve=True,
-            interactive=False,
-            verification_fn=verification_fn,
-        )
+    def approve_proposal(self, sprint_id: str, verification_fn: Optional[Callable[[], bool]] = None) -> Dict[str, Any]:
+        return self.approve_and_apply(sprint_id=sprint_id, auto_approve=True, interactive=False, verification_fn=verification_fn)
 
     def get_diff_summary(self, sprint_id: str) -> str:
         """Generate human-readable unified diff summary for staged proposals."""
@@ -220,6 +210,7 @@ class HumanWriteGateController:
             return {
                 "success": False,
                 "status": "ROLLED_BACK",
+                "rolled_back": True,
                 "sprint_id": sprint_id,
                 "ticket_id": ticket_id,
                 "snapshot_id": snapshot_id,

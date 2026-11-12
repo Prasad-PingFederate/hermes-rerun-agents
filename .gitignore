@@ -32,6 +32,7 @@ playwright-report/
 *.db
 *.sqlite
 *.sqlite3
+*.jsonl
 
 # IDE & OS
 .vscode/

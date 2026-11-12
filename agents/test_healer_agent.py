@@ -11,9 +11,8 @@ import subprocess
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from agents.breakglass_responder_healer import BreakglassResponderHealerSkill
 from core.healer.gemini_flash import GeminiFlashHealer
-from core.orchestrator.scrum_hierarchy import ScrumMasterOrchestrator
+from scrum_master_orchestrator import ScrumMasterOrchestrator
 from core.rerun_bridge.orchestrator import RerunOrchestrator
 from core.sandbox.runner import SandboxRunner
 from core.time_machine.engine import TimeMachineEngine
@@ -97,38 +96,25 @@ class TestHealerAgent:
                 pass
 
         applied_skill = False
-        diagnosis: Dict[str, Any] = {}
-
-        # Check domain-specific skill first (e.g. Breakglass QR Expired preview bug)
-        if BreakglassResponderHealerSkill.is_matching_failure(test_file, res1.stderr or res1.stdout, res1.stdout):
-            print("[AGENT] 💡 Breakglass Preview Handshake / QR Expired pattern detected! Applying specialized skill in sandbox copy...")
-            ok, msg = BreakglassResponderHealerSkill.apply_recovery_patch(target_in_sandbox)
-            applied_skill = ok
-            diagnosis = {
-                "engine": "Breakglass Skill",
-                "category": "Stage Preview Crypto Handshake Timeout",
-                "root_cause": msg,
-            }
-        else:
-            err_snip = res1.stderr or res1.stdout[-400:]
-            diagnosis = self.healer.diagnose_failure(
-                test_name=test_file,
-                error_message=err_snip,
-                traceback_str=res1.stdout,
-                code_snippet=code_snippet,
-                screenshot_path=res1.screenshot_path,
-            )
-            # If model returned files with diffs, apply them inside the sandbox copy
-            if auto_apply_fix and diagnosis.get("files"):
-                applied_any = False
-                for f_entry in diagnosis["files"]:
-                    p_path = f_entry.get("path") or test_file
-                    diff_text = f_entry.get("unified_diff")
-                    if diff_text:
-                        ok, _ = self.sandbox.apply_patch_in_copy(sandbox_dir, p_path, diff_text)
-                        if ok:
-                            applied_any = True
-                applied_skill = applied_any
+        err_snip = res1.stderr or res1.stdout[-400:]
+        diagnosis: Dict[str, Any] = self.healer.diagnose_failure(
+            test_name=test_file,
+            error_message=err_snip,
+            traceback_str=res1.stdout,
+            code_snippet=code_snippet,
+            screenshot_path=res1.screenshot_path,
+        )
+        # If model returned files with diffs, apply them inside the sandbox copy
+        if auto_apply_fix and diagnosis.get("files"):
+            applied_any = False
+            for f_entry in diagnosis["files"]:
+                p_path = f_entry.get("path") or test_file
+                diff_text = f_entry.get("unified_diff")
+                if diff_text:
+                    ok, _ = self.sandbox.apply_patch_in_copy(sandbox_dir, p_path, diff_text)
+                    if ok:
+                        applied_any = True
+            applied_skill = applied_any
 
         print("\n" + "=" * 60)
         print("🤖 [AI DIAGNOSIS RESULT]")

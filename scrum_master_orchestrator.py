@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import os
 import time
+import uuid
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
@@ -72,7 +73,7 @@ class ScrumMasterOrchestrator:
 
     def create_sprint_plan(self, failure_context: Dict[str, Any]) -> Dict[str, Any]:
         """Decompose failure context into ordered SubTaskTicket items."""
-        sprint_id = f"sprint_{int(time.time())}"
+        sprint_id = f"sprint_{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}"
         tickets: List[SubTaskTicket] = []
 
         raw_tickets = failure_context.get("tickets", [])
@@ -118,19 +119,101 @@ class ScrumMasterOrchestrator:
             tickets=ordered_tickets,
         )
 
+        telemetry = self.summarize_sprint_telemetry(ordered_tickets)
         return {
             "sprint_id": sprint_id,
             "tickets": [asdict(t) for t in ordered_tickets],
+            "telemetry": telemetry,
+        }
+
+    def summarize_sprint_telemetry(self, tickets: List[SubTaskTicket]) -> Dict[str, Any]:
+        """Computes total_tickets, tier_distribution, escalations_triggered, all_approved,
+        and estimated_cost_savings_pct (Tier 1 = 1.0, Tier 2 = 0.35, Tier 3 = 0.10).
+        """
+        total_tickets = len(tickets)
+        tier_distribution: Dict[str, int] = {
+            ModelTier.TIER_1_TECH_LEAD.value: 0,
+            ModelTier.TIER_2_SENIOR_SWE.value: 0,
+            ModelTier.TIER_3_JUNIOR_SWE.value: 0,
+        }
+
+        escalations_triggered = 0
+        all_approved = True if total_tickets > 0 else False
+
+        actual_cost = 0.0
+        baseline_cost = float(total_tickets) * TIER_COST_WEIGHTS[ModelTier.TIER_1_TECH_LEAD.value]
+
+        for t in tickets:
+            tier_val = t.assigned_tier
+            if tier_val in tier_distribution:
+                tier_distribution[tier_val] += 1
+
+            if t.status != "DONE":
+                all_approved = False
+
+            # If ticket had rejections before approval or escalation occurred
+            if len(t.attempt_history) > 1 or any(a.get("status") == "REJECTED" for a in t.attempt_history):
+                escalations_triggered += 1
+
+            if t.attempt_history:
+                for att in t.attempt_history:
+                    att_tier = att.get("tier", t.assigned_tier)
+                    actual_cost += TIER_COST_WEIGHTS.get(att_tier, 1.0)
+            else:
+                actual_cost += TIER_COST_WEIGHTS.get(t.assigned_tier, 1.0)
+
+        if baseline_cost > 0.0:
+            savings_pct = max(0.0, ((baseline_cost - actual_cost) / baseline_cost) * 100.0)
+        else:
+            savings_pct = 0.0
+
+        return {
+            "total_tickets": total_tickets,
+            "tier_distribution": tier_distribution,
+            "escalations_triggered": escalations_triggered,
+            "all_approved": all_approved,
+            "estimated_cost_savings_pct": round(savings_pct, 2),
         }
 
     def execute_ticket_with_escalation(
         self,
-        sprint_id: str,
-        ticket: SubTaskTicket,
-        worker_fn: Callable[[SubTaskTicket, str, Optional[str]], WorkerProposal],
-        allow_test_modification: bool = False,
-    ) -> Tuple[SubTaskTicket, Optional[WorkerProposal]]:
-        """Run worker with QA review and auto-escalation (TIER_3 -> TIER_2 -> TIER_1)."""
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        """Run worker with QA review and auto-escalation (TIER_3 -> TIER_2 -> TIER_1).
+        
+        Supports both signatures:
+        1. (sprint_id, ticket, worker_fn, allow_test_modification) -> (ticket, proposal)
+        2. (ticket, worker_fn, allow_test_modification) -> ticket
+        Also supports keyword invocation (sprint_id=..., ticket=..., worker_fn=..., allow_test_modification=...).
+        """
+        return_tuple = True
+        sprint_id = kwargs.get("sprint_id")
+        ticket = kwargs.get("ticket")
+        fn = kwargs.get("worker_fn")
+        allow_test_modification = kwargs.get("allow_test_modification", False)
+
+        if len(args) >= 1:
+            if isinstance(args[0], str):
+                sprint_id = args[0]
+                return_tuple = True
+                if len(args) >= 2:
+                    ticket = args[1]
+                if len(args) >= 3:
+                    fn = args[2]
+                if len(args) >= 4:
+                    allow_test_modification = args[3]
+            elif isinstance(args[0], SubTaskTicket):
+                ticket = args[0]
+                return_tuple = False
+                if len(args) >= 2:
+                    fn = args[1]
+                if len(args) >= 3:
+                    allow_test_modification = args[2]
+
+        if not sprint_id:
+            sprint_id = getattr(ticket, "sprint_id", None) or f"sprint_{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}"
+
         current_tier = ticket.assigned_tier
         escalation_prompt: Optional[str] = None
 
@@ -140,7 +223,25 @@ class ScrumMasterOrchestrator:
 
             # 1. Execute worker to produce thin WorkerProposal
             try:
-                proposal = worker_fn(ticket, current_tier, escalation_prompt)
+                try:
+                    res = fn(ticket, current_tier, escalation_prompt)
+                except TypeError:
+                    try:
+                        res = fn(ticket, ModelTier(current_tier))
+                    except TypeError:
+                        res = fn(ticket, current_tier)
+
+                if isinstance(res, WorkerProposal):
+                    proposal = res
+                elif isinstance(res, dict):
+                    proposal = WorkerProposal(
+                        ticket_id=ticket.ticket_id,
+                        worker_agent=getattr(ticket, "last_worker_name", f"Worker_{current_tier}"),
+                        model_tier=current_tier,
+                        proposed_changes=res,
+                    )
+                else:
+                    proposal = res
             except Exception as e:
                 # Capture worker failure
                 att = AttemptRecord(
@@ -162,7 +263,7 @@ class ScrumMasterOrchestrator:
                     continue
                 else:
                     ticket.status = "FAILED"
-                    return ticket, None
+                    return (ticket, None) if return_tuple else ticket
 
             # 2. Scope Gate verification
             scope_ok, scope_reasons = self.router.validate_worker_scope(ticket, proposal.proposed_changes)
@@ -186,7 +287,7 @@ class ScrumMasterOrchestrator:
                     continue
                 else:
                     ticket.status = "FAILED"
-                    return ticket, None
+                    return (ticket, None) if return_tuple else ticket
 
             # 3. AST Patch Guard & Security Audit
             ast_report = ASTPatchGuard.analyze(
@@ -219,7 +320,7 @@ class ScrumMasterOrchestrator:
                     continue
                 else:
                     ticket.status = "FAILED"
-                    return ticket, None
+                    return (ticket, None) if return_tuple else ticket
 
             # 4. QA Critic Review (TIER_4)
             qa_review: QACriticReview = QACriticAgent.review_worker_output(
@@ -251,7 +352,7 @@ class ScrumMasterOrchestrator:
                     continue
                 else:
                     ticket.status = "FAILED"
-                    return ticket, None
+                    return (ticket, None) if return_tuple else ticket
 
             # All gates passed: proposal approved!
             att = AttemptRecord(
@@ -267,10 +368,10 @@ class ScrumMasterOrchestrator:
 
             ticket.status = "DONE"
             ticket.proposed_changes = proposal.proposed_changes
-            return ticket, proposal
+            return (ticket, proposal) if return_tuple else ticket
 
         ticket.status = "FAILED"
-        return ticket, None
+        return (ticket, None) if return_tuple else ticket
 
     def run_sprint(
         self,
@@ -397,7 +498,7 @@ class ScrumMasterOrchestrator:
 
         # 2. Schedule tickets with SprintDAGScheduler.topological_sort
         ordered_tickets = SprintDAGScheduler.topological_sort(tickets)
-        sprint_id = f"sprint_{int(time.time())}"
+        sprint_id = f"sprint_{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}"
         self.store.save_sprint(
             sprint_id=sprint_id,
             status="ACTIVE",
@@ -482,9 +583,10 @@ class ScrumMasterOrchestrator:
 
         # 6. Awaiting manual approval
         return {
-            "status": "AWAITING_APPROVAL",
+            "status": "AWAITING_WRITE_GATE",
             "sprint_id": sprint_id,
             "proposal_id": stage_id,
+            "classification": classification if mode == "heal" else None,
             "diff": self.write_gate.get_diff_summary(sprint_id),
             "tickets": [asdict(t) for t in ordered_tickets],
         }

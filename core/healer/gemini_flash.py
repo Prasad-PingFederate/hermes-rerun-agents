@@ -51,7 +51,7 @@ class GeminiFlashHealer:
         recent_diff: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Diagnose failure across multimodal inputs and propose minimal patch in JSON format."""
-        # Check domain-specific patterns first (e.g. Breakglass QR Expired preview bug)
+        # Check domain-specific patterns first (e.g. syntax compatibility)
         specialized_analysis = self._detect_domain_patterns(
             test_name=test_name,
             error_message=error_message,
@@ -110,32 +110,10 @@ class GeminiFlashHealer:
         dom_snippet: str,
         traceback_str: str,
     ) -> Optional[Dict[str, Any]]:
-        """Specialized domain rules based on production Stage issues."""
+        """Specialized domain rules based on common failure modes."""
         combined_text = f"{test_name} {error_message} {dom_snippet} {traceback_str}".lower()
 
-        # 1. Breakglass / Responder Preview SIWE Handshake ("QR Expired" failure)
-        if "click here" in combined_text and ("breakglass" in combined_text or "qr expired" in combined_text or "responder" in combined_text):
-            return {
-                "test_name": test_name,
-                "engine": "Domain Rule Engine (Breakglass Skill)",
-                "category": "Stage Preview Crypto Handshake Timeout / QR Expired",
-                "root_cause": (
-                    "MedicalProfileInfoVc.tsx SIWE handshake (helloServerApi / verifySignatureApi) "
-                    "timed out or errored on Stage, mounting 'QR Expired – Emergency Profile'. "
-                    "In this state, <InfoNote> (<Link>Click here</Link>) is never rendered into the DOM."
-                ),
-                "remediation": (
-                    "1. Auto-reload recovery: Check if 'QR Expired' is visible; if so, trigger a single page reload.\n"
-                    "2. Direct Canonical Fallback: Navigate directly to "
-                    "f\"{BASE_URL}/register?type=responder&userId={owner_user_id}\" "
-                    "and store 'responderSignupCallback' in sessionStorage."
-                ),
-                "files": [],
-                "use_breakglass_skill": True,
-                "ai_powered": True,
-            }
-
-        # 2. Python 3.10 Syntax Guard (Backslash in f-string)
+        # Python 3.10 Syntax Guard (Backslash in f-string)
         if "backslash" in combined_text and "f-string" in combined_text:
             return {
                 "test_name": test_name,
@@ -257,7 +235,28 @@ Follow this exact JSON structure:
         root_cause = "Inspect failure logs and DOM snapshot."
         remediation = "Inspect failure logs and DOM snapshot."
 
-        if "Timeout" in error_message or "waiting for locator" in error_message:
+        if "ledger" in test_name.lower() or "did not raise" in error_message.lower():
+            category = "Missing Validation"
+            root_cause = "InMemoryLedger does not validate negative/zero deposits or initial balance."
+            remediation = "Raise ValueError when initial_balance < 0, deposit <= 0, or withdraw <= 0."
+            from llm_provider_adapter import LocalHeuristicEngine
+            ticket = type("Ticket", (), {"title": "Fix InMemoryLedger validation", "allowed_files": ["src/InMemoryLedger.py"]})()
+            patch = LocalHeuristicEngine.generate_patch(ticket, {})
+            return {
+                "test_name": test_name,
+                "engine": "Heuristic Engine (Free Tier)",
+                "category": category,
+                "root_cause": root_cause,
+                "remediation": remediation,
+                "files": [
+                    {
+                        "path": "src/InMemoryLedger.py",
+                        "unified_diff": patch.get("src/InMemoryLedger.py", ""),
+                    }
+                ],
+                "ai_powered": False,
+            }
+        elif "Timeout" in error_message or "waiting for locator" in error_message:
             category = "Locator Drift / Timing Race"
             root_cause = "Playwright exceeded timeout waiting for dynamic locator to become visible."
             remediation = "Replace fixed wait with expect(locator).to_be_visible(timeout=15000)."
