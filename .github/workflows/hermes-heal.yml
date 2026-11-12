@@ -8,7 +8,8 @@ on:
 permissions:
   contents: write
   pull-requests: write
-  issues: write
+  id-token: write
+  security-events: write
 
 jobs:
   hermes-shadow-heal:
@@ -29,10 +30,17 @@ jobs:
           pip install -r requirements.txt || true
 
       - name: Run Hermes Autonomous Healer (Shadow Mode)
-        uses: Prasad-PingFederate/hermes-rerun-agents@feat/tester-console
+        id: hermes
+        uses: ./  # Self-host dogfooding from repository root
         with:
           mode: 'shadow'  # Zero-Write: posts in-diff ```suggestion blocks in PR reviews
           test-command: 'pytest tests/ -q'
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          llm-provider: 'none'  # Uses deterministic zero-API-key engine (or configure 'ollama', 'anthropic', etc.)
+          llm-provider: 'none'  # Uses deterministic zero-API-key engine
           hourly-rate-usd: '125.0'
+
+      - name: Upload SARIF Audit Report to GitHub Code Scanning
+        if: always() && steps.hermes.outputs.sarif-file != ''
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: ${{ steps.hermes.outputs.sarif-file }}

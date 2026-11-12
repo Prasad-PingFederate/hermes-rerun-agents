@@ -200,6 +200,7 @@ def main() -> int:
     # 5. Export Executive ROI telemetry outputs
     hours_saved = 4.2 if classification == "PRODUCT_BUG" else (2.0 if classification == "TEST_BUG" else 1.5)
     dollar_roi = round(hours_saved * hourly_rate, 2)
+    set_action_output("verdict", classification)
     set_action_output("hours_saved", str(hours_saved))
     set_action_output("dollar_roi", str(dollar_roi))
 
@@ -212,7 +213,9 @@ def main() -> int:
         output_path=sarif_path,
     )
     set_action_output("sarif_report", str(sarif_path))
+    set_action_output("sarif_file", str(sarif_path))
     set_action_output("audit_digest", sarif_res.audit_digest)
+    set_action_output("clusters_collapsed", "0")
 
     otel_exporter = OTLPExporter(local_fallback_file=workspace_path / "sprint_telemetry.jsonl")
     otel_exporter.export_sprint_telemetry(

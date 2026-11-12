@@ -24,9 +24,10 @@ on:
     types: [opened, synchronize, reopened]
 
 permissions:
-  contents: write
-  pull-requests: write
-  issues: write
+  contents: write              # Required for heal/quarantine draft branches
+  pull-requests: write         # Required for shadow mode in-diff suggestions
+  id-token: write              # Required for Option 5 Cloud OIDC Workload Identity
+  security-events: write       # Required for GitHub Code Scanning SARIF upload
 
 jobs:
   hermes:
@@ -44,12 +45,19 @@ jobs:
         run: pip install -r requirements.txt || true
 
       - name: Run Hermes Healer (Shadow Mode)
-        uses: Prasad-PingFederate/hermes-rerun-agents@feat/tester-console
+        id: hermes
+        uses: Prasad-PingFederate/hermes-rerun-agents@v1
         with:
           mode: 'shadow'  # Zero-Write: posts 1-click ```suggestion blocks in PR review
           test-command: 'pytest tests/ -q'
           github-token: ${{ secrets.GITHUB_TOKEN }}
           hourly-rate-usd: '125.0'
+
+      - name: Upload SARIF Audit Report to GitHub Code Scanning
+        if: always() && steps.hermes.outputs.sarif-file != ''
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: ${{ steps.hermes.outputs.sarif-file }}
 ```
 
 ---
@@ -58,14 +66,18 @@ jobs:
 
 | Dimension | Naive LLM Coding Bots | Copilot Workspace / Standard CI | Hermes Autonomous Scrum Engine |
 | :--- | :--- | :--- | :--- |
-| **Test Tampering** | ❌ Weakens tests, comments out assertions, or adds `.skip` to turn builds green | ❌ Manual human review required | ✅ **Zero Assertion Erosion**: Non-decreasing assertion invariant enforced at AST layer |
-| **Security Scanning** | ❌ May hallucinate `shell=True`, code injection, or SQL concatenations | ⚠️ Generic linter after PR merge | ✅ **Deterministic Delta-SAST Gate**: Zero-dependency AST scanner blocks CWE/OWASP Top 10 |
-| **False Positives** | ❌ Blocks fixes on legacy unrelated warnings | ❌ Developer fatigue | ✅ **Delta-Only SAST**: Compares pre- vs post-patch AST; only new vulnerabilities block |
-| **Scope Boundaries** | ❌ Agent edits any file it touches | ❌ Whole-file replacements | ✅ **Bidirectional Scope Gate**: DeveloperAgent cannot touch tests; TestHealer cannot touch product |
-| **Trial Adoption** | ❌ Requires broad write permissions to all repository branches | ❌ High enterprise friction | ✅ **Shadow Mode (`SHADOW_SUGGEST`)**: 1-click in-diff `suggestion` comments with zero write access |
+| **False-Green Prevention** | ❌ Healed tests pass unconditionally via vacuous assertions (`assert True`) | ❌ No verification against broken code | ✅ **Counterfactual Differential Verification**: Proves test passes on PR HEAD and **fails** against broken base code |
+| **Assertion Specificity** | ❌ Dilutes exact matchers (`toBe(200)` $\to$ `toBeTruthy()`, broad `except Exception`) | ❌ Manual code review required | ✅ **Semantic Assertion Guard (AST v2)**: Scores specificity, blocks value dilution, broad catches & timeout masking |
+| **DLP & Secret Leakage** | ❌ Leaks CI logs, test JWTs, database URIs, and PII into third-party LLM prompts | ⚠️ Unsanitized log transmission | ✅ **Deterministic DLP Scrubber**: Reversible in-memory vault (`<HERMES_JWT_1>`) + cryptographic nonce sandbox |
+| **Credential Architecture** | ❌ Requires long-lived static API keys in GitHub Secrets | ⚠️ Vendor lock-in | ✅ **Zero-Static-Key Cloud OIDC**: Native Workload Identity for AWS Bedrock, Azure OpenAI, Vertex AI & VPCs |
+| **Test Tampering** | ❌ Comments out assertions or adds `.skip` to force green CI builds | ❌ Manual human review required | ✅ **Zero Assertion Erosion**: Multi-runner AST invariant prevents assertion loss across Pytest, Playwright & Jest |
+| **Security Scanning** | ❌ Hallucinates `shell=True`, code injection, or SQL string interpolation | ⚠️ Generic linter after PR merge | ✅ **Deterministic Delta-SAST Gate**: Zero-dependency AST scanner blocks newly introduced OWASP/CWE antipatterns |
+| **Monorepo Matrix CI** | ❌ 16 parallel shards fail $\to$ 16 duplicate LLM calls and conflicting PR comments | ❌ No cross-runner deduplication | ✅ **Cross-Shard Failure Clustering**: Volatile noise stripping collapses 40 shard failures into 1 root-cause fix |
+| **Flake Management**| ❌ Deletes intermittent tests or accumulates permanent `retries: 2` tech debt | ⚠️ Costly manual re-runs | ✅ **Flake Lifecycle Reaper**: 14d TTL alerts + surgical auto-unquarantine after 50 consecutive green runs |
+| **Policy-as-Code** | ❌ Modifies arbitrary files across the codebase | ❌ Whole-file replacements | ✅ **.hermes.yml Governance**: No-heal zones (`src/auth/**`), tiered autonomy & FinOps circuit breakers |
+| **Compliance & Auditing** | ❌ Unstructured markdown comments | ❌ Opaque CI stdout | ✅ **SARIF v2.1.0 & OpenTelemetry**: Native GitHub Code Scanning alerts with SHA-256 tamper-evident chain digest |
+| **Trial Adoption** | ❌ Demands full write permissions to repository branches | ❌ High enterprise friction | ✅ **Shadow Mode (`SHADOW_SUGGEST`)**: 1-click in-diff `suggestion` comments with zero write access |
 | **Rollback Safety** | ❌ Manual `git revert` required if patch introduces regressions | ❌ Git tree pollution | ✅ **SHA-256 Time Machine**: Instant reversible snapshots via `/hermes rewind` |
-| **Flake Management**| ❌ Ignores flakes or deletes intermittent tests | ⚠️ Re-runs entire CI pipeline | ✅ **Flake Quarantine Bot**: Auto-injects Pytest/Playwright/Jest retries + diagnostic table |
-| **Data Privacy** | ❌ Bundles proprietary SDKs, code sent to unknown servers | ⚠️ Cloud vendor lock-in | ✅ **Air-Gapped & Local-First**: Runs on Ollama, vLLM, LMStudio with zero telemetry leak |
 
 ---
 

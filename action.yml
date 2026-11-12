@@ -5,6 +5,14 @@ branding:
   icon: 'shield'
   color: 'orange'
 
+# Recommended Workflow Permissions:
+# permissions:
+#   contents: write              # Required for 'heal' mode (opening branches and draft PRs)
+#   pull-requests: write         # Required for 'shadow' mode (posting in-diff review suggestions)
+#   id-token: write              # Optional: Required for Option 5 Cloud OIDC Workload Identity
+#   security-events: write       # Optional: Required for uploading SARIF to GitHub Code Scanning
+#   actions: read                # Required for fetching workflow logs and commit metadata
+
 inputs:
   mode:
     description: "Execution permissions mode: 'shadow' (Zero-Write in-diff suggestion comments) or 'heal' (opens draft PR)"
@@ -51,6 +59,9 @@ outputs:
   status:
     description: 'Outcome status (passed, suggested, healed, quarantined, blocked_by_governance)'
     value: ${{ steps.run-hermes.outputs.status }}
+  verdict:
+    description: 'Deterministic root-cause failure classification (PRODUCT_BUG, TEST_BUG, FLAKY_TEST, ENVIRONMENT_NOISE, PASSED)'
+    value: ${{ steps.run-hermes.outputs.verdict }}
   healed:
     description: 'Boolean flag indicating whether a failure was successfully healed or quarantined'
     value: ${{ steps.run-hermes.outputs.healed }}
@@ -66,9 +77,15 @@ outputs:
   sarif-report:
     description: 'File path to generated GitHub Code Scanning SARIF v2.1.0 report'
     value: ${{ steps.run-hermes.outputs.sarif_report }}
+  sarif-file:
+    description: 'Direct file path alias for piping into github/codeql-action/upload-sarif@v3'
+    value: ${{ steps.run-hermes.outputs.sarif_file }}
   audit-digest:
     description: 'Tamper-evident SHA-256 audit digest over commit, policy, and findings'
     value: ${{ steps.run-hermes.outputs.audit_digest }}
+  clusters-collapsed:
+    description: 'Count of parallel runner shard failures collapsed into this root-cause fix'
+    value: ${{ steps.run-hermes.outputs.clusters_collapsed }}
 
 runs:
   using: 'composite'
