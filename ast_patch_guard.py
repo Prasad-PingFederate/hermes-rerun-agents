@@ -13,6 +13,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from core.security.dlp_scrubber import DLPSessionVault
+from core.security.prompt_sandbox import PromptSandbox
 from core.time_machine.patch_guard import analyze_proposed_changes as analyze_python_ast
 from core.verification.accessibility_locator_guard import AccessibilityLocatorGuard
 from core.verification.semantic_assertion_guard import SemanticAssertionGuard
@@ -107,6 +109,25 @@ class ASTPatchGuard:
             tampering_detected = True
             all_reasons.extend(locator_report.reasons)
 
+        # 6. Exfiltration Diff Check (Option 5: Prompt-Injection Isolation)
+        exfil_report = PromptSandbox.audit_patch_for_exfiltration(
+            proposed_changes=proposed_changes,
+        )
+        if not exfil_report.valid:
+            valid = False
+            tampering_detected = True
+            all_reasons.extend(exfil_report.reasons)
+
+        # 7. Hallucinated Placeholder Check (Option 5: DLP Scrubber)
+        for rel_f, content in proposed_changes.items():
+            if DLPSessionVault.PLACEHOLDER_REGEX.search(content):
+                valid = False
+                tampering_detected = True
+                all_reasons.append(
+                    f"{rel_f}: Unhydrated or hallucinated Hermes DLP placeholder detected in patch. "
+                    "Cannot commit raw placeholder token."
+                )
+
         return {
             "valid": valid and len(all_reasons) == 0,
             "tampering_detected": tampering_detected,
@@ -119,4 +140,5 @@ class ASTPatchGuard:
             },
             "semantic_findings": [f.to_dict() for f in semantic_report.findings],
             "locator_findings": [f.to_dict() for f in locator_report.findings],
+            "exfiltration_findings": exfil_report.findings,
         }

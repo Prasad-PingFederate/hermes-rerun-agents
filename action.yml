@@ -42,6 +42,10 @@ inputs:
     description: 'Groq API Key (optional)'
     required: false
     default: ''
+  require-oidc:
+    description: "Enforce strict cloud OIDC federation (AWS Bedrock, Azure OpenAI, Google Vertex AI). When true, static API keys are rejected. Requires workflow permission: id-token: write"
+    required: false
+    default: 'false'
 
 outputs:
   status:

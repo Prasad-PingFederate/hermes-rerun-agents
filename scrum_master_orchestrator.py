@@ -26,6 +26,7 @@ import sys
 from ast_patch_guard import ASTPatchGuard
 from ci_failure_ingestor import CIFailureIngestor
 from core.context.active_context_pruner import BillionContextManager
+from core.governance.policy_engine import PolicyEngine
 from core.orchestrator.scrum_hierarchy import (
     ESCALATION_CHAIN,
     ModelTier,
@@ -70,6 +71,7 @@ class ScrumMasterOrchestrator:
         self.write_gate = HumanWriteGate(self.workspace_path, self.tm, self.store)
         self.sandbox = SandboxExecutor(self.workspace_path)
         self.context_manager = BillionContextManager()
+        self.policy_engine = PolicyEngine(self.workspace_path)
 
     def create_sprint_plan(self, failure_context: Dict[str, Any]) -> Dict[str, Any]:
         """Decompose failure context into ordered SubTaskTicket items."""
@@ -111,19 +113,28 @@ class ScrumMasterOrchestrator:
         # Validate topological ordering
         ordered_tickets = SprintDAGScheduler.topological_sort(tickets)
 
+        # Policy-as-code boundary evaluation (Option 5: .hermes.yml)
+        all_target_files: List[str] = []
+        for t in ordered_tickets:
+            all_target_files.extend(t.allowed_files)
+        policy_res = self.policy_engine.evaluate_file_paths(all_target_files)
+        sprint_status = "TRIAGE_ONLY" if policy_res.resolved_mode == "TRIAGE_ONLY" else "ACTIVE"
+
         # Durably save sprint
         self.store.save_sprint(
             sprint_id=sprint_id,
-            status="ACTIVE",
-            failure_context=failure_context,
+            status=sprint_status,
+            failure_context={**failure_context, "policy": policy_res.to_dict()},
             tickets=ordered_tickets,
         )
 
         telemetry = self.summarize_sprint_telemetry(ordered_tickets)
         return {
             "sprint_id": sprint_id,
+            "status": sprint_status,
             "tickets": [asdict(t) for t in ordered_tickets],
             "telemetry": telemetry,
+            "policy": policy_res.to_dict(),
         }
 
     def summarize_sprint_telemetry(self, tickets: List[SubTaskTicket]) -> Dict[str, Any]:

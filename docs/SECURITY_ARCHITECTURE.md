@@ -203,4 +203,46 @@ Hermes is implemented entirely with Python standard library networking (`urllib.
 
 ---
 
+## 10. Option 4: "Zero False-Green" Verification Upgrades
+
+To satisfy Principal Engineer scrutiny, Hermes implements deterministic counterfactual and semantic verification to ensure healed tests never pass unconditionally:
+
+1. **Counterfactual Differential Verification (`core/verification/counterfactual_verifier.py`)**:
+   - **Forward Verification**: Candidate test patch executed against PR HEAD $\to$ Must PASS (exit code 0).
+   - **Counterfactual Verification**: Keeping the candidate test patch, the underlying source files are reverted to the baseline broken state $\to$ Must FAIL (exit code $\neq 0$).
+   - If a test passes against the known-broken baseline, it is rejected with `COUNTERFACTUAL_FAILED: Vacuous test detected`.
+2. **Semantic Assertion Weakening Guard (AST v2)** (`core/verification/semantic_assertion_guard.py`):
+   - Enforces assertion specificity scores across Python AST and JS/TS tokenizers.
+   - Blocks value dilution (`assert user.role == "admin"` $\to$ `assert user.role is not None`).
+   - Blocks exception broadening (`pytest.raises(PermissionError)` $\to$ `pytest.raises(Exception)`).
+   - Blocks timeout masking (rejects inflating test timeouts $> 3\times$ to mask latency regressions).
+3. **Accessibility-First Locator Upgrading (`core/verification/accessibility_locator_guard.py`)**:
+   - Rejects brittle pseudo-classes (`:nth-child`, `:nth-of-type`, `/html/body/...`, hashed CSS classes).
+   - Enforces resilient semantic locators (`getByRole`, `getByLabel`, `getByTestId`).
+
+---
+
+## 11. Option 5: InfoSec, DLP, Prompt Sandboxing & FinOps Controls
+
+Enterprise InfoSec, AI Governance, and FinOps policies are deterministically enforced before any LLM invocation:
+
+1. **Deterministic DLP Scrubber (`core/security/dlp_scrubber.py`)**:
+   - Specificity-ordered tokenization: PEM Private Keys $\to$ Connection URIs $\to$ JWTs $\to$ Cloud/VCS API Keys $\to$ Bearer Tokens $\to$ Emails $\to$ Secrets.
+   - Referential consistency: Maps identical secrets across failure logs and fixtures to the same session placeholder (e.g., `<HERMES_JWT_1>`).
+   - Hallucinated token rejection: During local detokenization, any unrecognized placeholder token hard-rejects the patch.
+2. **Policy-as-Code Governance (`.hermes.yml`) & FinOps Circuit Breakers**:
+   - Protected No-Heal Zones (`no_heal_zones: ["src/auth/**", "src/billing/**"]`) force `TRIAGE_ONLY`.
+   - Normalizes paths (`posixpath.normpath`) to prevent path traversal bypasses (`../`).
+   - Most-Restrictive-Wins resolution across all touched files (`TRIAGE_ONLY` > `SHADOW_SUGGEST` > `HEAL`).
+   - FinOps circuit breakers enforce token and spend caps per PR and per day with graceful degradation (`FINOPS_CIRCUIT_OPEN`).
+3. **Prompt-Injection Nonce Sandboxing (`core/security/prompt_sandbox.py`)**:
+   - Generates dynamic cryptographically random nonces (`secrets.token_hex(8)`) for XML boundaries (`<untrusted_ci_data_{nonce}>`).
+   - Neutralizes accidental or adversarial nonce tag collisions inside log payloads.
+   - Exfiltration Diff Check: Proactively blocks any candidate patch that introduces outbound network calls (`fetch`, `requests.post`) combined with environment reads (`os.environ`, `process.env`).
+4. **Cloud OIDC / Zero-Static-Key Router (`core/llm/oidc_provider.py`)**:
+   - Discovers ambient Workload Identity tokens across AWS Bedrock, Azure OpenAI, Google Vertex AI, and air-gapped VPC gateways.
+   - Supports strict enterprise policy flag (`require_oidc: true`) to forbid static API keys.
+
+---
+
 *For technical security questions or to schedule an architectural review, contact the Hermes Security Council.*
