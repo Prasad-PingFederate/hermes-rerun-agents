@@ -25,8 +25,11 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
 from agents.ci_detective import CIDetectiveAgent
+from core.audit.otel_exporter import OTLPExporter
+from core.audit.sarif_exporter import SARIFExporter
 from core.governance.assertion_erosion_guard import ZeroAssertionErosionGuard
 from core.quarantine.flake_quarantine_agent import FlakeQuarantineAgent
+from core.scale.shard_clusterer import ShardClusterer
 from core.shadow_mode.suggestion_engine import (
     DiffHunkParser,
     ShadowSuggestionClient,
@@ -200,7 +203,27 @@ def main() -> int:
     set_action_output("hours_saved", str(hours_saved))
     set_action_output("dollar_roi", str(dollar_roi))
 
-    print(f"📊 [EXECUTIVE ROI] Hours Saved: {hours_saved}h | Estimated ROI: ${dollar_roi} USD")
+    # 6. Tamper-Evident SARIF v2.1.0 & OTel Telemetry Export (Option 6)
+    sarif_path = workspace_path / "hermes-report.sarif"
+    sarif_res = SARIFExporter.export_report(
+        findings=staged_proposal.get("security_findings", []),
+        commit_sha=head_sha,
+        verdict=classification,
+        output_path=sarif_path,
+    )
+    set_action_output("sarif_report", str(sarif_path))
+    set_action_output("audit_digest", sarif_res.audit_digest)
+
+    otel_exporter = OTLPExporter(local_fallback_file=workspace_path / "sprint_telemetry.jsonl")
+    otel_exporter.export_sprint_telemetry(
+        sprint_id=sprint_id,
+        verdict=classification,
+        hours_saved=hours_saved,
+        dollar_roi=dollar_roi,
+        audit_digest=sarif_res.audit_digest,
+    )
+
+    print(f"📊 [EXECUTIVE ROI] Hours Saved: {hours_saved}h | Estimated ROI: ${dollar_roi} USD | SARIF: {sarif_path.name}")
     return 0
 
 

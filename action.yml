@@ -63,6 +63,12 @@ outputs:
   branch:
     description: 'Git branch created in heal mode (if applicable)'
     value: ${{ steps.run-hermes.outputs.branch }}
+  sarif-report:
+    description: 'File path to generated GitHub Code Scanning SARIF v2.1.0 report'
+    value: ${{ steps.run-hermes.outputs.sarif_report }}
+  audit-digest:
+    description: 'Tamper-evident SHA-256 audit digest over commit, policy, and findings'
+    value: ${{ steps.run-hermes.outputs.audit_digest }}
 
 runs:
   using: 'composite'
