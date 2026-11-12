@@ -10,6 +10,7 @@ from core.security.dlp_scrubber import (
     DLPScrubber,
     ScrubResult,
     HallucinatedPlaceholderError,
+    RuntimeSecretLeakError,
 )
 from core.security.prompt_sandbox import PromptSandbox, PromptSandboxResult
 
@@ -18,6 +19,7 @@ __all__ = [
     "DLPScrubber",
     "ScrubResult",
     "HallucinatedPlaceholderError",
+    "RuntimeSecretLeakError",
     "PromptSandbox",
     "PromptSandboxResult",
 ]

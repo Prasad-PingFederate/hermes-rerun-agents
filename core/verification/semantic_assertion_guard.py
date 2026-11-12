@@ -280,6 +280,10 @@ class SemanticAssertionGuard:
                     )
                 )
 
+        # 4. Check Dead-Code Assertion Bypasses (early return, dead branch, blanket exception swallow)
+        dead_code_findings = cls.check_dead_code_assertion_bypasses(rel_path, prop_tree)
+        findings.extend(dead_code_findings)
+
         return findings
 
     @classmethod
@@ -484,6 +488,159 @@ class SemanticAssertionGuard:
                             proposed_snippet=f"pytest.raises({exc_name})",
                         )
                     )
+            findings.extend(cls.check_dead_code_assertion_bypasses(rel_path, tree))
+        return findings
+
+    @classmethod
+    def check_dead_code_assertion_bypasses(
+        cls, rel_path: str, tree: ast.AST
+    ) -> List[DowngradeFinding]:
+        """Detect dead-branch bypasses in Python tests: early returns before asserts,
+        asserts in statically dead branches, and try/except swallows of assertions."""
+        findings: List[DowngradeFinding] = []
+
+        def _contains_assert(nodes: List[ast.stmt]) -> Tuple[bool, Optional[int], Optional[str]]:
+            for n in nodes:
+                for sub in ast.walk(n):
+                    if isinstance(sub, ast.Assert):
+                        lineno = getattr(sub, "lineno", getattr(n, "lineno", 1))
+                        return True, lineno, cls._unparse_safe(sub)
+                    if isinstance(sub, ast.Call):
+                        func_name = cls._unparse_safe(sub.func).lower()
+                        if "assert" in func_name:
+                            lineno = getattr(sub, "lineno", getattr(n, "lineno", 1))
+                            return True, lineno, cls._unparse_safe(sub)
+            return False, None, None
+
+        # 1. Early return preceding assertions in test functions
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                if not (node.name.startswith("test_") or node.name.startswith("test")):
+                    continue
+
+                return_seen = False
+                return_lineno = None
+                for stmt in node.body:
+                    if isinstance(stmt, ast.Return):
+                        return_seen = True
+                        return_lineno = getattr(stmt, "lineno", getattr(node, "lineno", 1))
+                    elif return_seen:
+                        has_assert, assert_lineno, assert_snippet = _contains_assert([stmt])
+                        if has_assert:
+                            findings.append(
+                                DowngradeFinding(
+                                    category="DEAD_CODE_ASSERTION_BYPASS",
+                                    file_path=rel_path,
+                                    message=(
+                                        f"In '{node.name}': Early return at line {return_lineno} "
+                                        f"precedes unreachable assertion at line {assert_lineno} ({assert_snippet}). "
+                                        "Dead-code bypasses test verification unconditionally."
+                                    ),
+                                    line_number=return_lineno,
+                                    original_snippet="",
+                                    proposed_snippet=f"return ... {assert_snippet}",
+                                )
+                            )
+                            break
+
+        # 2. Dead conditionals containing assertions (if False:, if 0:, if None:, if not True:)
+        def _is_statically_false(expr: ast.expr) -> bool:
+            if isinstance(expr, ast.Constant):
+                return not bool(expr.value)
+            if isinstance(expr, ast.UnaryOp) and isinstance(expr.op, ast.Not):
+                if isinstance(expr.operand, ast.Constant):
+                    return bool(expr.operand.value)
+            return False
+
+        def _is_statically_true(expr: ast.expr) -> bool:
+            if isinstance(expr, ast.Constant):
+                return bool(expr.value)
+            if isinstance(expr, ast.UnaryOp) and isinstance(expr.op, ast.Not):
+                if isinstance(expr.operand, ast.Constant):
+                    return not bool(expr.operand.value)
+            return False
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.If):
+                # Body is dead if condition is statically false
+                if _is_statically_false(node.test):
+                    has_assert, assert_lineno, assert_snippet = _contains_assert(node.body)
+                    if has_assert:
+                        cond_str = cls._unparse_safe(node.test)
+                        findings.append(
+                            DowngradeFinding(
+                                category="DEAD_CODE_ASSERTION_BYPASS",
+                                file_path=rel_path,
+                                message=(
+                                    f"Assertion ({assert_snippet}) placed inside statically dead branch "
+                                    f"'if {cond_str}:' at line {getattr(node, 'lineno', 1)}. Test will never execute."
+                                ),
+                                line_number=assert_lineno,
+                                proposed_snippet=f"if {cond_str}: {assert_snippet}",
+                            )
+                        )
+                # Else body is dead if condition is statically true
+                if _is_statically_true(node.test) and node.orelse:
+                    has_assert, assert_lineno, assert_snippet = _contains_assert(node.orelse)
+                    if has_assert:
+                        cond_str = cls._unparse_safe(node.test)
+                        findings.append(
+                            DowngradeFinding(
+                                category="DEAD_CODE_ASSERTION_BYPASS",
+                                file_path=rel_path,
+                                message=(
+                                    f"Assertion ({assert_snippet}) placed inside dead else branch of "
+                                    f"'if {cond_str}:' at line {getattr(node, 'lineno', 1)}. Test will never execute."
+                                ),
+                                line_number=assert_lineno,
+                                proposed_snippet=f"else: {assert_snippet}",
+                            )
+                        )
+
+        # 3. Blanket suppression: try: ... assert ... except: pass
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Try):
+                has_assert, assert_lineno, assert_snippet = _contains_assert(node.body)
+                if has_assert:
+                    for handler in node.handlers:
+                        catches_broadly = False
+                        if handler.type is None:  # bare except:
+                            catches_broadly = True
+                        else:
+                            type_str = cls._unparse_safe(handler.type)
+                            if any(e in type_str for e in ("Exception", "BaseException", "AssertionError")):
+                                catches_broadly = True
+
+                        if catches_broadly:
+                            swallows = False
+                            if not handler.body:
+                                swallows = True
+                            elif len(handler.body) == 1:
+                                h_stmt = handler.body[0]
+                                if isinstance(h_stmt, ast.Pass):
+                                    swallows = True
+                                elif isinstance(h_stmt, ast.Return) and h_stmt.value is None:
+                                    swallows = True
+                                elif isinstance(h_stmt, ast.Expr) and isinstance(h_stmt.value, ast.Constant):
+                                    swallows = True
+
+                            if swallows:
+                                handler_type_str = cls._unparse_safe(handler.type) or "bare"
+                                findings.append(
+                                    DowngradeFinding(
+                                        category="DEAD_CODE_ASSERTION_BYPASS",
+                                        file_path=rel_path,
+                                        message=(
+                                            f"Assertion at line {assert_lineno} ({assert_snippet}) wrapped in "
+                                            f"try block with swallowing 'except {handler_type_str}: pass'. "
+                                            "Silently masks test failures."
+                                        ),
+                                        line_number=assert_lineno,
+                                        proposed_snippet=f"try: {assert_snippet} except: pass",
+                                    )
+                                )
+                                break
+
         return findings
 
     @classmethod

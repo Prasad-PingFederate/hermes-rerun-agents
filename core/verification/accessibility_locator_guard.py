@@ -36,6 +36,7 @@ class BrittleLocatorFinding:
     line_number: Optional[int] = None
     suggested_upgrade: str = ""
     message: str = ""
+    severity: str = "ERROR"  # "ERROR" hard-blocks heal; "WARNING" permits fallback on tables/lists
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -45,6 +46,7 @@ class BrittleLocatorFinding:
             "line_number": self.line_number,
             "suggested_upgrade": self.suggested_upgrade,
             "message": self.message,
+            "severity": self.severity,
         }
 
 
@@ -55,6 +57,7 @@ class LocatorAuditResult:
     brittle_detected: bool
     findings: List[BrittleLocatorFinding] = field(default_factory=list)
     reasons: List[str] = field(default_factory=list)
+    warnings: List[str] = field(default_factory=list)
     suggested_replacements: Dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -63,6 +66,7 @@ class LocatorAuditResult:
             "brittle_detected": self.brittle_detected,
             "findings": [f.to_dict() for f in self.findings],
             "reasons": self.reasons,
+            "warnings": self.warnings,
             "suggested_replacements": self.suggested_replacements,
         }
 
@@ -162,17 +166,24 @@ class AccessibilityLocatorGuard:
                 if f.suggested_upgrade:
                     suggested_replacements[f.selector] = f.suggested_upgrade
 
-        brittle_detected = len(findings) > 0
+        has_errors = any(f.severity == "ERROR" for f in findings)
         reasons = [
             f"{f.file_path} [{f.pattern_type}]: Brittle locator '{f.selector}' rejected. {f.message} Suggestion: {f.suggested_upgrade}"
             for f in findings
+            if f.severity == "ERROR"
+        ]
+        warnings = [
+            f"{f.file_path} [{f.pattern_type}]: Advisory warning on '{f.selector}'. {f.message}"
+            for f in findings
+            if f.severity == "WARNING"
         ]
 
         return LocatorAuditResult(
-            valid=not brittle_detected,
-            brittle_detected=brittle_detected,
+            valid=not has_errors,
+            brittle_detected=has_errors,
             findings=findings,
             reasons=reasons,
+            warnings=warnings,
             suggested_replacements=suggested_replacements,
         )
 
@@ -203,6 +214,24 @@ class AccessibilityLocatorGuard:
                 # Test selector against brittle patterns
                 for p_type, regex, desc in cls.BRITTLE_PATTERNS:
                     if regex.search(selector):
+                        severity = "ERROR"
+                        pattern_desc = desc
+                        # Tabular/List exception: Allow index-based selections on tr, td, th, li, option as advisory warning
+                        if p_type == "NTH_CHILD_OR_POSITIONAL":
+                            is_tabular_or_list = bool(
+                                re.search(
+                                    r"\b(?:tr|td|th|li|option|tbody|thead|table|row|cell):(?:nth-child|nth-of-type|first-child|last-child)",
+                                    selector,
+                                    re.IGNORECASE,
+                                )
+                            )
+                            if is_tabular_or_list:
+                                severity = "WARNING"
+                                pattern_desc = (
+                                    "Positional selector targeting tabular/list element ('tr', 'td', 'li'). "
+                                    "Allowed as advisory fallback when semantic data-testid is absent."
+                                )
+
                         upgrade = cls.generate_upgrade_suggestion(selector, p_type, is_python=file_path.endswith(".py"))
                         findings.append(
                             BrittleLocatorFinding(
@@ -211,7 +240,8 @@ class AccessibilityLocatorGuard:
                                 selector=selector,
                                 line_number=line_no,
                                 suggested_upgrade=upgrade,
-                                message=desc,
+                                message=pattern_desc,
+                                severity=severity,
                             )
                         )
                         break

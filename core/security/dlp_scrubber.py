@@ -29,6 +29,11 @@ class HallucinatedPlaceholderError(ValueError):
     pass
 
 
+class RuntimeSecretLeakError(ValueError):
+    """Raised when candidate code attempts to detokenize a secret extracted from runtime logs or external tickets."""
+    pass
+
+
 @dataclass
 class ScrubResult:
     """Telemetry captured from a DLP scrub pass."""
@@ -122,16 +127,24 @@ class DLPSessionVault:
         self.raw_to_token: Dict[str, str] = {}
         self.token_to_raw: Dict[str, str] = {}
         self.type_counters: Dict[str, int] = {}
+        self.source_tokens: Set[str] = set()
+        self.one_way_tokens: Set[str] = set()
 
     def is_whitelisted(self, value: str) -> bool:
         """Check if string is a benign development identifier like a commit SHA or UUID."""
         val = value.strip()
         return any(p.match(val) for p in self.WHITELIST_PATTERNS)
 
-    def _allocate_token(self, category: str, raw_value: str) -> str:
+    def _allocate_token(self, category: str, raw_value: str, source: str = "SOURCE") -> str:
         """Allocate or reuse referentially consistent token for raw secret."""
+        src = source.strip().upper()
         if raw_value in self.raw_to_token:
-            return self.raw_to_token[raw_value]
+            token = self.raw_to_token[raw_value]
+            if src in ("SOURCE", "SOURCE_CODE", "CODE", "FIXTURE"):
+                self.source_tokens.add(token)
+            elif src in ("RUNTIME_LOG", "LOG", "ONE_WAY", "ONE_WAY_SCRUB", "TICKET"):
+                self.one_way_tokens.add(token)
+            return token
 
         current = self.type_counters.get(category, 0) + 1
         self.type_counters[category] = current
@@ -139,10 +152,29 @@ class DLPSessionVault:
 
         self.raw_to_token[raw_value] = token
         self.token_to_raw[token] = raw_value
+
+        if src in ("SOURCE", "SOURCE_CODE", "CODE", "FIXTURE"):
+            self.source_tokens.add(token)
+        elif src in ("RUNTIME_LOG", "LOG", "ONE_WAY", "ONE_WAY_SCRUB", "TICKET"):
+            self.one_way_tokens.add(token)
+
         return token
 
-    def scrub(self, text: str) -> ScrubResult:
-        """Execute deterministic DLP pipeline across input string."""
+    def register_source_code(self, source_text: str) -> ScrubResult:
+        """Scan and register known tokens from repository source files as safe to detokenize."""
+        return self.scrub(source_text, source="SOURCE")
+
+    def scrub_runtime_log(self, log_text: str) -> ScrubResult:
+        """Scrub runtime CI failure log with one-way protection against patch exfiltration."""
+        return self.scrub(log_text, source="RUNTIME_LOG")
+
+    def scrub(self, text: str, source: str = "SOURCE") -> ScrubResult:
+        """Execute deterministic DLP pipeline across input string.
+        
+        Args:
+            text: Raw input text (code, fixture, ticket, or log).
+            source: 'SOURCE' for checked-in codebase files; 'RUNTIME_LOG' for CI logs or external tickets.
+        """
         if not text:
             return ScrubResult(0, 0, "", 0, {})
 
@@ -159,7 +191,7 @@ class DLPSessionVault:
                     secret = match.group(1)
                     if self.is_whitelisted(secret):
                         return full
-                    token = self._allocate_token(category, secret)
+                    token = self._allocate_token(category, secret, source=source)
                     counts_by_category[category] = counts_by_category.get(category, 0) + 1
                     return full.replace(secret, token, 1)
 
@@ -169,7 +201,7 @@ class DLPSessionVault:
                     raw = match.group(0)
                     if self.is_whitelisted(raw):
                         return raw
-                    token = self._allocate_token(category, raw)
+                    token = self._allocate_token(category, raw, source=source)
                     counts_by_category[category] = counts_by_category.get(category, 0) + 1
                     return token
 
@@ -184,11 +216,17 @@ class DLPSessionVault:
             placeholder_counts=counts_by_category,
         )
 
-    def detokenize(self, text: str) -> str:
+    def detokenize(self, text: str, allow_one_way: bool = False) -> str:
         """Rehydrate placeholders back into original secrets locally.
         
+        Args:
+            text: String containing <HERMES_*_*> placeholders.
+            allow_one_way: If False (default), prevents runtime log secrets from being
+                           detokenized into candidate patches or PR comments.
+
         Raises:
             HallucinatedPlaceholderError: If text contains placeholders not in this session vault.
+            RuntimeSecretLeakError: If text contains secrets only extracted from runtime logs.
         """
         if not text:
             return ""
@@ -199,6 +237,20 @@ class DLPSessionVault:
                 f"Candidate code contains unrecognized placeholder(s): {', '.join(unknown)}. "
                 "Rejecting patch to prevent leaking placeholder tokens into production."
             )
+
+        # One-Way DLP Guard: Block rehydrating secrets seen only in runtime logs/tickets
+        if not allow_one_way:
+            leaked_tokens: List[str] = []
+            for m in self.PLACEHOLDER_REGEX.finditer(text):
+                tok = m.group(0)
+                if tok in self.one_way_tokens and tok not in self.source_tokens:
+                    leaked_tokens.append(tok)
+            if leaked_tokens:
+                unique_leaked = sorted(set(leaked_tokens))
+                raise RuntimeSecretLeakError(
+                    f"Refusing to detokenize runtime-only secret(s): {', '.join(unique_leaked)}. "
+                    "Runtime log credentials (ONE_WAY_SCRUB) must never be rehydrated into code patches or PR comments."
+                )
 
         # Replace in reverse length order to prevent prefix collisions
         sorted_tokens = sorted(self.token_to_raw.keys(), key=len, reverse=True)

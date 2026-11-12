@@ -1,14 +1,14 @@
 # 🤖 Hermes: Autonomous Software Engineering & Governed Self-Healing Platform
 
-[![Tests](https://img.shields.io/badge/unit%20tests-125%20passed-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/unit%20tests-174%20passed%20(100%25)-brightgreen.svg)]()
 [![Playwright E2E](https://img.shields.io/badge/console%20e2e-7%20passed%20(100%25)-brightgreen.svg)]()
-[![Syntax Guard](https://img.shields.io/badge/syntax%20guard-68%2F68%20Python%203.10%20passed-success.svg)]()
+[![Syntax Guard](https://img.shields.io/badge/syntax%20guard-91%2F91%20Python%203.10%20passed-success.svg)]()
 [![Governance](https://img.shields.io/badge/governance-Zero%20Assertion%20Erosion-orange.svg)]()
 [![Security](https://img.shields.io/badge/security-Deterministic%20Delta--SAST-blue.svg)]()
 [![GitHub Action](https://img.shields.io/badge/GitHub%20Action-60s%20Install-purple.svg)](#-60-second-install-with-github-actions)
-[![License](https://img.shields.io/badge/license-AGPL--3.0-orange.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-**Hermes** is an enterprise B2B self-healing platform and autonomous software engineering engine. Built on a hierarchical 8-agent Scrum DAG, Hermes automatically ingests failing CI runs, isolates root causes, synthesizes surgical AST-level repairs, deterministically blocks security vulnerabilities, and posts 1-click in-diff suggestions or draft PRs—compressing Mean Time To Resolution (MTTR) from **4.2 hours to 1.3 minutes (-99.5%)**.
+**Hermes** is an enterprise B2B self-healing platform and autonomous software engineering engine. Built on a deterministic 5-stage verification and healing pipeline, Hermes automatically ingests failing CI runs, isolates root causes across parallel runner matrices, synthesizes surgical AST-level repairs, deterministically blocks security vulnerabilities, and posts 1-click in-diff suggestions or draft PRs—compressing Mean Time To Resolution (MTTR) from **4.2 hours to 1.3 minutes (-99.5%)**.
 
 ---
 
@@ -24,10 +24,11 @@ on:
     types: [opened, synchronize, reopened]
 
 permissions:
-  contents: write              # Required for heal/quarantine draft branches
+  contents: read               # Zero-Write in default Shadow Mode
   pull-requests: write         # Required for shadow mode in-diff suggestions
-  id-token: write              # Required for Option 5 Cloud OIDC Workload Identity
-  security-events: write       # Required for GitHub Code Scanning SARIF upload
+  # contents: write            # Optional: Required only for 'heal' mode (opening draft PR branches)
+  # id-token: write            # Optional: Required for Option 5 Cloud OIDC Workload Identity
+  # security-events: write     # Optional: Required for GitHub Code Scanning SARIF upload
 
 jobs:
   hermes:
@@ -42,7 +43,7 @@ jobs:
           python-version: '3.10'
 
       - name: Install Dependencies
-        run: pip install -r requirements.txt || true
+        run: pip install -r requirements.txt
 
       - name: Run Hermes Healer (Shadow Mode)
         id: hermes
@@ -81,55 +82,61 @@ jobs:
 
 ---
 
-## 🏗️ The 8-Agent Governed Scrum Hierarchy
+## 🏗️ Deterministic 5-Stage Verification & Healing Pipeline
 
-Hermes coordinates 8 specialized agent roles across 4 competence tiers with strict system prompts, tools, and inviolable scope boundaries enforced at the Python layer:
+Rather than unconstrained code generation, Hermes operates as an immutable, audited 5-stage verification and remediation pipeline designed for SOC 2, ISO 27001, and banking-grade security reviews:
 
 ```
-                  ┌──────────────────────────────────────────────┐
-                  │          ScrumMasterOrchestrator             │
-                  │   (TIER_1_TECH_LEAD · Sprint DAG Governance) │
-                  └──────────────────────┬───────────────────────┘
-                                         │
-        ┌────────────────────────────────┼────────────────────────────────┐
-        ▼                                ▼                                ▼
-┌──────────────────────┐      ┌──────────────────────┐      ┌──────────────────────┐
-│  RequirementsAgent   │      │  TestCaseWriterAgent │      │ FlakeQuarantineAgent │
-│  (TIER_2 · Read-Only)│      │  (TIER_3 · Tests-Only)      │  (TIER_2 · Retries)  │
-└──────────────────────┘      └──────────────────────┘      └──────────────────────┘
-        │                                │                                │
-        ▼                                ▼                                ▼
-┌──────────────────────┐      ┌──────────────────────┐      ┌──────────────────────┐
-│   DeveloperAgent     │      │   TestHealerAgent    │      │AutomationTesterAgent │
-│ (TIER_3 · Impl Only) │      │  (TIER_3 · Tests-Only)      │(TIER_3 · Worktree 3x)│
-└──────────────────────┘      └──────────────────────┘      └──────────────────────┘
-        │                                │                                │
-        └────────────────────────────────┼────────────────────────────────┘
-                                         │
-                                         ▼
-                  ┌──────────────────────────────────────────────┐
-                  │    QACriticAgent & SecurityBlastRadiusAgent  │
-                  │ (TIER_4_QA_CRITIC · Delta-SAST & Rubrics)    │
-                  └──────────────────────┬───────────────────────┘
-                                         │
-                                         ▼
-                  ┌──────────────────────────────────────────────┐
-                  │       HumanWriteGate & TimeMachineEngine     │
-                  │   (SHA-256 Tarball Pre-Apply Snapshot Rollback│
-                  └──────────────────────────────────────────────┘
+                  ┌──────────────────────────────────────────────────────────────┐
+                  │   STAGE 1: Failure Ingestion & Cross-Shard Clustering        │
+                  │   • Volatile Noise Stripping (PIDs, memory addresses, ports) │
+                  │   • Root-Cause Canonical Hash: ClusterSig = SHA256(...)      │
+                  │   • Shard Matrix Deduplication (16 shards → 1 triage ticket) │
+                  └──────────────────────────────┬───────────────────────────────┘
+                                                 │
+                                                 ▼
+                  ┌──────────────────────────────────────────────────────────────┐
+                  │   STAGE 2: Deterministic In-Memory DLP & Prompt Sandboxing   │
+                  │   • Specificity-Ordered Regex: PEM → URI → JWT → Keys → PII  │
+                  │   • One-Way Scrubbing: Runtime log credentials never leak    │
+                  │   • Cryptographic Nonce Sandboxing (blocks prompt injection) │
+                  └──────────────────────────────┬───────────────────────────────┘
+                                                 │
+                                                 ▼
+                  ┌──────────────────────────────────────────────────────────────┐
+                  │   STAGE 3: AST Assertion Preservation & Specificity Guard    │
+                  │   • Zero Assertion Erosion: Count invariants & skip blocking │
+                  │   • AST v2 Specificity Guard: Rejects matcher dilution       │
+                  │   • Dead-Branch Detection: Blocks early return & dead code   │
+                  │   • Accessibility-First Locators: Upgrades brittle selectors │
+                  └──────────────────────────────┬───────────────────────────────┘
+                                                 │
+                                                 ▼
+                  ┌──────────────────────────────────────────────────────────────┐
+                  │   STAGE 4: Counterfactual Differential Sandbox Verification  │
+                  │   • Forward Pass: Healed test + PR HEAD → Must PASS (exit 0) │
+                  │   • Baseline Reversion: Healed test + Base code → Must FAIL  │
+                  │   • Test-Node Targeting: pytest file.py::node isolation      │
+                  │   • Vacuous Test Rejection: Blocks unconditionally green code│
+                  └──────────────────────────────┬───────────────────────────────┘
+                                                 │
+                                                 ▼
+                  ┌──────────────────────────────────────────────────────────────┐
+                  │   STAGE 5: Policy-as-Code, SARIF & Zero-Write Audit Export   │
+                  │   • .hermes.yml: Tiered autonomy, no_heal_zones (src/auth/**)│
+                  │   • Shadow Mode: Zero-write in-diff ```suggestion comments   │
+                  │   • SARIF v2.1.0 & OTel: Native GitHub Code Scanning alerts  │
+                  │   • Tamper-Evident Digest: SHA-256 audit trail per commit    │
+                  └──────────────────────────────────────────────────────────────┘
 ```
 
-| Agent Role | Model Tier | Allowed Scope | Key Responsibilities & Invariants |
+| Pipeline Stage | Safety Gate | Enforcement Mechanism | Failure Action |
 | :--- | :--- | :--- | :--- |
-| **ScrumMasterOrchestrator** | `TIER_1_TECH_LEAD` | Global Governance | Owns sprint planning (`create_sprint_plan`), topological DAG scheduling, escalation loops, and write-gate acceptance. |
-| **RequirementsAgent** | `TIER_2_SENIOR_SWE` | Read-Only | Analyzes user stories and stack traces into Acceptance Criteria (`AC-1..N`) and Edge Cases (`EC-1..N`). |
-| **DeveloperAgent** | `TIER_3_JUNIOR_SWE` | Product Files (`src/`, `lib/`) | Repairs defects and implements features. **Strictly forbidden from modifying test suites.** |
-| **TestCaseWriterAgent** | `TIER_3_JUNIOR_SWE` | Test Files (`tests/*`) | Authors comprehensive unit and Playwright specs. **Strictly forbidden from weakening assertions.** |
-| **TestHealerAgent** | `TIER_3_JUNIOR_SWE` | Test Files (`tests/*`) | Surgically repairs drifted assertions for `TEST_BUG` failures. **Forbidden from editing product code.** |
-| **FlakeQuarantineAgent** | `TIER_2_SENIOR_SWE` | Test Files (`tests/*`) | Auto-stabilizes intermittent flakes by injecting Pytest/Playwright/Jest retries + diagnostic tables. |
-| **AutomationTesterAgent** | `TIER_3_JUNIOR_SWE` | Ephemeral Worktree | Executes multi-pass runs 3x (`repeat=3`), collects artifacts, and classifies failures. |
-| **QACriticAgent** | `TIER_4_QA_CRITIC` | Proposal Review | Evaluates proposals against acceptance criteria. Rejections trigger auto-escalation (`TIER_3 -> 2 -> 1`). |
-| **SecurityBlastRadiusAgent**| `TIER_4_QA_CRITIC` | AST Delta Scan | Scans proposed AST changes for command injection, SQLi, XSS, and timing attacks. |
+| **Stage 1: Ingestion & Clustering** | Cross-Shard Deduplication | Strips volatile ports/paths; computes canonical SHA-256 signature | Collapses $N$ parallel shard failures into 1 LLM triage call |
+| **Stage 2: DLP & Sandboxing** | Zero-Leak Credential Vault | Reversible in-memory tokenization + one-way runtime scrub | Raises `RuntimeSecretLeakError` if patch echoes runtime log secrets |
+| **Stage 3: AST Integrity** | Zero Assertion Erosion & AST v2 | Scores assertion specificity; blocks `toBe(200) → toBeTruthy()` & dead returns | Rejects candidate repair before test execution |
+| **Stage 4: Counterfactual Sandbox** | Differential Verification | Runs candidate fix in ephemeral worktree against PR HEAD and broken base | Hard-rejects vacuous tests that pass against broken base code |
+| **Stage 5: Governed Export** | Zero-Write Shadow Mode | Policy-as-code `.hermes.yml`, SARIF Code Scanning & SHA-256 digest | Posts in-diff suggestion comments with zero repository write access |
 
 ---
 
@@ -159,16 +166,19 @@ Hermes was designed from day one to pass enterprise vendor security assessments 
 
 ## 📊 Executive ROI & MTTR Telemetry
 
-Hermes includes a real-time ROI calculation engine providing complete mathematical transparency to engineering leadership:
+Hermes includes a real-time ROI calculation engine providing auditable mathematical transparency calibrated to root-cause failure clusters rather than raw matrix noise:
 
 ```
-Engineering Hours Saved = (Product Bugs × 4.2h) + (Test Drifts × 2.0h) + (Flakes × 1.5h) + (Hostiles Blocked × 3.0h)
-Estimated Dollar ROI ($) = Total Hours Saved × Fully Loaded Engineering Rate ($125/hr)
-MTTR Compression % = ((4.2h Baseline - Autonomous Duration) / 4.2h) × 100
+Root-Cause Triage Hours Saved = (Root-Cause Clusters × 1.5h) + (Flakes Quarantined × 1.0h) + (Hostiles Blocked × 3.0h)
+Matrix Deduplication Efficiency = ((Total Shard Failures - Collapsed Clusters) / Total Shard Failures) × 100%
+Estimated Dollar ROI ($) = Net Engineering Hours Saved × Fully Loaded Engineering Rate ($125/hr)
+MTTR Compression % = ((4.2h Baseline - Autonomous Duration) / 4.2h) × 100%
 ```
+
+> **Why Cluster-Calibrated ROI?** In a 16-shard matrix CI, a single breaking API change can fail 40 tests across 16 runners. Naive calculators claim 40 × $525 = $21,000 for a single typo. Hermes clusters failures by canonical root cause signature (`ClusterSig`), providing auditable, conservative financial metrics trusted by CFOs and engineering directors.
 
 ### Telemetry API Endpoints
-* `GET /api/telemetry/roi`: Returns live hours saved, dollar ROI, and MTTR compression metrics.
+* `GET /api/telemetry/roi`: Returns live hours saved, dollar ROI, cluster collapse metrics, and MTTR compression.
 * `POST /api/telemetry/roi/config`: Dynamically updates hourly engineering rates and manual MTTR baselines.
 
 ---
@@ -179,7 +189,7 @@ Hermes includes a developer console styled in dark copper (`#14120e` / `#c9854a`
 
 * **Executive ROI Header Bar**: Real-time display of hours saved, MTTR compression (`4.2h → 1.3m -99.5%`), quarantines, and dollar ROI.
 * **Math Breakdown Drawer**: Clickable ROI metric slides out the auditable formula breakdown.
-* **Sprint Board Rail**: Visual 7-step progression from triage to write gate.
+* **Pipeline Rail**: Visual 5-stage progression from triage clustering to verification gate.
 * **Time Machine Controls**: 1-click snapshot creation, rollback, and branch PR staging.
 
 ```bash
@@ -199,20 +209,20 @@ Every commit to Hermes is validated against strict verification gates:
 ```bash
 # 1. Syntax Guard: 100% Python 3.10 syntax compatibility
 python scripts/syntax_guard.py
-# Output: ✅ [SYNTAX GUARD PASSED] All 68 files are 100% Python 3.10 compatible.
+# Output: ✅ [SYNTAX GUARD PASSED] All 91 files are 100% Python 3.10 compatible.
 
-# 2. Complete Unit Test Suite (125 tests)
+# 2. Complete Unit Test Suite (174 tests)
 python -m pytest tests/ -q
-# Output: 125 passed in 2m 23s
+# Output: 174 passed in 2m 43s
 
 # 3. Playwright Console E2E Suite (7 specifications)
 python -m pytest console_tests/ -v
-# Output: 7 passed in 2m 38s
+# Output: 7 passed
 ```
 
 ---
 
 ## 📄 License & Commercial Support
 
-Hermes is licensed under the [GNU Affero General Public License v3.0 (AGPL-3.0)](LICENSE).  
-For commercial enterprise licensing, dedicated support, custom model fine-tuning, or private cloud VPC deployments, contact **sales@hermes-rerun.ai**.
+Hermes is open-sourced under the permissive [Apache License 2.0](LICENSE).  
+For commercial enterprise licensing, dedicated SLAs, custom model fine-tuning, or private cloud VPC deployments, contact **sales@hermes-rerun.ai**.

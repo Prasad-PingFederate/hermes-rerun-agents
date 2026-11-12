@@ -65,6 +65,20 @@ class CounterfactualVerifier:
         self.workspace_root = Path(workspace_root or Path.cwd()).resolve()
         self.default_timeout_seconds = default_timeout_seconds
 
+    @classmethod
+    def is_test_path(cls, path_str: str) -> bool:
+        """Return True if path represents a test file."""
+        norm = path_str.replace("\\", "/").lower()
+        parts = norm.split("/")
+        filename = parts[-1]
+        if any(d in parts for d in ("tests", "test", "__tests__", "specs")):
+            return True
+        if filename.startswith("test_") or filename.endswith("_test.py"):
+            return True
+        if any(filename.endswith(ext) for ext in (".spec.ts", ".test.ts", ".spec.js", ".test.js", ".spec.tsx", ".test.tsx")):
+            return True
+        return False
+
     def verify_differential(
         self,
         test_file: str,
@@ -73,6 +87,8 @@ class CounterfactualVerifier:
         base_git_ref: Optional[str] = None,
         product_file_paths: Optional[List[str]] = None,
         test_command: Optional[List[str]] = None,
+        test_node: Optional[str] = None,
+        is_test_only_pr: bool = False,
     ) -> CounterfactualResult:
         """Execute 2-step differential verification:
         1. Forward: healed test + current code -> must PASS (exit 0).
@@ -90,8 +106,8 @@ class CounterfactualVerifier:
             target_test_path.parent.mkdir(parents=True, exist_ok=True)
             target_test_path.write_text(healed_test_content, encoding="utf-8")
 
-            # Determine runner command
-            runner_cmd = test_command or self._resolve_test_command(test_file)
+            # Determine runner command with exact test node targeting
+            runner_cmd = test_command or self._resolve_test_command(test_file, test_node=test_node)
 
             # -------------------------------------------------------------
             # STEP 1: Forward Verification (Must PASS on current code)
@@ -117,16 +133,46 @@ class CounterfactualVerifier:
             # -------------------------------------------------------------
             # STEP 2: Counterfactual Verification (Must FAIL on base code)
             # -------------------------------------------------------------
+            # Detect Test-Only PRs: If PR only changes test files, baseline source reversion
+            # is skipped to avoid false-vacuous rejections.
+            pure_test_diff = is_test_only_pr
+            if not pure_test_diff and baseline_source_files is not None:
+                non_test_baselines = {k: v for k, v in baseline_source_files.items() if not self.is_test_path(k)}
+                if len(non_test_baselines) == 0:
+                    pure_test_diff = True
+            if not pure_test_diff and product_file_paths is not None:
+                non_test_products = [p for p in product_file_paths if not self.is_test_path(p)]
+                if len(non_test_products) == 0:
+                    pure_test_diff = True
+
+            if pure_test_diff:
+                duration = time.time() - start_time
+                return CounterfactualResult(
+                    verified=True,
+                    is_vacuous=False,
+                    forward_passed=True,
+                    counterfactual_failed=True,
+                    forward_exit_code=0,
+                    counterfactual_exit_code=0,
+                    duration_seconds=duration,
+                    reasons=["Diff modifies test files only; counterfactual baseline reversion skipped to prevent false-vacuous rejection."],
+                    summary="COUNTERFACTUAL_SKIPPED_TEST_ONLY_PR: Test-only PR validated via forward pass.",
+                )
+
             # Restore baseline product files while keeping the healed test
             restored = False
             if baseline_source_files:
                 for rel_src, base_content in baseline_source_files.items():
+                    if self.is_test_path(rel_src):
+                        continue
                     src_path = temp_dir / rel_src.replace("\\", "/").lstrip("/")
                     src_path.parent.mkdir(parents=True, exist_ok=True)
                     src_path.write_text(base_content, encoding="utf-8")
-                restored = True
+                    restored = True
             elif base_git_ref and product_file_paths:
-                restored = self._git_restore_files(temp_dir, base_git_ref, product_file_paths)
+                non_test_files = [p for p in product_file_paths if not self.is_test_path(p)]
+                if non_test_files:
+                    restored = self._git_restore_files(temp_dir, base_git_ref, non_test_files)
 
             if not restored:
                 # If no baseline files or git ref provided, skip counterfactual step gracefully
@@ -213,14 +259,23 @@ class CounterfactualVerifier:
                 stderr=str(e),
             )
 
-    def _resolve_test_command(self, test_file: str) -> List[str]:
-        """Resolve suitable test runner based on file extension."""
+    def _resolve_test_command(self, test_file: str, test_node: Optional[str] = None) -> List[str]:
+        """Resolve suitable test runner based on file extension and optional specific test node."""
         norm = test_file.replace("\\", "/").lower()
         if norm.endswith(".py"):
-            return [sys.executable, "-m", "pytest", test_file, "-q"]
+            target = test_file
+            if test_node:
+                target = test_node if "::" in test_node else f"{test_file}::{test_node}"
+            return [sys.executable, "-m", "pytest", target, "-q"]
         if norm.endswith((".spec.ts", ".test.ts", ".spec.js", ".test.js")):
-            return ["npx", "playwright", "test", test_file]
-        return [sys.executable, "-m", "pytest", test_file, "-q"]
+            cmd = ["npx", "playwright", "test", test_file]
+            if test_node:
+                cmd.extend(["-g", test_node])
+            return cmd
+        target = test_file
+        if test_node:
+            target = test_node if "::" in test_node else f"{test_file}::{test_node}"
+        return [sys.executable, "-m", "pytest", target, "-q"]
 
     def _copy_sandbox_tree(self, src: Path, dest: Path) -> None:
         """Copy project files into ephemeral sandbox, excluding bulky caches and git dirs."""

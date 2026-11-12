@@ -25,6 +25,7 @@ from core.security.dlp_scrubber import (
     DLPSessionVault,
     DLPScrubber,
     HallucinatedPlaceholderError,
+    RuntimeSecretLeakError,
 )
 from core.security.prompt_sandbox import PromptSandbox
 
@@ -78,6 +79,44 @@ S3 Bucket Backup using AKIAIOSFODNN7EXAMPLE
         hallucinated_code = "const token = '<HERMES_JWT_99>';"
         with self.assertRaises(HallucinatedPlaceholderError):
             vault.detokenize(hallucinated_code)
+
+    def test_one_way_runtime_log_secret_blocks_detokenization_in_candidate_patch(self):
+        """Bug A Guard: Runtime log secrets must never be detokenized into PR patches or review comments."""
+        vault = DLPSessionVault()
+        runtime_log = "FATAL: Connection failed to postgres://admin:VerySecretPassword123!@db.internal:5432/core"
+        scrub_res = vault.scrub_runtime_log(runtime_log)
+        
+        self.assertNotIn("VerySecretPassword123!", scrub_res.scrubbed_text)
+        self.assertIn("<HERMES_URI_1>", scrub_res.scrubbed_text)
+
+        # Candidate patch echoing the scrubbed token
+        candidate_patch = "const dbUri = '<HERMES_URI_1>';"
+
+        # Detokenizing for patch export must raise RuntimeSecretLeakError
+        with self.assertRaises(RuntimeSecretLeakError) as ctx:
+            vault.detokenize(candidate_patch)
+        self.assertIn("<HERMES_URI_1>", str(ctx.exception))
+        self.assertIn("ONE_WAY_SCRUB", str(ctx.exception))
+
+        # Explicit allow_one_way for internal debugging
+        detok = vault.detokenize(candidate_patch, allow_one_way=True)
+        self.assertIn("VerySecretPassword123!", detok)
+
+    def test_secret_present_in_source_code_is_allowed_to_detokenize(self):
+        """Tokens verified to exist in repository source files remain reversible."""
+        vault = DLPSessionVault()
+        secret_jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.payload.sig"
+        source_fixture = f"const testKey = 'Bearer {secret_jwt}';"
+        runtime_log = f"Auth failed with token: {secret_jwt}"
+
+        # Scanned from both runtime log and repository source fixture
+        vault.scrub_runtime_log(runtime_log)
+        vault.register_source_code(source_fixture)
+
+        # Candidate patch updating test fixture is permitted because secret was in source
+        candidate_patch = f"const updatedKey = '<HERMES_JWT_1>';"
+        detok = vault.detokenize(candidate_patch)
+        self.assertIn(secret_jwt, detok)
 
     def test_whitelist_commit_sha_uuid_and_localhost(self):
         vault = DLPSessionVault()

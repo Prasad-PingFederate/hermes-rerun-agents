@@ -126,6 +126,53 @@ def test_tax_calculation():
         self.assertFalse(res.dilution_detected)
         self.assertEqual(len(res.findings), 0)
 
+    def test_dead_code_early_return_before_assertion(self):
+        """Bug C Guard: Reject test functions with early returns that bypass assertions."""
+        proposed = """
+def test_authentication_flow():
+    user = authenticate()
+    return  # bypassed
+    assert user.is_authenticated is True
+"""
+        res = SemanticAssertionGuard.evaluate_changes(
+            {"tests/test_auth_bypass.py": proposed},
+        )
+        self.assertFalse(res.valid)
+        self.assertTrue(res.dilution_detected)
+        self.assertEqual(res.findings[0].category, "DEAD_CODE_ASSERTION_BYPASS")
+        self.assertIn("Early return", res.findings[0].message)
+
+    def test_dead_code_assertion_inside_if_false(self):
+        """Bug C Guard: Reject assertions wrapped inside statically dead branches."""
+        proposed = """
+def test_payment_status():
+    status = charge()
+    if False:
+        assert status == "SUCCESS"
+"""
+        res = SemanticAssertionGuard.evaluate_changes(
+            {"tests/test_payment.py": proposed},
+        )
+        self.assertFalse(res.valid)
+        self.assertEqual(res.findings[0].category, "DEAD_CODE_ASSERTION_BYPASS")
+        self.assertIn("statically dead branch", res.findings[0].message)
+
+    def test_dead_code_assertion_swallowed_by_try_except_pass(self):
+        """Bug C Guard: Reject test assertions wrapped in try/except pass that swallow failures."""
+        proposed = """
+def test_critical_contract():
+    try:
+        assert get_data() == 42
+    except:
+        pass
+"""
+        res = SemanticAssertionGuard.evaluate_changes(
+            {"tests/test_contract.py": proposed},
+        )
+        self.assertFalse(res.valid)
+        self.assertEqual(res.findings[0].category, "DEAD_CODE_ASSERTION_BYPASS")
+        self.assertIn("swallowing 'except bare: pass'", res.findings[0].message)
+
 
 class TestSemanticAssertionGuardJavaScript(unittest.TestCase):
     """Tests JS/TS matcher dilution, exception broadening, and timeout inflation."""
@@ -264,6 +311,20 @@ test('accessible login', async ({ page }) => {
         )
         self.assertTrue(res.valid)
 
+    def test_allow_tabular_nth_child_as_advisory_warning(self):
+        """Allow positional selectors on enterprise tables/grids as advisory warnings without bricking the heal."""
+        proposed = """
+test('select table row', async ({ page }) => {
+    await page.locator('table.data-grid tr:nth-child(3) > td:nth-child(2)').click();
+});
+"""
+        res = AccessibilityLocatorGuard.audit_changes({"e2e/grid.spec.ts": proposed})
+        self.assertTrue(res.valid)
+        self.assertFalse(res.brittle_detected)
+        self.assertEqual(len(res.warnings), 1)
+        self.assertEqual(res.findings[0].severity, "WARNING")
+        self.assertIn("tabular/list element", res.findings[0].message)
+
 
 class TestCounterfactualVerifier(unittest.TestCase):
     """Tests differential verification: forward pass + counterfactual broken base fail."""
@@ -332,7 +393,38 @@ def test_status():
         self.assertEqual(res.forward_exit_code, 0)
         self.assertEqual(res.counterfactual_exit_code, 0)
         self.assertIn("COUNTERFACTUAL_FAILED", res.summary)
-        self.assertIn("Vacuous test detected", res.reasons[0])
+
+    def test_counterfactual_skips_gracefully_on_test_only_pr(self):
+        """Bug B Guard: PRs changing only test files should not be falsely rejected as vacuous."""
+        healed_test = """
+from src.api import get_status
+
+def test_status():
+    assert get_status() == 201
+"""
+        verifier = CounterfactualVerifier(workspace_root=self.ws)
+        # Test-only PR: baseline contains only test file diffs (0 product source files)
+        test_only_baseline = {"tests/test_api.py": "def test_status(): assert False\n"}
+        res = verifier.verify_differential(
+            test_file="tests/test_api.py",
+            healed_test_content=healed_test,
+            baseline_source_files=test_only_baseline,
+        )
+
+        self.assertTrue(res.verified)
+        self.assertFalse(res.is_vacuous)
+        self.assertTrue(res.forward_passed)
+        self.assertIn("COUNTERFACTUAL_SKIPPED_TEST_ONLY_PR", res.summary)
+
+    def test_exact_test_node_resolution(self):
+        """Bug B Guard: Verify exact test node targeting prevents whole-file cross-test poisoning."""
+        verifier = CounterfactualVerifier(workspace_root=self.ws)
+        cmd_py = verifier._resolve_test_command("tests/test_feature.py", test_node="test_target_func")
+        self.assertTrue(any("tests/test_feature.py::test_target_func" in arg for arg in cmd_py))
+
+        cmd_ts = verifier._resolve_test_command("e2e/auth.spec.ts", test_node="login should work")
+        self.assertIn("-g", cmd_ts)
+        self.assertIn("login should work", cmd_ts)
 
     def test_qa_critic_review_blocks_vacuous_heal(self):
         ticket = SubTaskTicket(

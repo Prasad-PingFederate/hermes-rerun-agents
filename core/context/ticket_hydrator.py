@@ -159,7 +159,7 @@ class TicketContextHydrator:
 
         # 2. Option 5 Security Pipeline: DLP Scrubbing & Nonce Prompt Sandboxing
         raw_combined = f"Ticket: {ticket_id}\nTitle: {fetched_title}\nDescription: {fetched_desc}"
-        scrubbed = self.dlp_vault.scrub(raw_combined).scrubbed_text
+        scrubbed = self.dlp_vault.scrub(raw_combined, source="RUNTIME_LOG").scrubbed_text
         sandboxed_block = PromptSandbox.sandbox_untrusted_data(
             scrubbed, label=f"ticket_{re.sub(r'[^a-zA-Z0-9]', '_', ticket_id)}"
         ).sandboxed_text

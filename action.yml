@@ -7,8 +7,9 @@ branding:
 
 # Recommended Workflow Permissions:
 # permissions:
-#   contents: write              # Required for 'heal' mode (opening branches and draft PRs)
+#   contents: read               # Zero-write in default 'shadow' mode
 #   pull-requests: write         # Required for 'shadow' mode (posting in-diff review suggestions)
+#   contents: write              # Optional: Required only for 'heal' mode (opening branches and draft PRs)
 #   id-token: write              # Optional: Required for Option 5 Cloud OIDC Workload Identity
 #   security-events: write       # Optional: Required for uploading SARIF to GitHub Code Scanning
 #   actions: read                # Required for fetching workflow logs and commit metadata
@@ -94,6 +95,13 @@ runs:
       uses: actions/setup-python@v5
       with:
         python-version: '3.10'
+
+    - name: Fetch Target Base Git Ref for Differential Verification
+      shell: bash
+      run: |
+        if [ -n "${{ github.base_ref }}" ]; then
+          git fetch origin ${{ github.base_ref }} --depth=1 || true
+        fi
 
     - name: Run Hermes Autonomous Healer
       id: run-hermes
