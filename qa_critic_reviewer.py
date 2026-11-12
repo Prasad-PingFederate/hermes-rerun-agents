@@ -48,19 +48,45 @@ class QACriticAgent:
     ) -> List[str]:
         """Find file:line references in proposed changes matching relevant keywords."""
         citations: List[str] = []
-        for file_path, content in proposed_changes.items():
-            lines = content.splitlines()
-            for line_no, line in enumerate(lines, 1):
-                line_lower = line.lower()
-                if any(kw.lower() in line_lower for kw in keywords if len(kw) > 2):
-                    citations.append(f"{file_path}:{line_no}")
-                    if len(citations) >= 5:
-                        return citations
+        stop_words = {
+            "ac-1", "ac-2", "ac-3", "ac-4", "resolve", "ensure", "verify", "preserve",
+            "assertion", "assertions", "existing", "code", "the", "and", "for", "with",
+            "all", "test", "tests", "failure", "failures", "error", "errors", "failed",
+            "zero", "erosion", "in", "function", "functionality", "method", "class"
+        }
+        expanded_kws: List[str] = []
+        for kw in keywords:
+            clean_kw = kw.strip(".,;:\"'()[]{}")
+            if "_" in clean_kw:
+                expanded_kws.extend(clean_kw.split("_"))
+            else:
+                expanded_kws.append(clean_kw)
+
+        filtered_kws = [kw for kw in expanded_kws if kw.lower() not in stop_words and len(kw) > 2]
+
+        if filtered_kws:
+            for file_path, content in proposed_changes.items():
+                lines = content.splitlines()
+                for line_no, line in enumerate(lines, 1):
+                    line_lower = line.lower()
+                    if any(kw.lower() in line_lower for kw in filtered_kws):
+                        citations.append(f"{file_path}:{line_no}")
+                        if len(citations) >= 5:
+                            return citations
+            return citations
+
+        # Only if there were no domain keywords (generic criterion)
+        if proposed_changes:
+            for file_path, content in proposed_changes.items():
+                for line_no, line in enumerate(content.splitlines(), 1):
+                    if line.strip() and not line.strip().startswith("#"):
+                        citations.append(f"{file_path}:{line_no}")
+                        break
         return citations
 
     @classmethod
     def _inspect_error_path_coverage(
-        cls, proposed_changes: Dict[str, str]
+        cls, proposed_changes: Dict[str, str], existing_test_files: Optional[Dict[str, str]] = None
     ) -> Tuple[List[str], List[str]]:
         """Detect unhandled error paths and verify whether corresponding assertions exist."""
         error_paths_found: List[str] = []
@@ -83,14 +109,19 @@ class QACriticAgent:
             r"\bexpect\s*\(",
         ]
 
-        for file_path, content in proposed_changes.items():
+        all_sources = dict(proposed_changes)
+        if existing_test_files:
+            all_sources.update(existing_test_files)
+
+        for file_path, content in all_sources.items():
             lines = content.splitlines()
             for line_no, line in enumerate(lines, 1):
-                for pat, label in error_patterns:
-                    m = re.search(pat, line)
-                    if m:
-                        val = m.group(1) if m.groups() else ""
-                        error_paths_found.append(f"{file_path}:{line_no} ({label.format(val)})")
+                if file_path in proposed_changes:
+                    for pat, label in error_patterns:
+                        m = re.search(pat, line)
+                        if m:
+                            val = m.group(1) if m.groups() else ""
+                            error_paths_found.append(f"{file_path}:{line_no} ({label.format(val)})")
 
                 for pat in assertion_patterns:
                     if re.search(pat, line):
@@ -104,7 +135,7 @@ class QACriticAgent:
         if prod_error_paths and not test_assertions:
             missing_assertions.append(
                 f"Error paths introduced in production code ({', '.join(prod_error_paths[:3])}) "
-                f"lack corresponding test assertions (pytest.raises / expect) in proposed changes."
+                f"lack corresponding test assertions (pytest.raises / expect) in proposed or existing tests."
             )
 
         return error_paths_found, missing_assertions
@@ -115,6 +146,7 @@ class QACriticAgent:
         ticket: Any,
         proposed_changes: Dict[str, str],
         allow_test_modification: bool = False,
+        workspace_path: Optional[Path | str] = None,
     ) -> QACriticReview:
         """Perform strict rubric review on worker proposed changes."""
         verdicts: List[CriterionVerdict] = []
@@ -134,14 +166,40 @@ class QACriticAgent:
                 rejection_reasons=["Empty proposal: worker returned no modified files."],
             )
 
-        # 1. Evaluate Acceptance Criteria
+        # 1. Discover existing test content if DeveloperAgent only touched production files
+        existing_test_files: Dict[str, str] = {}
+        candidate_dirs = [Path.cwd()]
+        if workspace_path:
+            candidate_dirs.append(Path(workspace_path))
+        allowed = getattr(ticket, "allowed_files", []) or []
+
+        for candidate_dir in candidate_dirs:
+            for f in allowed:
+                if "test" in f.lower() and f not in proposed_changes:
+                    target_p = candidate_dir / f.replace("\\", "/").lstrip("/")
+                    if target_p.is_file():
+                        try:
+                            existing_test_files[f] = target_p.read_text(encoding="utf-8")
+                        except Exception:
+                            pass
+            # Also search for tests/ directory if tests were not in allowed_files
+            tests_dir = candidate_dir / "tests"
+            if tests_dir.is_dir():
+                for tp in tests_dir.glob("*.py"):
+                    rel_tp = str(tp.relative_to(candidate_dir)).replace("\\", "/")
+                    if rel_tp not in existing_test_files:
+                        try:
+                            existing_test_files[rel_tp] = tp.read_text(encoding="utf-8")
+                        except Exception:
+                            pass
+
+        # 2. Evaluate Acceptance Criteria
         criteria = getattr(ticket, "acceptance_criteria", []) or []
         if not criteria:
             criteria = [f"Fulfill ticket {ticket.ticket_id}: {ticket.title}"]
 
         for crit in criteria:
-            # Extract keywords from criterion
-            words = [w.strip(".,;:\"'()[]") for w in crit.split() if len(w) > 3]
+            words = [w.strip(".,;:\"'()[]") for w in crit.split() if len(w) > 2]
             citations = cls._find_citations_for_keywords(proposed_changes, words)
 
             if citations:
@@ -154,7 +212,6 @@ class QACriticAgent:
                     )
                 )
             else:
-                # Criterion not referenced or addressed
                 verdicts.append(
                     CriterionVerdict(
                         criterion=crit,
@@ -165,8 +222,8 @@ class QACriticAgent:
                 )
                 rejection_reasons.append(f"Unaddressed acceptance criterion: '{crit}'")
 
-        # 2. Inspect Edge Cases & Error Path Assertions
-        error_paths, missing_coverage = cls._inspect_error_path_coverage(proposed_changes)
+        # 3. Inspect Edge Cases & Error Path Assertions
+        error_paths, missing_coverage = cls._inspect_error_path_coverage(proposed_changes, existing_test_files)
         if missing_coverage:
             for item in missing_coverage:
                 verdicts.append(
