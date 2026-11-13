@@ -106,15 +106,23 @@ class TestPhase4Contracts(unittest.TestCase):
             f"Expected exactly one ScrumMasterOrchestrator in src/hermes/orchestration/scrum_master_orchestrator.py, found in: {class_locations}",
         )
 
-        # Invariant on core/orchestrator/scrum_hierarchy.py
-        scrum_hierarchy_path = REPO_ROOT / "core" / "orchestrator" / "scrum_hierarchy.py"
-        tree = ast.parse(scrum_hierarchy_path.read_text(encoding="utf-8"), filename=str(scrum_hierarchy_path))
+        # Invariant on canonical src/hermes/core/orchestrator/scrum_hierarchy.py
+        canonical_hierarchy = REPO_ROOT / "src" / "hermes" / "core" / "orchestrator" / "scrum_hierarchy.py"
+        if not canonical_hierarchy.exists():
+            canonical_hierarchy = REPO_ROOT / "core" / "orchestrator" / "scrum_hierarchy.py"
+        tree = ast.parse(canonical_hierarchy.read_text(encoding="utf-8"), filename=str(canonical_hierarchy))
         top_classes = [n.name for n in tree.body if isinstance(n, ast.ClassDef)]
         top_funcs = [n.name for n in tree.body if isinstance(n, ast.FunctionDef)]
         self.assertNotIn("ScrumMasterOrchestrator", top_classes)
         self.assertIn("ModelTier", top_classes)
         self.assertIn("SubTaskTicket", top_classes)
         self.assertIn("route_tier_by_complexity", top_funcs)
+
+        # Invariant on root compatibility shim
+        import core.orchestrator.scrum_hierarchy as sh
+        self.assertTrue(hasattr(sh, "ModelTier"))
+        self.assertTrue(hasattr(sh, "SubTaskTicket"))
+        self.assertTrue(hasattr(sh, "route_tier_by_complexity"))
 
     def test_human_write_gate_approve_proposal_is_one_line_alias(self):
         """Contract 2: Only HumanWriteGateController.approve_and_apply writes; approve_proposal is a one-line alias."""

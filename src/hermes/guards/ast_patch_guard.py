@@ -18,6 +18,7 @@ from core.security.prompt_sandbox import PromptSandbox
 from core.time_machine.patch_guard import analyze_proposed_changes as analyze_python_ast
 from core.verification.accessibility_locator_guard import AccessibilityLocatorGuard
 from core.verification.semantic_assertion_guard import SemanticAssertionGuard
+from hermes.guards.language_ast_guard import LanguageASTGuard
 from hermes.guards.security_blast_radius import SecurityBlastRadiusAgent
 from hermes.guards.ts_playwright_ast_guard import PlaywrightASTGuard, analyze_ts_playwright_changes
 
@@ -81,6 +82,18 @@ class ASTPatchGuard:
                 tampering_detected = True
                 all_reasons.extend(ts_report.get("reasons", []))
 
+        # 2b. Multi-Language Assertion Erosion & Skip Injection Guard (Python, TS, Java, Go, C#)
+        for rel_path, content in proposed_changes.items():
+            lang = LanguageASTGuard.detect_language(rel_path)
+            if lang != "unknown":
+                orig_file = workspace / rel_path
+                orig_content = orig_file.read_text(encoding="utf-8", errors="replace") if orig_file.exists() else ""
+                erosion_res = LanguageASTGuard.check_assertion_erosion(orig_content, content, language=lang)
+                if not erosion_res.get("passed", True):
+                    valid = False
+                    tampering_detected = True
+                    all_reasons.extend(erosion_res.get("violations", []))
+
         # 3. Security Blast-Radius audit
         high_risk_flag = getattr(ticket, "high_risk", False) if ticket else False
         sec_report = SecurityBlastRadiusAgent.audit_proposal(proposed_changes, ticket=ticket)
@@ -127,6 +140,26 @@ class ASTPatchGuard:
                     f"{rel_f}: Unhydrated or hallucinated Hermes DLP placeholder detected in patch. "
                     "Cannot commit raw placeholder token."
                 )
+
+        # 8. Delta-SAST Diff Security Scanner (Zero Assertion Erosion & SAST Guard)
+        from core.audit.delta_sast import PatchGuard
+        for rel_f, content in proposed_changes.items():
+            orig_file = workspace / rel_f
+            orig_content = orig_file.read_text(encoding="utf-8", errors="replace") if orig_file.exists() else ""
+            fail_cat = getattr(ticket, "failure_category", "") if ticket else ""
+            if not fail_cat and ticket and getattr(ticket, "status", None):
+                fail_cat = getattr(ticket, "status", "")
+            patch_verdict = PatchGuard.verify(
+                original_code=orig_content,
+                proposed_code=content,
+                target_file=rel_f,
+                failure_category=fail_cat,
+            )
+            if not patch_verdict.passed:
+                valid = False
+                tampering_detected = True
+                for v in patch_verdict.violations:
+                    all_reasons.append(f"{rel_f}: [Delta-SAST {v.rule_id}] {v.message}")
 
         return {
             "valid": valid and len(all_reasons) == 0,

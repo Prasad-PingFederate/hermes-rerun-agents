@@ -1,34 +1,16 @@
 """
-Core Verification & Anti-Erosion Module (Option 4: Zero False-Green Verification)
-Provides:
-- SemanticAssertionGuard (AST v2): Detects value dilution, exception broadening, and timeout masking.
-- AccessibilityLocatorGuard: Enforces semantic Playwright / Testing Library locators over brittle CSS/XPath.
-- CounterfactualVerifier: Differential sandbox execution proving tests fail against broken base code.
+Backwards-compatibility shim for hermes.core.verification
+Single source of truth is located under src/hermes/
 """
-
 from __future__ import annotations
 
-from core.verification.accessibility_locator_guard import (
-    AccessibilityLocatorGuard,
-    LocatorAuditResult,
-)
-from core.verification.counterfactual_verifier import (
-    CounterfactualResult,
-    CounterfactualVerifier,
-)
-from core.verification.semantic_assertion_guard import (
-    DowngradeFinding,
-    SemanticAssertionGuard,
-    SemanticGuardResult,
-)
+import sys
+from pathlib import Path
 
-__all__ = [
-    "SemanticAssertionGuard",
-    "SemanticGuardResult",
-    "DowngradeFinding",
-    "AccessibilityLocatorGuard",
-    "LocatorAuditResult",
-    "CounterfactualVerifier",
-    "CounterfactualResult",
-]
+_src_dir = str(Path(__file__).resolve().parents[2] / "src")
+if _src_dir not in sys.path:
+    sys.path.insert(0, _src_dir)
 
+import hermes.core.verification as _target_module
+sys.modules[__name__] = _target_module
+from hermes.core.verification import *

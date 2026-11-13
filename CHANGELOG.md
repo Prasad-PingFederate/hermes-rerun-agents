@@ -20,8 +20,8 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - **Multi-Format Ingestion**: Ingests JUnit XML, CTRF JSON, and Playwright `trace.zip` archives with deterministic 5xx forensic overrides (`core/ingest/artifact_loader.py`).
 - **Cross-Shard Failure Clustering**: Collapses 40 duplicate runner matrix shard failures into 1 atomic root cause ticket via regex noise stripping and SHA-256 cluster signatures (`core/scale/shard_clusterer.py`).
 - **Commit & PR Intent Differentiation**: Inspects `git log -n 5` and webhook intent to classify intentional contract drift vs application regressions (`src/hermes/ingestion/ci_failure_ingestor.py`).
-- **Multi-Language Zero Assertion Erosion**: AST guard enforcing zero net assertion deletions, blocking tautological replacements, skip injections, and semantic dilutions across Python, TypeScript, and Java.
-- **Comprehensive Verification Suite**: 302 unit/integration tests passing (100%), 24/24 enterprise benchmark scenarios passing, 7/7 Playwright console E2E tests passing, and 141/141 Python 3.10 syntax-clean files.
+- **Multi-Language Zero Assertion Erosion**: AST guard enforcing zero net assertion deletions, blocking tautological replacements, skip injections, and semantic dilutions across Python, TypeScript, Java, Go (`t.Skip()`, error checks), and C# (`[Ignore]`, `Assert.AreEqual`).
+- **Comprehensive Verification Suite**: 310 unit/integration tests passing (100%), 24/24 enterprise benchmark scenarios passing, 7/7 Playwright console E2E tests passing, and 198/198 Python 3.10 syntax-clean files.
 
 ---
 

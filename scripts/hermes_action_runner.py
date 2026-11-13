@@ -74,6 +74,11 @@ def main() -> int:
     hourly_rate = float(os.environ.get("INPUT_HOURLY_RATE_USD", "125.0"))
     roi_telemetry_engine.update_config(hourly_rate_usd=hourly_rate)
 
+    is_fork_pr = os.environ.get("HERMES_IS_FORK_PR", "").lower() in ("true", "1", "yes")
+    if is_fork_pr:
+        print("⚠️ [FORK PR GUARD] Untrusted external fork PR detected. Enforcing read-only SHADOW mode.")
+        mode = "shadow"
+
     print(f"🚀 Hermes Autonomous Agent Runner initialized in mode: {mode.upper()}")
     print(f"📁 Workspace: {workspace_path}")
 

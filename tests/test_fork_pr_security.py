@@ -72,3 +72,21 @@ class TestForkPRSecurity(unittest.TestCase):
             res = executor.execute_command(["python", "-c", "print('trusted')"])
             self.assertEqual(res.pass_count, 1)
             self.assertIn("trusted", res.runs[0].stdout)
+
+    def test_fork_pr_env_wired_in_action_and_workflow_yaml(self):
+        """action.yml and hermes-decoupled.example.yml must wire HERMES_IS_FORK_PR."""
+        repo_root = Path(__file__).resolve().parent.parent
+        action_yml = repo_root / "action.yml"
+        decoupled_yml = repo_root / ".github" / "workflows" / "hermes-decoupled.example.yml"
+
+        self.assertTrue(action_yml.is_file())
+        self.assertTrue(decoupled_yml.is_file())
+
+        action_content = action_yml.read_text(encoding="utf-8")
+        decoupled_content = decoupled_yml.read_text(encoding="utf-8")
+
+        self.assertIn("HERMES_IS_FORK_PR", action_content)
+        self.assertIn("github.event.pull_request.head.repo.full_name != github.repository", action_content)
+
+        self.assertIn("HERMES_IS_FORK_PR", decoupled_content)
+        self.assertIn("head_repository.full_name", decoupled_content)

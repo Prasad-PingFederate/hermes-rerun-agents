@@ -302,10 +302,25 @@ async def github_actions_webhook(request: Request):
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON payload")
 
+    return dispatch_webhook_payload(payload)
+
+
+def dispatch_webhook_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Process incoming GitHub webhook payload synchronously and return response."""
     # 1. Handle GitHub Issue / Pull Request Comment commands (/hermes approve, /hermes rewind)
     if "comment" in payload and payload.get("action") in ("created", "edited"):
         comment_body = payload["comment"].get("body", "").strip()
         sender = payload.get("sender", {}).get("login", "operator")
+        author_assoc = payload.get("comment", {}).get("author_association", "MEMBER").upper()
+
+        if any(cmd in comment_body for cmd in ("/hermes approve", "/hermes rewind")):
+            if author_assoc in ("NONE", "CONTRIBUTOR", "FIRST_TIME_CONTRIBUTOR"):
+                return {
+                    "status": "unauthorized",
+                    "error": f"Unauthorized comment author association: {author_assoc}. Must be OWNER, MEMBER, or COLLABORATOR.",
+                    "sender": sender,
+                    "author_association": author_assoc,
+                }
 
         if "/hermes approve" in comment_body:
             matching_ws = None
@@ -468,6 +483,9 @@ async def github_actions_webhook(request: Request):
             "continue_on_error": routing["continue_on_error"],
         },
     }
+
+
+dispatch_webhook_event = dispatch_webhook_payload
 
 
 @app.post("/api/heal", dependencies=[Depends(verify_hermes_token)])

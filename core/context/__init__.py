@@ -1,29 +1,16 @@
 """
-Billion-Context / Active Context Pruning (ACP) Engine
-Hierarchical multi-generational context compression (LSM over prose) for long-running AI agent sessions.
+Backwards-compatibility shim for hermes.core.context
+Single source of truth is located under src/hermes/
 """
+from __future__ import annotations
 
-from core.context.active_context_pruner import (
-    BillionContextManager,
-    ContextBlock,
-    estimate_tokens,
-    prune_dom,
-    prune_logs,
-    prune_traceback,
-)
-from core.context.ticket_hydrator import (
-    HydratedTicketContext,
-    TicketContextHydrator,
-)
+import sys
+from pathlib import Path
 
-__all__ = [
-    "BillionContextManager",
-    "ContextBlock",
-    "estimate_tokens",
-    "prune_dom",
-    "prune_logs",
-    "prune_traceback",
-    "TicketContextHydrator",
-    "HydratedTicketContext",
-]
+_src_dir = str(Path(__file__).resolve().parents[2] / "src")
+if _src_dir not in sys.path:
+    sys.path.insert(0, _src_dir)
 
+import hermes.core.context as _target_module
+sys.modules[__name__] = _target_module
+from hermes.core.context import *

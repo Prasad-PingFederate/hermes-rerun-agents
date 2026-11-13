@@ -1,45 +1,16 @@
 """
-Audit & Telemetry Export Subsystem
-Phase: Option 6 (Monorepo Scale & Ecosystem Depth)
+Backwards-compatibility shim for hermes.core.audit
+Single source of truth is located under src/hermes/
 """
-
 from __future__ import annotations
 
-from core.audit.delta_sast import (
-    AssertionErosionChecker,
-    DeltaSASTScanner,
-    PatchGuard,
-    PatchGuardVerdict,
-    PatchViolation,
-)
-from core.audit.otel_exporter import OTLPExporter, OTLPExportResult
-from core.audit.sarif_exporter import SARIFExporter, SARIFExportResult
-from core.audit.tricorder_feedback import (
-    CategoryHealth,
-    FeedbackOutcome,
-    FeedbackSignal,
-    GatingAction,
-    GatingDecision,
-    TricorderGate,
-    TricorderLedger,
-)
+import sys
+from pathlib import Path
 
-__all__ = [
-    "SARIFExporter",
-    "SARIFExportResult",
-    "OTLPExporter",
-    "OTLPExportResult",
-    "FeedbackOutcome",
-    "FeedbackSignal",
-    "CategoryHealth",
-    "GatingAction",
-    "GatingDecision",
-    "TricorderLedger",
-    "TricorderGate",
-    "PatchViolation",
-    "PatchGuardVerdict",
-    "PatchGuard",
-    "AssertionErosionChecker",
-    "DeltaSASTScanner",
-]
+_src_dir = str(Path(__file__).resolve().parents[2] / "src")
+if _src_dir not in sys.path:
+    sys.path.insert(0, _src_dir)
 
+import hermes.core.audit as _target_module
+sys.modules[__name__] = _target_module
+from hermes.core.audit import *

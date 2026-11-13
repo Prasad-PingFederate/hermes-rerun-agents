@@ -554,6 +554,35 @@ class GitNotesStateBackend:
 
     DEFAULT_REF = "refs/notes/hermes-state"
 
+    def __init__(self, repo_root: Optional[Path | str] = None, ref: str = DEFAULT_REF):
+        self.repo_root = Path(repo_root or Path.cwd()).resolve()
+        self.ref = ref
+
+    def save(
+        self,
+        state_data: Dict[str, Any],
+        push: bool = True,
+        remote: str = "origin",
+        max_retries: int = 4,
+    ) -> bool:
+        """Persist state data to git notes with automatic OCC deep merge and push retry."""
+        existing = self.load()
+        if existing:
+            state_data = self.deep_merge_states(existing, state_data)
+        if push:
+            return self.push_state_with_retry(
+                repo_root=self.repo_root,
+                state_data=state_data,
+                ref=self.ref,
+                remote=remote,
+                max_retries=max_retries,
+            )
+        return self.export_state_to_git_notes(self.repo_root, state_data, ref=self.ref)
+
+    def load(self, target_commit: str = "HEAD") -> Optional[Dict[str, Any]]:
+        """Load state data from git notes."""
+        return self.import_state_from_git_notes(self.repo_root, ref=self.ref, target_commit=target_commit)
+
     @classmethod
     def deep_merge_states(
         cls,

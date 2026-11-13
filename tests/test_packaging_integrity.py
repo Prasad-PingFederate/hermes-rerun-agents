@@ -70,3 +70,32 @@ class TestPackagingIntegrity:
                 assert root_obj is pkg_obj, (
                     f"Object {sym} mismatch: {root_mod_name}.{sym} is not identical to {pkg_mod_name}.{sym}"
                 )
+
+    def test_agents_and_core_shims_contain_no_duplicate_classes(self):
+        """All files in root agents/ and core/ must contain 0 ast.ClassDef nodes (pure shims)."""
+        for folder in ("agents", "core"):
+            for py_path in (REPO_ROOT / folder).rglob("*.py"):
+                tree = ast.parse(py_path.read_text(encoding="utf-8"), filename=str(py_path))
+                classes = [node.name for node in tree.body if isinstance(node, ast.ClassDef)]
+                assert classes == [], (
+                    f"Shim {py_path.relative_to(REPO_ROOT)} defines duplicate classes: {classes}. "
+                    f"Canonical source of truth must live exclusively under src/hermes/{folder}/."
+                )
+
+    def test_core_and_agents_exports_are_identical_objects(self):
+        """Root agents.* and core.* modules resolve to identical object identity as hermes.*."""
+        import agents.ci_detective
+        import hermes.agents.ci_detective
+        assert agents.ci_detective.CIDetectiveAgent is hermes.agents.ci_detective.CIDetectiveAgent
+
+        import core.audit.delta_sast
+        import hermes.core.audit.delta_sast
+        assert core.audit.delta_sast.PatchGuard is hermes.core.audit.delta_sast.PatchGuard
+
+        import core.governance.policy_engine
+        import hermes.core.governance.policy_engine
+        assert core.governance.policy_engine.PolicyEngine is hermes.core.governance.policy_engine.PolicyEngine
+
+        import core.ingest.artifact_loader
+        import hermes.core.ingest.artifact_loader
+        assert core.ingest.artifact_loader.ArtifactLoader is hermes.core.ingest.artifact_loader.ArtifactLoader

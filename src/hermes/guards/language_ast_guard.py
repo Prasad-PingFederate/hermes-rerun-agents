@@ -316,11 +316,13 @@ class LanguageASTGuard:
 
         skips = []
         for pat in skip_pats:
-            skips.extend(pat.findall(code))
+            for m in pat.finditer(code):
+                skips.append(m.group(0))
 
         sinks = []
         for pat in sink_pats:
-            sinks.extend(pat.findall(code))
+            for m in pat.finditer(code):
+                sinks.append(m.group(0))
 
         has_tautologies = bool(
             re.search(r"\bassert\s+True\b", code)

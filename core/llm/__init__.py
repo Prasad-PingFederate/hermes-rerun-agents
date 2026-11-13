@@ -1,19 +1,16 @@
 """
-Core LLM Routing Subsystem
-Phase: Option 5 (Cloud OIDC & Zero-Static-Key Router)
+Backwards-compatibility shim for hermes.core.llm
+Single source of truth is located under src/hermes/
 """
-
 from __future__ import annotations
 
-from core.llm.oidc_provider import (
-    OIDCProviderRouter,
-    FederatedCredentials,
-    StaticApiKeyForbiddenError,
-)
+import sys
+from pathlib import Path
 
-__all__ = [
-    "OIDCProviderRouter",
-    "FederatedCredentials",
-    "StaticApiKeyForbiddenError",
-]
+_src_dir = str(Path(__file__).resolve().parents[2] / "src")
+if _src_dir not in sys.path:
+    sys.path.insert(0, _src_dir)
 
+import hermes.core.llm as _target_module
+sys.modules[__name__] = _target_module
+from hermes.core.llm import *

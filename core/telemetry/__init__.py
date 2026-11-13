@@ -1,18 +1,16 @@
 """
-Hermes Telemetry & Executive ROI Engine Package.
+Backwards-compatibility shim for hermes.core.telemetry
+Single source of truth is located under src/hermes/
 """
+from __future__ import annotations
 
-from core.telemetry.roi_calculator import (
-    ROIConfig,
-    ROIMetrics,
-    ROITelemetryEngine,
-    roi_telemetry_engine,
-)
+import sys
+from pathlib import Path
 
-__all__ = [
-    "ROIConfig",
-    "ROIMetrics",
-    "ROITelemetryEngine",
-    "roi_telemetry_engine",
-]
+_src_dir = str(Path(__file__).resolve().parents[2] / "src")
+if _src_dir not in sys.path:
+    sys.path.insert(0, _src_dir)
 
+import hermes.core.telemetry as _target_module
+sys.modules[__name__] = _target_module
+from hermes.core.telemetry import *

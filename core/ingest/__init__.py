@@ -1,22 +1,16 @@
 """
-Universal Artifact Ingestion & Playwright Trace Forensics
-Phase: Phase 1 (Enterprise Decoupled Post-Run Observer Mode)
+Backwards-compatibility shim for hermes.core.ingest
+Single source of truth is located under src/hermes/
 """
-
 from __future__ import annotations
 
-from core.ingest.artifact_loader import ArtifactLoader
-from core.ingest.ctrf_parser import CTRFParser
-from core.ingest.junit_parser import JUnitParser
-from core.ingest.models import FailedNetworkRequest, NormalizedFailure
-from core.ingest.trace_parser import PlaywrightTraceForensics
+import sys
+from pathlib import Path
 
-__all__ = [
-    "ArtifactLoader",
-    "CTRFParser",
-    "JUnitParser",
-    "FailedNetworkRequest",
-    "NormalizedFailure",
-    "PlaywrightTraceForensics",
-]
+_src_dir = str(Path(__file__).resolve().parents[2] / "src")
+if _src_dir not in sys.path:
+    sys.path.insert(0, _src_dir)
 
+import hermes.core.ingest as _target_module
+sys.modules[__name__] = _target_module
+from hermes.core.ingest import *

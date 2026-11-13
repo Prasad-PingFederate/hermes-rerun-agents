@@ -1,32 +1,16 @@
 """
-Decision & Cost-Aware Remediation Subsystem
-Phase: Phase 4 (Bayesian Confidence Calibration & Cost-Aware CI Decision Model)
+Backwards-compatibility shim for hermes.core.decision
+Single source of truth is located under src/hermes/
 """
-
 from __future__ import annotations
 
-from core.decision.decision_model import (
-    DecisionModel,
-    DecisionVerdict,
-    FailureCategory,
-    LedgerFeedbackStats,
-    PatchGuardStatus,
-    Phase4DecisionEngine,
-    Phase4DecisionResult,
-    RemediationAction,
-    RerunPolicy,
-    TriageSignalInput,
-)
+import sys
+from pathlib import Path
 
-__all__ = [
-    "FailureCategory",
-    "PatchGuardStatus",
-    "RemediationAction",
-    "LedgerFeedbackStats",
-    "TriageSignalInput",
-    "RerunPolicy",
-    "Phase4DecisionResult",
-    "Phase4DecisionEngine",
-    "DecisionModel",
-    "DecisionVerdict",
-]
+_src_dir = str(Path(__file__).resolve().parents[2] / "src")
+if _src_dir not in sys.path:
+    sys.path.insert(0, _src_dir)
+
+import hermes.core.decision as _target_module
+sys.modules[__name__] = _target_module
+from hermes.core.decision import *

@@ -159,6 +159,7 @@ runs:
         INPUT_GITHUB_TOKEN: ${{ inputs.github-token }}
         INPUT_HOURLY_RATE_USD: ${{ inputs.hourly-rate-usd }}
         HERMES_LLM_PROVIDER: ${{ inputs.llm-provider }}
+        HERMES_IS_FORK_PR: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) || (github.event_name == 'workflow_run' && github.event.workflow_run.head_repository.full_name != github.repository) }}
         ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
         OPENAI_API_KEY: ${{ inputs.openai-api-key }}
         GEMINI_API_KEY: ${{ inputs.gemini-api-key }}

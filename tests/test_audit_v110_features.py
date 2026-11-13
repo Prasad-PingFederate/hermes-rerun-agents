@@ -17,6 +17,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from core.audit.otel_exporter import OTLPExporter
 from core.audit.sarif_exporter import SARIFExporter
 from core.governance.policy_engine import PolicyEngine
 from core.hygiene.flake_reaper import FlakeLifecycleReaper
@@ -27,9 +28,13 @@ from core.llm.oidc_provider import OIDCProviderRouter, StaticApiKeyForbiddenErro
 from core.scale.shard_clusterer import ShardClusterer
 from core.security.dlp_scrubber import DLPSessionVault
 from core.shadow_mode.suggestion_engine import ShadowSuggestionFormatter
+from core.time_machine.engine import TimeMachineEngine
+from core.verification.counterfactual_verifier import CounterfactualVerifier
+from hermes.console.server import dispatch_webhook_event
 from hermes.guards.language_ast_guard import LanguageASTGuard
 from hermes.guards.security_blast_radius import SecurityBlastRadiusAgent
 from hermes.ingestion.ci_failure_ingestor import CIFailureIngestor
+from hermes.orchestration.scrum_master_orchestrator import ScrumMasterOrchestrator
 from hermes.orchestration.sprint_state_store import SprintStateStore
 
 
@@ -371,3 +376,281 @@ finops:
         self.assertIn("```suggestion", body)
         self.assertIn("assert response.status_code == 200", body)
         self.assertIn("<!-- hermes-shadow-heal", body)
+
+    # ── 11. Counterfactual Differential Verification in Real Worktree ──
+
+    def test_counterfactual_differential_verification_worktree(self):
+        """Verifies healed tests pass against fixed code, but are rejected if vacuous."""
+        with tempfile.TemporaryDirectory() as td:
+            repo_root = Path(td).resolve()
+            # Initialize git repo
+            subprocess.run(["git", "init"], cwd=str(repo_root), check=True, capture_output=True)
+            subprocess.run(["git", "config", "user.email", "ci@hermes.ai"], cwd=str(repo_root), check=True, capture_output=True)
+            subprocess.run(["git", "config", "user.name", "Hermes CI"], cwd=str(repo_root), check=True, capture_output=True)
+
+            # Broken product code & initial failing test
+            calc_py = repo_root / "calc.py"
+            calc_py.write_text("def add(a, b):\n    return a + b + 1  # broken\n", encoding="utf-8")
+            test_dir = repo_root / "tests"
+            test_dir.mkdir(parents=True, exist_ok=True)
+            test_calc = test_dir / "test_calc.py"
+            test_calc.write_text("from calc import add\n\ndef test_add():\n    assert add(2, 3) == 5\n", encoding="utf-8")
+
+            subprocess.run(["git", "add", "."], cwd=str(repo_root), check=True, capture_output=True)
+            subprocess.run(["git", "commit", "-m", "broken base"], cwd=str(repo_root), check=True, capture_output=True)
+
+            # Now repair product code on HEAD
+            calc_py.write_text("def add(a, b):\n    return a + b  # fixed\n", encoding="utf-8")
+            subprocess.run(["git", "add", "."], cwd=str(repo_root), check=True, capture_output=True)
+            subprocess.run(["git", "commit", "-m", "fixed head"], cwd=str(repo_root), check=True, capture_output=True)
+
+            verifier = CounterfactualVerifier(repo_root)
+
+            # 1. Genuine heal: passes on fixed HEAD, fails against broken base (HEAD~1)
+            valid_healed_test = "from calc import add\n\ndef test_add():\n    assert add(2, 3) == 5\n"
+            res_valid = verifier.verify_differential(
+                test_file="tests/test_calc.py",
+                healed_test_content=valid_healed_test,
+                base_git_ref="HEAD~1",
+                product_file_paths=["calc.py"],
+            )
+            self.assertTrue(res_valid.verified)
+            self.assertFalse(res_valid.is_vacuous)
+            self.assertTrue(res_valid.forward_passed)
+            self.assertTrue(res_valid.counterfactual_failed)
+
+            # 2. Vacuous heal: assert True passes on both fixed HEAD and broken base (HEAD~1)
+            vacuous_healed_test = "from calc import add\n\ndef test_add():\n    assert True\n"
+            res_vacuous = verifier.verify_differential(
+                test_file="tests/test_calc.py",
+                healed_test_content=vacuous_healed_test,
+                base_git_ref="HEAD~1",
+                product_file_paths=["calc.py"],
+            )
+            self.assertFalse(res_vacuous.verified)
+            self.assertTrue(res_vacuous.is_vacuous)
+            self.assertTrue(res_vacuous.forward_passed)
+            self.assertFalse(res_vacuous.counterfactual_failed)
+            self.assertIn("vacuous", res_vacuous.summary.lower())
+
+    # ── 12. Go & C# AST Guards (Zero Assertion Erosion & Skip Injection) ──
+
+    def test_language_ast_guard_go_and_csharp(self):
+        """Blocks t.Skip() / [Ignore] injection and assertion erosion in Go & C#."""
+        # 1. Go AST guard
+        orig_go = """package calc_test
+import (
+    "testing"
+    "github.com/stretchr/testify/assert"
+)
+func TestAdd(t *testing.T) {
+    assert.Equal(t, 5, Add(2, 3))
+    assert.True(t, IsPositive(5))
+}
+"""
+        # Go skip injection
+        skip_go = """package calc_test
+import "testing"
+func TestAdd(t *testing.T) {
+    t.Skip("skipping flaky test")
+}
+"""
+        res_go_skip = LanguageASTGuard.check_assertion_erosion(orig_go, skip_go, language="go")
+        self.assertFalse(res_go_skip["passed"])
+        self.assertTrue(any("Skip" in v for v in res_go_skip["violations"]))
+
+        # Go assertion erosion (2 assertions down to 1)
+        eroded_go = """package calc_test
+import (
+    "testing"
+    "github.com/stretchr/testify/assert"
+)
+func TestAdd(t *testing.T) {
+    assert.Equal(t, 5, Add(2, 3))
+}
+"""
+        res_go_eroded = LanguageASTGuard.check_assertion_erosion(orig_go, eroded_go, language="go")
+        self.assertFalse(res_go_eroded["passed"])
+        self.assertTrue(any("eroded" in v.lower() or "assertion" in v.lower() for v in res_go_eroded["violations"]))
+
+        # 2. C# AST guard
+        orig_cs = """using NUnit.Framework;
+namespace Tests {
+    public class CalcTests {
+        [Test]
+        public void TestAdd() {
+            Assert.AreEqual(5, Calc.Add(2, 3));
+            Assert.That(Calc.IsPositive(5), Is.True);
+        }
+    }
+}
+"""
+        # C# [Ignore] skip injection
+        skip_cs = """using NUnit.Framework;
+namespace Tests {
+    public class CalcTests {
+        [Test]
+        [Ignore]
+        public void TestAdd() {
+            Assert.AreEqual(5, Calc.Add(2, 3));
+        }
+    }
+}
+"""
+        res_cs_skip = LanguageASTGuard.check_assertion_erosion(orig_cs, skip_cs, language="csharp")
+        self.assertFalse(res_cs_skip["passed"])
+        self.assertTrue(any("Ignore" in v or "skip" in v.lower() for v in res_cs_skip["violations"]))
+
+        # C# assertion removal
+        eroded_cs = """using NUnit.Framework;
+namespace Tests {
+    public class CalcTests {
+        [Test]
+        public void TestAdd() {
+            Assert.AreEqual(5, Calc.Add(2, 3));
+        }
+    }
+}
+"""
+        res_cs_eroded = LanguageASTGuard.check_assertion_erosion(orig_cs, eroded_cs, language="csharp")
+        self.assertFalse(res_cs_eroded["passed"])
+        self.assertTrue(any("eroded" in v.lower() or "assertion" in v.lower() for v in res_cs_eroded["violations"]))
+
+    # ── 13. OpenTelemetry Pipeline Spans & Metrics Export ──
+
+    def test_opentelemetry_pipeline_spans_and_metrics(self):
+        """Emits structured OTel spans, tokens, latencies, and fallback JSON ledger."""
+        with tempfile.TemporaryDirectory() as td:
+            local_ledger = Path(td) / "otel_telemetry.jsonl"
+            exporter = OTLPExporter(endpoint="http://localhost:4318/v1/traces", local_ledger_path=local_ledger)
+
+            res = exporter.export_sprint_telemetry(
+                sprint_id="sprint_test_otel_123",
+                verdict="APPROVED",
+                hours_saved=1.5,
+                dollar_roi=187.5,
+                audit_digest="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                additional_attributes={
+                    "stage_duration_s": 2.45,
+                    "tokens_used": 1420,
+                    "ast_verdict": "PASSED",
+                    "delta_sast_count": 0,
+                },
+            )
+            self.assertEqual(len(res.trace_id), 32)
+            self.assertEqual(len(res.span_id), 16)
+            self.assertTrue(local_ledger.is_file())
+
+            ledger_content = local_ledger.read_text(encoding="utf-8")
+            self.assertIn("sprint_test_otel_123", ledger_content)
+            self.assertIn("hermes.hours_saved", ledger_content)
+            self.assertIn("hermes.dollar_roi", ledger_content)
+            self.assertIn("hermes.tokens_used", ledger_content)
+            self.assertIn("hermes.stage_duration_s", ledger_content)
+
+    # ── 14. SHA-256 Time Machine Snapshot & /hermes rewind Restoration ──
+
+    def test_time_machine_snapshot_and_rewind_restoration(self):
+        """Bit-for-bit SHA-256 state restore and webhook author association authorization."""
+        import hashlib
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td).resolve()
+            src_file = repo / "main.py"
+            src_file.write_text("print('clean baseline')\n", encoding="utf-8")
+
+            initial_sha = hashlib.sha256(src_file.read_bytes()).hexdigest()
+
+            # Record TimeMachine snapshot
+            tm = TimeMachineEngine(repo)
+            snap_id = tm.create_snapshot("pre-heal baseline")
+
+            # Mutate worktree
+            src_file.write_text("print('mutated breaking code')\n", encoding="utf-8")
+            mutated_sha = hashlib.sha256(src_file.read_bytes()).hexdigest()
+            self.assertNotEqual(initial_sha, mutated_sha)
+
+            # Revert snapshot
+            tm.revert_snapshot(snap_id)
+            restored_sha = hashlib.sha256(src_file.read_bytes()).hexdigest()
+            self.assertEqual(initial_sha, restored_sha)
+
+            # Test comment author association security check
+            untrusted_payload = {
+                "action": "created",
+                "comment": {
+                    "body": "/hermes rewind",
+                    "author_association": "CONTRIBUTOR",
+                },
+                "sender": {"login": "untrusted_user"},
+            }
+            res_unauth = dispatch_webhook_event(untrusted_payload)
+            self.assertEqual(res_unauth.get("status"), "unauthorized")
+            self.assertIn("Unauthorized comment author association", res_unauth.get("error", ""))
+
+            first_time_payload = {
+                "action": "created",
+                "comment": {
+                    "body": "/hermes rewind",
+                    "author_association": "FIRST_TIME_CONTRIBUTOR",
+                },
+                "sender": {"login": "attacker"},
+            }
+            res_first = dispatch_webhook_event(first_time_payload)
+            self.assertEqual(res_first.get("status"), "unauthorized")
+
+    # ── 15. Full 5-Stage Live Pipeline E2E Wiring ──
+
+    def test_full_5_stage_pipeline_e2e_wiring(self):
+        """Executes the complete 6 stages in sequence and asserts full pipeline telemetry."""
+        with tempfile.TemporaryDirectory() as td:
+            ws = Path(td).resolve()
+            src_dir = ws / "src"
+            src_dir.mkdir(parents=True, exist_ok=True)
+            tests_dir = ws / "tests"
+            tests_dir.mkdir(parents=True, exist_ok=True)
+
+            calc_file = src_dir / "calculator.py"
+            calc_file.write_text("def multiply(a, b):\n    return a * b\n", encoding="utf-8")
+
+            test_file = tests_dir / "test_calculator.py"
+            test_file.write_text("from src.calculator import multiply\n\ndef test_multiply():\n    assert multiply(2, 3) == 6\n", encoding="utf-8")
+
+            # .hermes.yml policy
+            policy_file = ws / ".hermes.yml"
+            policy_file.write_text("boundaries:\n  allowed_paths:\n    - 'src/**'\n    - 'tests/**'\n", encoding="utf-8")
+
+            orchestrator = ScrumMasterOrchestrator(ws)
+            raw_failure = "FAILED tests/test_calculator.py::test_multiply - AssertionError: 5 != 6"
+
+            healed_code = (
+                "from src.calculator import multiply\n\n"
+                "def test_multiply():\n"
+                "    assert multiply(2, 3) == 6\n"
+            )
+            from hermes.execution.llm_provider_adapter import HermesLLMAdapter
+            with patch.object(HermesLLMAdapter, "propose_patch", return_value={"tests/test_calculator.py": healed_code}):
+                res = orchestrator.run_sprint(
+                    mode="heal",
+                    failure_output=raw_failure,
+                    auto_approve=False,
+                )
+
+            # Assert all 6 stages executed in sequence
+            self.assertEqual(
+                res.get("stages_executed"),
+                [
+                    "ingestion",
+                    "policy_gate",
+                    "dlp_redaction",
+                    "ast_delta_sast",
+                    "counterfactual_verification",
+                    "observability_and_reporting",
+                ],
+            )
+            self.assertEqual(res.get("status"), "AWAITING_WRITE_GATE")
+            self.assertTrue(res.get("sprint_id").startswith("sprint_"))
+            self.assertIsNotNone(res.get("proposal_id"))
+            self.assertIsNotNone(res.get("sarif_report"))
+            self.assertIn("2.1.0", res.get("sarif_report"))
+            self.assertEqual(len(res.get("audit_digest")), 64)
+            self.assertEqual(len(res.get("otel_trace_id")), 32)

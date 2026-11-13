@@ -1,14 +1,16 @@
 """
-Hermes Flake Quarantine Package.
+Backwards-compatibility shim for hermes.core.quarantine
+Single source of truth is located under src/hermes/
 """
+from __future__ import annotations
 
-from core.quarantine.flake_quarantine_agent import (
-    FlakeDiagnosticEvidence,
-    FlakeQuarantineAgent,
-)
+import sys
+from pathlib import Path
 
-__all__ = [
-    "FlakeDiagnosticEvidence",
-    "FlakeQuarantineAgent",
-]
+_src_dir = str(Path(__file__).resolve().parents[2] / "src")
+if _src_dir not in sys.path:
+    sys.path.insert(0, _src_dir)
 
+import hermes.core.quarantine as _target_module
+sys.modules[__name__] = _target_module
+from hermes.core.quarantine import *
