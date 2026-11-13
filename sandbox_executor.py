@@ -56,6 +56,47 @@ class MultiRunResult:
 class SandboxExecutor:
     """Executes tests in an ephemeral git worktree or temporary directory."""
 
+    # Explicit list of sensitive tokens, secrets, and cloud credentials stripped from sandbox subprocesses
+    SENSITIVE_ENV_PREFIXES = (
+        "AWS_",
+        "AZURE_",
+        "GOOGLE_",
+        "ACTIONS_",
+        "HERMES_AUTH_",
+        "HERMES_TOKEN_",
+    )
+
+    SENSITIVE_ENV_KEYS = {
+        "GITHUB_TOKEN",
+        "INPUT_GITHUB_TOKEN",
+        "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
+        "ACTIONS_ID_TOKEN_REQUEST_URL",
+        "ACTIONS_RUNTIME_TOKEN",
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "GEMINI_API_KEY",
+        "GROQ_API_KEY",
+        "CLAUDE_API_KEY",
+        "HERMES_SANDBOX_NONCE",
+    }
+
+    @classmethod
+    def sanitize_subprocess_env(cls, raw_env: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+        """Strip sensitive CI credentials, cloud tokens, and LLM keys before test execution."""
+        base = dict(raw_env if raw_env is not None else os.environ)
+        sanitized = {}
+        for k, v in base.items():
+            k_upper = k.upper()
+            if k_upper in cls.SENSITIVE_ENV_KEYS:
+                continue
+            if any(k_upper.startswith(prefix) for prefix in cls.SENSITIVE_ENV_PREFIXES):
+                continue
+            if any(term in k_upper for term in ("_TOKEN", "_SECRET", "_API_KEY", "_PASSWORD", "_AUTH")):
+                continue
+            sanitized[k] = v
+        sanitized["HERMES_SANDBOX_EXECUTION"] = "1"
+        return sanitized
+
     def __init__(
         self,
         workspace_path: Optional[Path | str] = None,
@@ -196,16 +237,22 @@ class SandboxExecutor:
         stderr_str = ""
         exit_code = -1
 
-        # Prepare env with artifact paths
-        env = dict(os.environ)
+        # Prepare env with artifact paths and credential scrubbing
+        env = self.sanitize_subprocess_env()
         if artifacts_subdir:
             artifacts_subdir.mkdir(parents=True, exist_ok=True)
             env["JUNIT_XML_PATH"] = str(artifacts_subdir / f"junit_run_{run_index}.xml")
             env["PLAYWRIGHT_TRACE_DIR"] = str(artifacts_subdir / f"trace_run_{run_index}")
 
+        # Linux optional network isolation wrapper
+        exec_cmd = list(command)
+        if sys.platform.startswith("linux") and os.environ.get("HERMES_SANDBOX_NETWORK_ISOLATION", "").lower() == "true":
+            if shutil.which("bwrap"):
+                exec_cmd = ["bwrap", "--ro-bind", "/", "/", "--bind", str(cwd), str(cwd), "--unshare-net", "--"] + exec_cmd
+
         try:
             proc = subprocess.run(
-                command,
+                exec_cmd,
                 cwd=str(cwd),
                 capture_output=True,
                 text=True,

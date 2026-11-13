@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hermes-healer"
+version = "1.0.3"
+description = "Hermes: Autonomous CI Self-Healing & Governance Platform"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [
+    { name = "Hermes Platform Engineering", email = "engineering@hermes-ci.dev" }
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Software Development :: Testing",
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-xdist",
+    "hypothesis>=6.80.0",
+]
+ui = [
+    "aiohttp>=3.8.0",
+]
+tree-sitter = [
+    "tree-sitter>=0.21.0",
+    "tree-sitter-languages>=1.10.0",
+]
+cloud-oidc = [
+    "cryptography>=41.0.0",
+]
+all = [
+    "hermes-healer[dev,ui,tree-sitter,cloud-oidc]",
+]
+
+[project.scripts]
+hermes = "hermes.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

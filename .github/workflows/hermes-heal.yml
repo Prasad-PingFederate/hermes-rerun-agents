@@ -25,11 +25,14 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install Project Dependencies
+      - name: Install Dependencies & Run Tests
+        id: tests
         run: |
-          pip install -r requirements.txt
+          pip install -r requirements.txt || true
+          pytest tests/ -q
 
-      - name: Run Hermes Autonomous Healer (Shadow Mode)
+      - name: Run Hermes Autonomous Healer (Triggered on Test Failure)
+        if: failure()
         id: hermes
         uses: ./  # Self-host dogfooding from repository root
         with:

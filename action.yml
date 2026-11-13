@@ -115,6 +115,21 @@ runs:
       with:
         python-version: '3.10'
 
+    - name: Bootstrap Isolated Hermes Environment
+      shell: bash
+      run: |
+        python -m venv "${{ runner.temp }}/hermes_env"
+        if [ -f "${{ runner.temp }}/hermes_env/Scripts/python.exe" ]; then
+          HERMES_PY="${{ runner.temp }}/hermes_env/Scripts/python.exe"
+        else
+          HERMES_PY="${{ runner.temp }}/hermes_env/bin/python"
+        fi
+        echo "HERMES_PYTHON=$HERMES_PY" >> $GITHUB_ENV
+        if [ -f "${{ github.action_path }}/requirements.txt" ]; then
+          "$HERMES_PY" -m pip install --upgrade pip -q || true
+          "$HERMES_PY" -m pip install -q -r "${{ github.action_path }}/requirements.txt" || true
+        fi
+
     - name: Fetch Target Base Git Ref for Differential Verification
       shell: bash
       run: |
@@ -137,4 +152,4 @@ runs:
         GEMINI_API_KEY: ${{ inputs.gemini-api-key }}
         GROQ_API_KEY: ${{ inputs.groq-api-key }}
       run: |
-        python ${{ github.action_path }}/scripts/hermes_action_runner.py
+        "$HERMES_PYTHON" ${{ github.action_path }}/scripts/hermes_action_runner.py

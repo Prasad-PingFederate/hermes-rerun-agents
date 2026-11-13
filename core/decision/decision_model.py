@@ -23,6 +23,7 @@ class FailureCategory(str, Enum):
     PRODUCT_BUG = "PRODUCT_BUG"
     INFRA_FLAKE = "INFRA_FLAKE"
     TEST_FLAKE = "TEST_FLAKE"
+    TEST_BUG = "TEST_BUG"
     CONFIG_DRIFT = "CONFIG_DRIFT"
     UNKNOWN = "UNKNOWN"
 

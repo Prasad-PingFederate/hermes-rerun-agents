@@ -244,14 +244,14 @@ class DeltaSASTScanner:
     EXEC_INJECTION_PATTERNS: List[re.Pattern[str]] = [
         re.compile(r"\beval\s*\("),
         re.compile(r"\bexec\s*\("),
-        re.compile(r"\bos\.system\s*\("),
-        re.compile(r"\bos\.popen\s*\("),
-        re.compile(r"subprocess\.\w+\s*\(.*shell\s*=\s*True"),
-        re.compile(r"\bchild_process\.exec\s*\("),
+        re.compile(r"\bos\s*\.\s*system\s*\("),
+        re.compile(r"\bos\s*\.\s*popen\s*\("),
+        re.compile(r"subprocess\s*\.\s*\w+\s*\(.*shell\s*=\s*True"),
+        re.compile(r"\bchild_process\s*\.\s*exec\s*\("),
         re.compile(r"\bFunction\s*\("),
-        re.compile(r"\bpickle\.loads?\s*\("),
-        re.compile(r"\bmarshal\.loads?\s*\("),
-        re.compile(r"\byaml\.load\s*\([^)]*\)\s*(?!.*Loader\s*=\s*yaml\.SafeLoader)"),
+        re.compile(r"\bpickle\s*\.\s*loads?\s*\("),
+        re.compile(r"\bmarshal\s*\.\s*loads?\s*\("),
+        re.compile(r"\byaml\s*\.\s*load\s*\([^)]*\)\s*(?!.*Loader\s*=\s*yaml\.SafeLoader)"),
     ]
 
     # ── Rule 2: TLS / Auth / Verification Downgrade ──

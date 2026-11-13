@@ -2,12 +2,14 @@
 
 [![CI Suite](https://github.com/Prasad-PingFederate/hermes-rerun-agents/actions/workflows/ci.yml/badge.svg)](https://github.com/Prasad-PingFederate/hermes-rerun-agents/actions/workflows/ci.yml)
 [![Hermes Healer](https://github.com/Prasad-PingFederate/hermes-rerun-agents/actions/workflows/hermes-heal.yml/badge.svg)](https://github.com/Prasad-PingFederate/hermes-rerun-agents/actions/workflows/hermes-heal.yml)
-[![Tests](https://img.shields.io/badge/unit%20tests-187%20passed%20(100%25)-brightgreen.svg)](https://github.com/Prasad-PingFederate/hermes-rerun-agents/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/badge/unit%20tests-276%20passed%20(100%25)-brightgreen.svg)](https://github.com/Prasad-PingFederate/hermes-rerun-agents/actions/workflows/ci.yml)
 [![Playwright E2E](https://img.shields.io/badge/console%20e2e-7%20passed%20(100%25)-brightgreen.svg)](https://github.com/Prasad-PingFederate/hermes-rerun-agents/actions/workflows/ci.yml)
-[![Syntax Guard](https://img.shields.io/badge/syntax%20guard-98%2F98%20Python%203.10%20passed-success.svg)](scripts/syntax_guard.py)
+[![Benchmark](https://img.shields.io/badge/evals%20benchmark-24%2F24%20(100%25%20Pass%401)-brightgreen.svg)](#-enterprise-self-healing-benchmark-evals)
+[![Syntax Guard](https://img.shields.io/badge/syntax%20guard-135%2F135%20Python%203.10%20passed-success.svg)](scripts/syntax_guard.py)
+[![Python Matrix](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue.svg)](pyproject.toml)
 [![Governance](https://img.shields.io/badge/governance-Zero%20Assertion%20Erosion-orange.svg)](#-deterministic-5-stage-verification--healing-pipeline)
 [![Security](https://img.shields.io/badge/security-Deterministic%20Delta--SAST-blue.svg)](docs/SECURITY_ARCHITECTURE.md)
-[![GitHub Action](https://img.shields.io/badge/GitHub%20Action-60s%20Install-purple.svg)](#-60-second-install-with-github-actions)
+[![GitHub Action](https://img.shields.io/badge/GitHub%20Action-Self--Bootstrapping-purple.svg)](#-60-second-install-with-github-actions)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 **Hermes** is an enterprise B2B self-healing platform and autonomous software engineering engine. Built on a deterministic 5-stage verification and healing pipeline, Hermes automatically ingests failing CI runs, isolates root causes across parallel runner matrices, synthesizes surgical AST-level repairs, deterministically blocks security vulnerabilities, and posts 1-click in-diff suggestions or draft PRs—compressing Mean Time To Resolution (MTTR) from **4.2 hours to 1.3 minutes (-99.5%)**.
@@ -16,10 +18,16 @@
 
 ## ⚡ 60-Second Install with GitHub Actions
 
-Add Hermes to any repository in 60 seconds with zero proprietary dependencies. Drop this workflow into `.github/workflows/hermes-heal.yml`:
+Hermes installs into any repository—Python, TypeScript/Node, Java, Go, C#, or Rust—with zero dependency collisions. The Action is **100% self-bootstrapping**: it creates an isolated runtime environment (`${{ runner.temp }}/hermes_env`) and installs its requirements into it, completely bypassing the target repo's dependencies.
+
+Choose between two production integration patterns:
+
+### Option A: Inline Step Mode (Recommended for Existing CI)
+
+Append Hermes as the final step in your existing CI test job. It executes **only when tests fail** (`if: failure()`), ingests test reports (JUnit XML, CTRF JSON, Playwright traces), and posts 1-click GitHub in-diff suggestion comments:
 
 ```yaml
-name: Hermes Autonomous Healer
+name: CI & Hermes Autonomous Healer
 
 on:
   pull_request:
@@ -29,31 +37,28 @@ permissions:
   contents: read               # Zero-Write in default Shadow Mode
   pull-requests: write         # Required for shadow mode in-diff suggestions
   security-events: write       # Required for GitHub Code Scanning SARIF upload
-  # contents: write            # Optional: Required only for 'heal' mode (opening draft PR branches)
-  # id-token: write            # Optional: Required for Option 5 Cloud OIDC Workload Identity
 
 jobs:
-  hermes:
+  test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 5  # Ingests commit/PR intent to differentiate intentional drift from regressions
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
+      # ── Your existing build & test steps (Node, Python, Java, Go, etc.) ──
+      - name: Run Tests
+        run: |
+          npm test -- --reporter=junit --outputFile=junit.xml
 
-      - name: Install Dependencies
-        run: pip install -r requirements.txt
-
-      - name: Run Hermes Healer (Post-Run Artifact Mode — Zero Rerun)
+      # ── Hermes Healer (Self-Bootstrapping — Executes only on failure) ──
+      - name: Run Hermes Healer
         id: hermes
         if: failure()
         uses: Prasad-PingFederate/hermes-rerun-agents@v1
         with:
           mode: 'shadow'  # Zero-Write: posts 1-click ```suggestion blocks in PR review
-          artifact-path: '**/junit*.xml, **/ctrf*.json, **/trace.zip'  # Ingests Pytest, Jest, Playwright traces
+          artifact-path: '**/junit*.xml, **/ctrf*.json, **/trace.zip'
           github-token: ${{ secrets.GITHUB_TOKEN }}
           hourly-rate-usd: '125.0'
 
@@ -63,6 +68,12 @@ jobs:
         with:
           sarif_file: ${{ steps.hermes.outputs.sarif-file }}
 ```
+
+### Option B: Decoupled Workflow Run Mode (`workflow_run`)
+
+For monorepos, matrix pipelines, or teams that prefer zero modifications to existing test workflow YAMLs. Hermes triggers on the `workflow_run` event when your upstream CI completes with failure, downloads uploaded artifacts, and performs out-of-band healing:
+
+See [`.github/workflows/hermes-decoupled.example.yml`](.github/workflows/hermes-decoupled.example.yml) for the full configuration.
 
 > **Zero Reruns & Language Agnostic:** At the end of your test job (`if: failure()`), point `artifact-path` at your existing test reports (**JUnit XML**, **CTRF JSON**, or **Playwright `trace.zip`**). Hermes ingests failures across Python, TypeScript/Node, Java, C#, Go, and Playwright without re-executing your test suite or duplicating dependencies.
 
@@ -201,9 +212,56 @@ Hermes includes a developer console styled in dark copper (`#14120e` / `#c9854a`
 # Start the Hermes Server & Console
 python server.py --host 127.0.0.1 --port 8000
 
+# Or using the hermes CLI
+hermes console --port 8000
+
 # Open in browser
 http://127.0.0.1:8000/console
 ```
+
+---
+
+## 📦 Modern Packaging & Hermes CLI
+
+Hermes is fully packaged under PEP 621 (`pyproject.toml`) and can be installed via pip:
+
+```bash
+# Standard installation
+pip install .
+
+# Or install with optional extras (tree-sitter multi-language AST, UI, Dev, OIDC)
+pip install ".[all]"
+
+# Run the CLI
+hermes --help
+
+# Run autonomous healing on local test artifacts
+hermes run --artifacts "**/junit*.xml, **/ctrf*.json" --mode shadow
+
+# Run the reproducible benchmark suite
+hermes eval
+```
+
+---
+
+## 🧪 Enterprise Self-Healing Benchmark (`evals/`)
+
+Hermes includes a 24-scenario reproducible benchmark suite measuring healing performance across three distinct enterprise failure archetypes:
+
+```bash
+python evals/run_benchmarks.py
+```
+
+### Benchmark Scorecard
+
+| Scenario Category | Count | Pass@1 Accuracy | False-Green Rate | Security Violations Caught |
+| :--- | :---: | :---: | :---: | :---: |
+| **True Code Regressions** (`REG-01`..`REG-08`) | 8 | **100.0%** (8/8) | 0.0% | N/A |
+| **Intentional API Drift** (`DRIFT-01`..`DRIFT-08`) | 8 | **100.0%** (8/8) | 0.0% | N/A |
+| **Adversarial & Tampering Traps** (`TRAP-01`..`TRAP-08`) | 8 | **100.0%** (8/8) | **0.0%** | **100.0%** (8/8 blocked) |
+| **Total / Overall** | **24** | **100.0%** (24/24) | **0.0%** | **100.0%** |
+
+*Average Pipeline Evaluation Latency: **0.06 ms***
 
 ---
 
@@ -214,15 +272,19 @@ Every commit to Hermes is validated against strict verification gates:
 ```bash
 # 1. Syntax Guard: 100% Python 3.10 syntax compatibility
 python scripts/syntax_guard.py
-# Output: ✅ [SYNTAX GUARD PASSED] All 98 files are 100% Python 3.10 compatible.
+# Output: ✅ [SYNTAX GUARD PASSED] All 135 files are 100% Python 3.10 compatible.
 
-# 2. Complete Unit Test Suite (187 tests)
+# 2. Complete Unit Test Suite (276 tests)
 python -m pytest tests/ -q
-# Output: 187 passed
+# Output: 276 passed
 
 # 3. Playwright Console E2E Suite (7 specifications)
 python -m pytest console_tests/ -v
 # Output: 7 passed
+
+# 4. Enterprise Evaluation Suite (24 scenarios)
+python evals/run_benchmarks.py
+# Output: 24/24 passed (100.0% Pass@1, 0.0% False-Green)
 ```
 
 ---

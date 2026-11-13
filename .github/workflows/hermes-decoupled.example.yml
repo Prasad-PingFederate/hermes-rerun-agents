@@ -1,0 +1,47 @@
+name: Hermes Decoupled Post-CI Healer (Zero Runner Permissions)
+
+# Decoupled Mode: Runs OUTSIDE untrusted test runner job.
+# Triggered only when upstream CI fails; downloads test artifacts (JUnit, CTRF, Playwright traces)
+# and posts in-diff suggestions or SARIF reports with pull-requests: write isolated from test execution.
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+permissions:
+  contents: read
+  pull-requests: write
+  security-events: write
+
+jobs:
+  triage-on-failure:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+    steps:
+      - name: Checkout Codebase
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 5
+
+      - name: Download Test Artifacts from Failed CI Run
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ github.event.workflow_run.id }}
+          path: test-artifacts/
+
+      - name: Run Hermes Decoupled Healer (Artifact Mode)
+        id: hermes
+        uses: Prasad-PingFederate/hermes-rerun-agents@v1
+        with:
+          mode: 'shadow'
+          artifact-path: 'test-artifacts/**/junit*.xml,test-artifacts/**/ctrf*.json,test-artifacts/**/trace.zip'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          llm-provider: 'none'
+
+      - name: Upload SARIF to GitHub Code Scanning
+        if: always() && steps.hermes.outputs.sarif-file != ''
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: ${{ steps.hermes.outputs.sarif-file }}

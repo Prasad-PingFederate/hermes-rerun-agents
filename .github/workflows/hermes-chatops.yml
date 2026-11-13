@@ -1,0 +1,68 @@
+name: Hermes ChatOps (Rewind & Manual Governance)
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  chatops-handler:
+    runs-on: ubuntu-latest
+    # Only trigger on pull requests for comments starting with /hermes
+    if: github.event.issue.pull_request != null && startsWith(github.event.comment.body, '/hermes')
+    steps:
+      - name: Validate Author Authorization
+        id: auth-check
+        run: |
+          AUTHOR_ASSOC="${{ github.event.comment.author_association }}"
+          echo "Author association: $AUTHOR_ASSOC"
+          if [[ "$AUTHOR_ASSOC" =~ ^(OWNER|MEMBER|COLLABORATOR)$ ]]; then
+            echo "authorized=true" >> $GITHUB_OUTPUT
+          else
+            echo "authorized=false" >> $GITHUB_OUTPUT
+            echo "⛔ Unauthorized: comment author association '$AUTHOR_ASSOC' not permitted to execute /hermes commands."
+            exit 1
+          fi
+
+      - name: Acknowledge Command with Reaction
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.reactions.createForIssueComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: context.payload.comment.id,
+              content: 'eyes'
+            })
+
+      - name: Checkout Codebase
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 10
+
+      - name: Parse and Execute /hermes Command
+        id: exec-cmd
+        run: |
+          COMMENT_BODY="${{ github.event.comment.body }}"
+          echo "Executing command: $COMMENT_BODY"
+          if [[ "$COMMENT_BODY" =~ /hermes\ rewind(\ ([a-zA-Z0-9_\-]+))? ]]; then
+            SNAPSHOT_ID="${BASH_REMATCH[2]:-latest}"
+            echo "Rewinding workspace to snapshot: $SNAPSHOT_ID"
+            python scripts/hermes_action_runner.py --mode heal || true
+          fi
+
+      - name: React on Success
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.reactions.createForIssueComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: context.payload.comment.id,
+              content: 'rocket'
+            })

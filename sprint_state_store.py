@@ -433,3 +433,122 @@ class SprintStateStore:
         res = tm_engine.restore_snapshot(snapshot_id)
         self._append_audit("ROLLBACK_SNAPSHOT", {"snapshot_id": snapshot_id, "result": res})
         return res
+
+    def export_state_bundle(self) -> Dict[str, Any]:
+        """Export a portable JSON state bundle for cross-run CI caching."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM sprints")
+            sprints = [dict(r) for r in cursor.fetchall()]
+            cursor.execute("SELECT * FROM tickets")
+            tickets = [dict(r) for r in cursor.fetchall()]
+            cursor.execute("SELECT * FROM attempt_history")
+            attempts = [dict(r) for r in cursor.fetchall()]
+            cursor.execute("SELECT * FROM snapshots")
+            snapshots = [dict(r) for r in cursor.fetchall()]
+
+        return {
+            "version": "1.0",
+            "timestamp": time.time(),
+            "sprints": sprints,
+            "tickets": tickets,
+            "attempts": attempts,
+            "snapshots": snapshots,
+        }
+
+    def import_state_bundle(self, bundle: Dict[str, Any]) -> None:
+        """Import a state bundle from an upstream CI run."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            for s in bundle.get("sprints", []):
+                cursor.execute(
+                    "INSERT OR REPLACE INTO sprints VALUES (?, ?, ?, ?, ?)",
+                    (s["sprint_id"], s["status"], s["failure_context_json"], s["created_at"], s["updated_at"]),
+                )
+            for t in bundle.get("tickets", []):
+                cursor.execute(
+                    "INSERT OR REPLACE INTO tickets VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        t["ticket_id"],
+                        t["sprint_id"],
+                        t["title"],
+                        t["complexity"],
+                        t["assigned_tier"],
+                        t["allowed_files_json"],
+                        t["acceptance_criteria_json"],
+                        t["depends_on_json"],
+                        t["status"],
+                        t["proposed_changes_json"],
+                    ),
+                )
+            for a in bundle.get("attempts", []):
+                cursor.execute(
+                    "INSERT OR REPLACE INTO attempt_history VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        a["attempt_id"],
+                        a["ticket_id"],
+                        a["tier"],
+                        a["agent_name"],
+                        a["model_name"],
+                        a["status"],
+                        a["rejection_reason"],
+                        a["audit_telemetry_json"],
+                        a["timestamp"],
+                    ),
+                )
+            for sn in bundle.get("snapshots", []):
+                cursor.execute(
+                    "INSERT OR REPLACE INTO snapshots VALUES (?, ?, ?, ?, ?)",
+                    (sn["snapshot_id"], sn["sprint_id"], sn["ticket_id"], sn["label"], sn["manifest_json"]),
+                )
+
+
+class GitNotesStateBackend:
+    """Stores and retrieves state across ephemeral CI runs using git notes (refs/notes/hermes-state)."""
+
+    DEFAULT_REF = "refs/notes/hermes-state"
+
+    @classmethod
+    def export_state_to_git_notes(
+        cls,
+        repo_root: Path | str,
+        state_data: Dict[str, Any],
+        ref: str = DEFAULT_REF,
+    ) -> bool:
+        """Export serialized JSON state to git notes attached to HEAD."""
+        import subprocess
+        try:
+            payload = json.dumps(state_data)
+            res = subprocess.run(
+                ["git", "notes", f"--ref={ref}", "add", "-f", "-m", payload, "HEAD"],
+                cwd=str(repo_root),
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            return res.returncode == 0
+        except Exception:
+            return False
+
+    @classmethod
+    def import_state_from_git_notes(
+        cls,
+        repo_root: Path | str,
+        ref: str = DEFAULT_REF,
+        target_commit: str = "HEAD",
+    ) -> Optional[Dict[str, Any]]:
+        """Read serialized JSON state from git notes attached to target_commit."""
+        import subprocess
+        try:
+            res = subprocess.run(
+                ["git", "notes", f"--ref={ref}", "show", target_commit],
+                cwd=str(repo_root),
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if res.returncode == 0 and res.stdout.strip():
+                return json.loads(res.stdout)
+        except Exception:
+            pass
+        return None
