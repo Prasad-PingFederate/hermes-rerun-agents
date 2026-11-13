@@ -188,6 +188,10 @@ def cmd_run(args: argparse.Namespace) -> int:
         print(f"⚠️ Staged proposal awaiting approval. Proposal ID: {res.get('proposal_id')}")
         print(res.get("diff", ""))
         return 0
+    elif res.get("status") == "SHADOW_SUGGESTION_GENERATED":
+        print(f"Shadow suggestion generated! Proposal ID: {res.get('proposal_id')}")
+        print(res.get("diff", "") or res.get("shadow_payload", ""))
+        return 0
     else:
         print(f"❌ Sprint failed: {res.get('error', res.get('status'))}")
         return 1

@@ -799,9 +799,15 @@ class ScrumMasterOrchestrator:
         if is_shadow:
             from hermes.core.shadow_mode.suggestion_engine import ShadowSuggestionFormatter
             diff_text = self.write_gate.get_diff_summary(sprint_id)
+            primary_file = next(iter(accumulated_patches.keys()), "workspace")
+            line_count = max(1, len(accumulated_patches.get(primary_file, "").splitlines()))
             shadow_payload = ShadowSuggestionFormatter.format_out_of_diff_fallback(
-                diff_summary=diff_text,
+                file_path=primary_file,
+                start_line=1,
+                end_line=line_count,
+                unified_diff=diff_text or "",
                 sprint_id=sprint_id,
+                classification=(classification if mode in ("heal", "shadow") else None) or "TEST_BUG",
             )
             return {
                 "status": "SHADOW_SUGGESTION_GENERATED",
