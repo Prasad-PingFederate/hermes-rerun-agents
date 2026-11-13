@@ -16,8 +16,14 @@ from core.audit.tricorder_feedback import (
 from core.decision.decision_model import (
     DecisionModel,
     DecisionVerdict,
+    FailureCategory,
+    LedgerFeedbackStats,
+    PatchGuardStatus,
+    Phase4DecisionEngine,
+    Phase4DecisionResult,
     RemediationAction,
     RerunPolicy,
+    TriageSignalInput,
 )
 
 
@@ -29,26 +35,36 @@ class TestDecisionDataModels:
             allow_rerun=True,
             max_retries=2,
             backoff_seconds=10,
+            blast_radius_ratio=0.0,
+            finops_rationale="Transient fault retry",
             estimated_ci_minutes_saved=0.0,
-            rationale="Transient fault retry",
         )
         d = policy.to_dict()
         assert d["allow_rerun"] is True
         assert d["max_retries"] == 2
         assert d["backoff_seconds"] == 10
         assert d["estimated_ci_minutes_saved"] == 0.0
-        assert "Transient fault" in d["rationale"]
+        assert "Transient fault" in d["finops_rationale"]
 
     def test_decision_verdict_to_dict(self):
-        policy = RerunPolicy(allow_rerun=False, max_retries=0, estimated_ci_minutes_saved=15.0)
-        verdict = DecisionVerdict(
-            action=RemediationAction.FAIL_FAST_ESCALATE,
-            raw_confidence=0.90,
-            calibrated_confidence=0.88,
-            bayesian_category_precision=0.85,
+        policy = RerunPolicy(
+            allow_rerun=False,
+            max_retries=0,
+            backoff_seconds=0,
             blast_radius_ratio=0.10,
+            finops_rationale="blocked",
+            estimated_ci_minutes_saved=15.0,
+        )
+        verdict = Phase4DecisionResult(
+            test_id="test_1",
+            category=FailureCategory.PRODUCT_BUG,
+            raw_confidence=0.90,
+            posterior_precision=0.85,
+            calibrated_confidence=0.88,
+            action=RemediationAction.FAIL_FAST_ESCALATE,
             rerun_policy=policy,
-            decision_trace=["Rule 1 applied", "Rule 2 applied"],
+            expose_patch=False,
+            decision_trace={"rule": "applied"},
         )
         d = verdict.to_dict()
         assert d["action"] == "FAIL_FAST_ESCALATE"
@@ -57,8 +73,6 @@ class TestDecisionDataModels:
         assert d["bayesian_category_precision"] == 0.85
         assert d["blast_radius_ratio"] == 0.10
         assert d["rerun_policy"]["allow_rerun"] is False
-        assert len(d["decision_trace"]) == 2
-
 
 class TestDeterministicOverridesAndZeroWasteGuard:
     """Verify Phase 1 deterministic overrides and zero-waste rerun guard."""
@@ -86,11 +100,11 @@ class TestDeterministicOverridesAndZeroWasteGuard:
         assert verdict.rerun_policy.allow_rerun is False
         assert verdict.rerun_policy.max_retries == 0
         assert verdict.rerun_policy.estimated_ci_minutes_saved == 20.0  # 10m * 2 retries saved
-        assert "Zero-Waste Rerun Guard" in verdict.rerun_policy.rationale
+        assert "Zero-Waste Guard" in verdict.rerun_policy.finops_rationale
 
         # 3. Action is FAIL_FAST_ESCALATE (no patch available)
         assert verdict.action == RemediationAction.FAIL_FAST_ESCALATE
-        assert any("DETERMINISTIC LOCK" in t for t in verdict.decision_trace)
+        assert "deterministic_lock" in verdict.decision_trace
 
     def test_deterministic_product_bug_with_approved_patch_proposes_fix(self, tmp_path):
         ledger = TricorderLedger(ledger_path=tmp_path / "ledger.json")
@@ -241,7 +255,7 @@ class TestFlakyTestQuarantineAndLowConfidenceGating:
 
         assert verdict.action == RemediationAction.RECOMMEND_QUARANTINE
         assert verdict.rerun_policy.allow_rerun is False
-        assert "non-determinism" in verdict.rerun_policy.rationale
+        assert "disabled" in verdict.rerun_policy.finops_rationale.lower()
 
     def test_low_calibrated_confidence_selects_observe_silent(self, tmp_path):
         ledger = TricorderLedger(ledger_path=tmp_path / "ledger.json")
@@ -254,9 +268,9 @@ class TestFlakyTestQuarantineAndLowConfidenceGating:
             has_forensic_evidence=False,
         )
 
-        assert verdict.calibrated_confidence < 0.60
+        assert verdict.calibrated_confidence < 0.45
         assert verdict.action == RemediationAction.OBSERVE_SILENT
-        assert any("OBSERVE_SILENT" in t for t in verdict.decision_trace)
+        assert "OBSERVE_SILENT" in str(verdict.decision_trace)
 
     def test_moderate_confidence_with_blocked_patch_is_diagnostic_only(self, tmp_path):
         ledger = TricorderLedger(ledger_path=tmp_path / "ledger.json")
@@ -277,7 +291,7 @@ class TestFlakyTestQuarantineAndLowConfidenceGating:
 
         # Patch is blocked, so cannot propose verified patch
         assert verdict.action == RemediationAction.DIAGNOSTIC_ONLY
-        assert any("DIAGNOSTIC_ONLY" in t for t in verdict.decision_trace)
+        assert "DIAGNOSTIC_ONLY" in str(verdict.decision_trace)
 
 
 class TestBlastRadiusCalculation:
@@ -297,3 +311,111 @@ class TestBlastRadiusCalculation:
 
         v4 = model.evaluate(raw_confidence=0.8, category="GENERAL", failed_tests_count=5, total_tests_run=0)
         assert v4.blast_radius_ratio == 1.0  # Safe division
+
+
+class TestPhase4DecisionMatrix:
+    """Verify exact 6 scenarios from the Phase 4 Decision Matrix specification."""
+
+    def test_scenario_1_http_500_backend_crash(self):
+        signal = TriageSignalInput(
+            test_id="test_checkout_500",
+            category=FailureCategory.PRODUCT_BUG,
+            raw_llm_confidence=0.70,
+            is_deterministic=True,
+            http_status_code=500,
+            patch_guard_status=PatchGuardStatus.NOT_APPLICABLE,
+        )
+        res = Phase4DecisionEngine.evaluate(signal)
+        assert res.calibrated_confidence == 1.00
+        assert res.action == RemediationAction.FAIL_FAST_ESCALATE
+        assert res.rerun_policy.allow_rerun is False
+        assert res.rerun_policy.max_retries == 0
+        assert res.expose_patch is False
+
+    def test_scenario_2_http_503_gateway_timeout(self):
+        signal = TriageSignalInput(
+            test_id="test_payment_503",
+            category=FailureCategory.INFRA_FLAKE,
+            raw_llm_confidence=0.60,
+            is_deterministic=True,
+            http_status_code=503,
+            patch_guard_status=PatchGuardStatus.NOT_APPLICABLE,
+        )
+        res = Phase4DecisionEngine.evaluate(signal)
+        assert res.calibrated_confidence == 1.00
+        assert res.action == RemediationAction.AUTO_RERUN_TRANSIENT
+        assert res.rerun_policy.allow_rerun is True
+        assert res.rerun_policy.max_retries == 2
+        assert res.rerun_policy.backoff_seconds == 10
+        assert res.expose_patch is False
+
+    def test_scenario_3_verified_bug_fix(self):
+        signal = TriageSignalInput(
+            test_id="test_user_profile",
+            category=FailureCategory.PRODUCT_BUG,
+            raw_llm_confidence=0.85,
+            ledger_stats=LedgerFeedbackStats(useful_count=18, not_useful_count=2),
+            has_stack_trace=True,
+            has_network_logs=True,
+            patch_guard_status=PatchGuardStatus.PASSED,
+            candidate_patch_diff="--- a/profile.py\n+++ b/profile.py\n",
+        )
+        res = Phase4DecisionEngine.evaluate(signal)
+        assert pytest.approx(res.posterior_precision, 0.01) == 0.87
+        assert pytest.approx(res.calibrated_confidence, 0.01) == 0.89
+        assert res.action == RemediationAction.PROPOSE_VERIFIED_PATCH
+        assert res.rerun_policy.allow_rerun is False
+        assert res.rerun_policy.max_retries == 0
+        assert res.expose_patch is True
+
+    def test_scenario_4_assertion_erosion_blocked(self):
+        signal = TriageSignalInput(
+            test_id="test_cart_erosion",
+            category=FailureCategory.TEST_FLAKE,
+            raw_llm_confidence=0.80,
+            ledger_stats=LedgerFeedbackStats(useful_count=8, not_useful_count=2),
+            has_stack_trace=False,
+            has_network_logs=False,
+            patch_guard_status=PatchGuardStatus.BLOCKED,
+        )
+        res = Phase4DecisionEngine.evaluate(signal)
+        assert pytest.approx(res.posterior_precision, 0.01) == 0.77
+        assert pytest.approx(res.calibrated_confidence, 0.01) == 0.47
+        assert res.action == RemediationAction.DIAGNOSTIC_ONLY
+        assert res.rerun_policy.allow_rerun is False
+        assert res.expose_patch is False
+
+    def test_scenario_5_chronic_non_deterministic_flake(self):
+        signal = TriageSignalInput(
+            test_id="test_websocket_stream",
+            category=FailureCategory.TEST_FLAKE,
+            raw_llm_confidence=0.82,
+            ledger_stats=LedgerFeedbackStats(useful_count=10, not_useful_count=2),
+            has_stack_trace=True,
+            has_network_logs=True,
+            is_chronic_flake=True,
+            patch_guard_status=PatchGuardStatus.NOT_APPLICABLE,
+        )
+        res = Phase4DecisionEngine.evaluate(signal)
+        assert pytest.approx(res.posterior_precision, 0.01) == 0.80
+        assert pytest.approx(res.calibrated_confidence, 0.01) == 0.76
+        assert res.action == RemediationAction.RECOMMEND_QUARANTINE
+        assert res.rerun_policy.allow_rerun is True
+        assert res.rerun_policy.max_retries == 1
+        assert res.rerun_policy.backoff_seconds == 5
+        assert res.expose_patch is False
+
+    def test_scenario_6_noisy_hallucinated_triage(self):
+        signal = TriageSignalInput(
+            test_id="test_env_config",
+            category=FailureCategory.CONFIG_DRIFT,
+            raw_llm_confidence=0.70,
+            ledger_stats=LedgerFeedbackStats(useful_count=1, not_useful_count=9),
+        )
+        res = Phase4DecisionEngine.evaluate(signal)
+        assert pytest.approx(res.posterior_precision, 0.01) == 0.23
+        assert res.calibrated_confidence < 0.45
+        assert res.action == RemediationAction.OBSERVE_SILENT
+        assert res.expose_patch is False
+        assert res.rerun_policy.allow_rerun is False
+
