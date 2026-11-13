@@ -12,10 +12,32 @@ from __future__ import annotations
 
 import difflib
 import os
+import re
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
+
+
+def strip_markdown_fences(content: str) -> str:
+    """Deterministically strip markdown code fences (```diff, ```python, ```ts, ```typescript, etc.)
+    from LLM-generated code or diffs before AST verification and workspace application.
+    """
+    if not isinstance(content, str):
+        return content
+
+    text = content.strip()
+    # 1. Exact match: entire payload is enclosed in ```[lang] ... ```
+    m = re.match(r"^```(?:[a-zA-Z0-9_\-]+)?\s*\n([\s\S]*?)\n```\s*$", text)
+    if m:
+        return m.group(1).rstrip() + "\n"
+
+    # 2. Block embedded within leading/trailing markdown prose
+    m2 = re.search(r"```(?:[a-zA-Z0-9_\-]+)?\s*\n([\s\S]*?)\n```", text)
+    if m2 and (text.startswith("```") or len(text) - len(m2.group(0)) < 250):
+        return m2.group(1).rstrip() + "\n"
+
+    return content
 
 
 class SafePathViolationError(ValueError):
@@ -142,6 +164,7 @@ class AtomicPatchApplier:
 
     def apply_single_file(self, rel_path: str, new_content: str) -> Path:
         """Atomically write new_content to rel_path inside repo_root."""
+        cleaned_content = strip_markdown_fences(new_content)
         target_path = self.reader.validate_safe_path(rel_path, allow_missing=True)
         target_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -154,7 +177,7 @@ class AtomicPatchApplier:
 
         try:
             with open(temp_fd, "w", encoding="utf-8") as f:
-                f.write(new_content)
+                f.write(cleaned_content)
 
             # Unlink target if it exists or is a symlink (preventing symlink overwriting)
             if target_path.is_symlink() or target_path.exists():
@@ -209,4 +232,9 @@ class AtomicPatchApplier:
                 except Exception:
                     pass
             raise RuntimeError(f"Atomic application failed, rolled back changes: {str(e)}") from e
+
+
+# Backward compatibility and role-agnostic alias
+WorkspacePatchApplier = AtomicPatchApplier
+
 

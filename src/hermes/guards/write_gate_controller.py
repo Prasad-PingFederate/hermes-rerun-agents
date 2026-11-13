@@ -37,7 +37,7 @@ class HumanWriteGateController:
     ):
         self.workspace_path = Path(workspace_path or Path.cwd()).resolve()
         self.tm = tm_engine or TimeMachineEngine(self.workspace_path)
-        self.store = store or SprintStateStore()
+        self.store = store or SprintStateStore(workspace_path=self.workspace_path)
         self.applier = AtomicPatchApplier(self.workspace_path)
         self.reader = WorkspaceFileReader(self.workspace_path)
         self.is_fork_pr = is_fork_pr or os.environ.get("HERMES_IS_FORK_PR", "").lower() in ("true", "1")

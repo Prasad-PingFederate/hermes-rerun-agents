@@ -20,6 +20,8 @@ from hermes.execution.workspace_patch_applier import (
     SafePathViolationError,
     UnifiedDiffGenerator,
     WorkspaceFileReader,
+    WorkspacePatchApplier,
+    strip_markdown_fences,
 )
 
 __all__ = [
@@ -27,9 +29,11 @@ __all__ = [
     "ExecutionRun",
     "MultiRunResult",
     "AtomicPatchApplier",
+    "WorkspacePatchApplier",
     "UnifiedDiffGenerator",
     "WorkspaceFileReader",
     "SafePathViolationError",
+    "strip_markdown_fences",
     "HermesLLMAdapter",
     "LocalHeuristicEngine",
     "AgentRole",

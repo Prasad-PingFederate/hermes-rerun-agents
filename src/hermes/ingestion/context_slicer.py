@@ -254,12 +254,17 @@ class ContextSlicer:
         workspace_root: Path,
         target_files: List[str],
         max_context_tokens: int = 2000,
+        dom_context: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Build read-only context slice with neighbor signatures and conftest fixtures under token budget."""
+        """Build read-only context slice with neighbor signatures, conftest fixtures, and DOM hints under token budget."""
         workspace = Path(workspace_root).resolve()
         fixtures = PytestFixtureIndexer.scan_fixtures(workspace)
 
         sections: List[str] = []
+
+        # 0. Add UI Automation DOM & Locator Forensics if present
+        if dom_context and dom_context.strip():
+            sections.append(f"# UI Automation DOM & Locator Forensics:\n{dom_context.strip()}")
 
         # 1. Add Fixture Catalog
         if fixtures:
@@ -310,4 +315,5 @@ class ContextSlicer:
             "neighbor_modules": [
                 str(nf.relative_to(workspace)).replace("\\", "/") for nf in sorted(list(neighbor_files))
             ],
+            "dom_context": dom_context or "",
         }

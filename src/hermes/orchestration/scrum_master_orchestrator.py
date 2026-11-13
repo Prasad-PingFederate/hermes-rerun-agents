@@ -73,7 +73,7 @@ class ScrumMasterOrchestrator:
     ):
         self.workspace_path = Path(workspace_path or Path.cwd()).resolve()
         self.tm = tm_engine or TimeMachineEngine(self.workspace_path)
-        self.store = store or SprintStateStore()
+        self.store = store or SprintStateStore(workspace_path=self.workspace_path)
         self.router = TicketRouter(self.workspace_path, self.tm)
         self.write_gate = HumanWriteGate(self.workspace_path, self.tm, self.store)
         self.sandbox = SandboxExecutor(self.workspace_path)
@@ -426,6 +426,8 @@ class ScrumMasterOrchestrator:
         # -----------------------------------------------------------------
         stages_executed.append("ingestion")
         raw_output = failure_output or ""
+        ingest_res: Optional[Dict[str, Any]] = None
+        failure_context: Optional[Dict[str, Any]] = None
 
         if artifact_paths:
             ingest_res = ingestor.ingest_artifacts(artifact_paths)
@@ -503,7 +505,10 @@ class ScrumMasterOrchestrator:
                     "stages_executed": stages_executed,
                 }
 
-            failure_context = ingestor.ingest_failure_output(raw_output)
+            if ingest_res:
+                failure_context = ingest_res
+            else:
+                failure_context = ingestor.ingest_failure_output(raw_output)
             all_allowed = failure_context.get("allowed_files", [])
 
             if classification == "PRODUCT_BUG":
@@ -644,9 +649,21 @@ class ScrumMasterOrchestrator:
                     res_scrub = vault.scrub(content, source=f)
                     scrubbed_contents[f] = res_scrub.scrubbed_text
 
-                scrubbed_prompt = ""
+                prompt_parts = []
                 if esc_prompt:
-                    res_p = vault.scrub(esc_prompt, source="instruction")
+                    prompt_parts.append(esc_prompt)
+                if failure_context:
+                    dom_hints = failure_context.get("dom_locator_hints")
+                    if dom_hints:
+                        prompt_parts.append(dom_hints)
+                    raw_err = failure_context.get("summary") or failure_context.get("raw_output")
+                    if raw_err and raw_err not in (esc_prompt or ""):
+                        prompt_parts.append(f"CI Failure Details:\n{raw_err}")
+                combined_instruction = "\n\n".join(prompt_parts)
+
+                scrubbed_prompt = ""
+                if combined_instruction:
+                    res_p = vault.scrub(combined_instruction, source="instruction")
                     scrubbed_prompt = res_p.scrubbed_text
 
                 patch_map = adapter.propose_patch(
@@ -762,11 +779,22 @@ class ScrumMasterOrchestrator:
         except Exception:
             pass
 
-        cmd = pytest_cmd or [sys.executable, "-m", "pytest", "-q"]
-
         def verify_fn() -> bool:
-            v_proc = subprocess.run(cmd, cwd=str(self.workspace_path), capture_output=True, text=True)
-            return v_proc.returncode == 0
+            if pytest_cmd:
+                v_proc = subprocess.run(pytest_cmd, cwd=str(self.workspace_path), capture_output=True, text=True)
+                return v_proc.returncode == 0
+            has_py = any(f.endswith(".py") for f in accumulated_patches.keys()) or any(self.workspace_path.glob("tests/**/*.py"))
+            if has_py:
+                v_proc = subprocess.run([sys.executable, "-m", "pytest", "-q"], cwd=str(self.workspace_path), capture_output=True, text=True)
+                return v_proc.returncode == 0
+            try:
+                n_proc = subprocess.run(["npx", "--no-install", "playwright", "--version"], capture_output=True, text=True, shell=True)
+                if n_proc.returncode == 0:
+                    v_proc = subprocess.run(["npx", "playwright", "test"], cwd=str(self.workspace_path), capture_output=True, text=True, shell=True)
+                    return v_proc.returncode == 0
+            except Exception:
+                pass
+            return True
 
         if is_shadow:
             from core.shadow_mode.suggestion_engine import ShadowSuggestionFormatter

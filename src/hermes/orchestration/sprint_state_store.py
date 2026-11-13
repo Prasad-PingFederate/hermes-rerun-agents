@@ -40,11 +40,17 @@ class AttemptRecord:
 class SprintStateStore:
     """Durable state storage backed by SQLite and append-only JSONL audit logging."""
 
-    def __init__(self, db_path: Optional[Path | str] = None, audit_log_path: Optional[Path | str] = None):
+    def __init__(
+        self,
+        db_path: Optional[Path | str] = None,
+        audit_log_path: Optional[Path | str] = None,
+        workspace_path: Optional[Path | str] = None,
+    ):
         if db_path:
             self.db_path = Path(db_path).resolve()
         else:
-            tasks_dir = Path.cwd() / ".rerun_tasks"
+            base_dir = Path(workspace_path).resolve() if workspace_path else Path.cwd()
+            tasks_dir = base_dir / ".rerun_tasks"
             tasks_dir.mkdir(parents=True, exist_ok=True)
             self.db_path = tasks_dir / "sprint_store.db"
 

@@ -349,10 +349,17 @@ def extract_json_from_response(text: str) -> Dict[str, Any]:
 
 def extract_code_or_diff(text: str) -> str:
     """Extract raw code from markdown fences if present, otherwise return cleaned text."""
+    if not isinstance(text, str):
+        return text
     clean = text.strip()
-    match = re.search(r"```(?:python|ts|typescript|js|javascript|diff)?\s*(.*?)\s*```", clean, re.DOTALL)
+    # 1. Exact match for fenced block
+    m1 = re.match(r"^```(?:[a-zA-Z0-9_\-]+)?\s*\n([\s\S]*?)\n```\s*$", clean)
+    if m1:
+        return m1.group(1).rstrip() + "\n"
+    # 2. Embedded match
+    match = re.search(r"```(?:[a-zA-Z0-9_\-]+)?\s*\n?(.*?)\n?```", clean, re.DOTALL)
     if match:
-        return match.group(1).strip()
+        return match.group(1).strip() + "\n"
     return clean
 
 
@@ -521,16 +528,97 @@ class LocalHeuristicEngine:
         """Heal existing drifted test cases preserving Zero Assertion Erosion (AG-8)."""
         patches: Dict[str, str] = {}
         title = getattr(ticket, "title", "").lower()
+        desc = getattr(ticket, "description", "")
+        criteria = getattr(ticket, "acceptance_criteria", []) or []
+        crit_str = " ".join(criteria)
         allowed = getattr(ticket, "allowed_files", [])
+        combined_context = f"{instruction}\n{desc}\n{crit_str}"
+
+        # 1. Parse DOM Locator hints (Failed Locator -> Recommended/Candidate Locator)
+        failed_sel: Optional[str] = None
+        cand_sel: Optional[str] = None
+
+        m_failed = re.search(r"Failed Locator / Selector:\s*([^\r\n]+)", combined_context)
+        if m_failed:
+            failed_sel = m_failed.group(1).strip()
+        m_cand = re.search(r"Recommended Updated Locator:\s*([^\r\n]+)", combined_context)
+        if m_cand:
+            cand_sel = m_cand.group(1).strip()
+        if not cand_sel:
+            m_cand_playwright = re.search(r"Playwright Alternative Suggestion:\s*([^\r\n]+)", combined_context)
+            if m_cand_playwright:
+                cand_sel = m_cand_playwright.group(1).strip()
+        if not cand_sel:
+            m_ac = re.search(r"Update drifted locator ['\"]([^'\"]+)['\"] to target ['\"]([^'\"]+)['\"]", combined_context)
+            if m_ac:
+                failed_sel = m_ac.group(1).strip()
+                cand_sel = m_ac.group(2).strip()
+
+        # If not explicit, extract from Playwright waiting for locator
+        if not failed_sel:
+            m_wait = re.search(r"waiting for locator\(['\"]([^'\"]+)['\"]\)", combined_context, re.IGNORECASE)
+            if m_wait:
+                failed_sel = m_wait.group(1).strip()
+        if not cand_sel:
+            m_avail = re.search(r"Available DOM Elements / TestIds:\s*([^\r\n]+)", combined_context)
+            if m_avail:
+                cands = [c.strip() for c in m_avail.group(1).split(",") if c.strip()]
+                if cands:
+                    cand_sel = cands[0]
+
+        # 2. Check for Status code drift: e.g. 200 -> 201
+        status_drift = None
+        if "201" in combined_context and ("200" in combined_context or "status_code" in combined_context):
+            status_drift = (200, 201)
+        elif "200" in combined_context and "204" in combined_context:
+            status_drift = (204, 200)
+
+        # 3. Value drift: e.g. assert 'ORDER_CONFIRMED' == 'CONFIRMED' or assert 201 == 200
+        val_drift = None
+        m_assert_drift = re.search(r"AssertionError:\s*assert\s+([^\r\n=]+?)\s*==\s*([^\r\n]+)", combined_context)
+        if m_assert_drift:
+            actual_val = m_assert_drift.group(1).strip()
+            expected_val = m_assert_drift.group(2).strip()
+            val_drift = (expected_val, actual_val)
 
         for rel_path in allowed:
             current_code = file_contents.get(rel_path, "")
+            if not current_code:
+                continue
+
+            fixed_code = current_code
+
+            # Apply DOM locator replacement
+            if failed_sel and cand_sel:
+                if failed_sel in fixed_code:
+                    fixed_code = fixed_code.replace(failed_sel, cand_sel)
+                old_id = failed_sel.replace('[data-testid="', '').replace('"]', '').replace("'", "").replace('"', '').strip()
+                new_id = cand_sel.replace('[data-testid="', '').replace('"]', '').replace("'", "").replace('"', '').strip()
+                if old_id and new_id and old_id in fixed_code:
+                    fixed_code = fixed_code.replace(old_id, new_id)
+
+            # Apply Status Code drift replacement
+            if status_drift:
+                old_code, new_code = status_drift
+                pat_status = re.compile(r"(\bstatus(?:_code)?(?:['\"])?\]?\s*==\s*)" + str(old_code) + r"\b")
+                fixed_code = pat_status.sub(r"\g<1>" + str(new_code), fixed_code)
+
+            # Apply Value drift replacement on assertions
+            if val_drift:
+                expected_val, actual_val = val_drift
+                pat_assert = re.compile(r"(assert\s+.*?\s*==\s*)" + re.escape(expected_val) + r"\b")
+                if pat_assert.search(fixed_code):
+                    fixed_code = pat_assert.sub(r"\g<1>" + actual_val, fixed_code)
+                elif expected_val in fixed_code and actual_val not in fixed_code:
+                    fixed_code = fixed_code.replace(expected_val, actual_val)
+
             # Playwright drift / cart checkout assertion healing
             if "cart" in rel_path.lower() or "cart" in title or "checkout" in title or "drift" in title:
-                if "'CONFIRMED'" in current_code:
-                    fixed_code = current_code.replace("'CONFIRMED'", "'ORDER_CONFIRMED'")
-                    patches[rel_path] = fixed_code
-                    continue
+                if "'CONFIRMED'" in fixed_code:
+                    fixed_code = fixed_code.replace("'CONFIRMED'", "'ORDER_CONFIRMED'")
+
+            if fixed_code != current_code:
+                patches[rel_path] = fixed_code
 
         if not patches:
             return cls.author_test_cases(ticket, file_contents, instruction)
@@ -1295,6 +1383,8 @@ class HermesLLMAdapter:
             f"Provide a valid JSON response with format:\n"
             f'{{"proposed_changes": {{"<relative_file_path>": "<full_new_content>"}}}}'
         )
+        if instruction:
+            user_prompt += f"\n\n[FAILURE CONTEXT & LOCATOR/DOM HINTS]\n{instruction}\n"
 
         raw_text = self.complete(
             role=role_key,
@@ -1315,6 +1405,9 @@ class HermesLLMAdapter:
                 proposed = json_data["files"]
             else:
                 proposed = {k: v for k, v in json_data.items() if isinstance(v, str)}
+
+        # Sanitize markdown fences from all proposed file contents
+        proposed = {k: extract_code_or_diff(v) for k, v in proposed.items()}
 
         # Filter out files outside ticket.allowed_files
         allowed = set(getattr(ticket, "allowed_files", []))

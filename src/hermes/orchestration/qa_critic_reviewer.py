@@ -53,7 +53,9 @@ class QACriticAgent:
             "ac-1", "ac-2", "ac-3", "ac-4", "resolve", "ensure", "verify", "preserve",
             "assertion", "assertions", "existing", "code", "the", "and", "for", "with",
             "all", "test", "tests", "failure", "failures", "error", "errors", "failed",
-            "zero", "erosion", "in", "function", "functionality", "method", "class"
+            "zero", "erosion", "in", "function", "functionality", "method", "class",
+            "suite", "suites", "restore", "pass", "rate", "100%", "clean", "cleanly",
+            "restored", "restoring", "resolution", "resolving", "issue", "issues",
         }
         expanded_kws: List[str] = []
         for kw in keywords:
