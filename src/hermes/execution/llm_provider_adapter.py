@@ -355,11 +355,11 @@ def extract_code_or_diff(text: str) -> str:
     # 1. Exact match for fenced block
     m1 = re.match(r"^```(?:[a-zA-Z0-9_\-]+)?\s*\n([\s\S]*?)\n```\s*$", clean)
     if m1:
-        return m1.group(1).rstrip() + "\n"
+        return m1.group(1).strip()
     # 2. Embedded match
     match = re.search(r"```(?:[a-zA-Z0-9_\-]+)?\s*\n?(.*?)\n?```", clean, re.DOTALL)
     if match:
-        return match.group(1).strip() + "\n"
+        return match.group(1).strip()
     return clean
 
 
