@@ -94,6 +94,18 @@ outputs:
   tricorder-action:
     description: 'Google Tricorder confidence gating action (PUBLISH_INLINE, PUBLISH_COLLAPSED, SUPPRESS_SILENT)'
     value: ${{ steps.run-hermes.outputs.tricorder_action }}
+  recommended-action:
+    description: 'Bayesian & cost-aware remediation action (FAIL_FAST_ESCALATE, PROPOSE_VERIFIED_PATCH, AUTO_RERUN_TRANSIENT, etc.)'
+    value: ${{ steps.run-hermes.outputs.recommended_action }}
+  calibrated-confidence:
+    description: 'Calibrated confidence score calculated by Bayesian Beta-Binomial posterior smoothing'
+    value: ${{ steps.run-hermes.outputs.calibrated_confidence }}
+  allow-rerun:
+    description: 'Whether CI should authorize automated retries based on zero-waste policy'
+    value: ${{ steps.run-hermes.outputs.allow_rerun }}
+  max-retries:
+    description: 'Maximum retry count authorized for this failure classification'
+    value: ${{ steps.run-hermes.outputs.max_retries }}
 
 runs:
   using: 'composite'

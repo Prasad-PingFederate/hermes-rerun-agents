@@ -29,6 +29,7 @@ from core.audit.delta_sast import PatchGuard
 from core.audit.otel_exporter import OTLPExporter
 from core.audit.sarif_exporter import SARIFExporter
 from core.audit.tricorder_feedback import GatingAction, TricorderGate
+from core.decision.decision_model import DecisionModel, RemediationAction
 from core.governance.assertion_erosion_guard import ZeroAssertionErosionGuard
 from core.quarantine.flake_quarantine_agent import FlakeQuarantineAgent
 from core.scale.shard_clusterer import ShardClusterer
@@ -193,6 +194,31 @@ def main() -> int:
         # Replace executable suggestion with sanitized diagnostic-only message
         rep_code = patch_verdict.sanitized_suggestion or rep_code
 
+    # 3c. Phase 4: Bayesian Confidence Calibration & Cost-Aware Decision Model
+    decision_engine = DecisionModel()
+    is_deterministic = bool(deterministic_override)
+    raw_model_conf = 1.0 if is_deterministic else float(staged_proposal.get("confidence", 0.92))
+    ci_decision = decision_engine.evaluate(
+        raw_confidence=raw_model_conf,
+        category=classification,
+        is_deterministic=is_deterministic,
+        has_forensic_evidence=bool(deterministic_override or artifact_path_raw),
+        patch_guard_verdict=patch_verdict,
+        failed_tests_count=len(failures) if (artifact_path_raw and 'failures' in locals()) else 1,
+        total_tests_run=100,
+        is_transient_error=(classification == "INFRA_FLAKE"),
+    )
+
+    print(f"🧠 [DECISION ENGINE] Action: {ci_decision.action.value} | Calibrated Confidence: {ci_decision.calibrated_confidence:.1%}")
+    for trace_item in ci_decision.decision_trace:
+        print(f"   {trace_item}")
+
+    set_action_output("recommended_action", ci_decision.action.value)
+    set_action_output("calibrated_confidence", str(round(ci_decision.calibrated_confidence, 3)))
+    set_action_output("allow_rerun", "true" if ci_decision.rerun_policy.allow_rerun else "false")
+    set_action_output("max_retries", str(ci_decision.rerun_policy.max_retries))
+    set_action_output("ci_minutes_saved", str(ci_decision.rerun_policy.estimated_ci_minutes_saved))
+
     # Read PR context if running inside GitHub Actions event
     gh_event_path = os.environ.get("GITHUB_EVENT_PATH")
     pr_number: Optional[int] = None
@@ -217,11 +243,9 @@ def main() -> int:
     # 4. Mode Routing: SHADOW_SUGGEST vs DRAFT_PR
     if mode == "shadow":
         print("🛡️ [SHADOW MODE] Running Google Tricorder Precision Gating & Shadow Suggestion...")
-        is_deterministic = bool(deterministic_override)
         gate = TricorderGate()
-        raw_conf = 1.0 if is_deterministic else float(staged_proposal.get("confidence", 0.92))
         decision = gate.evaluate(
-            raw_confidence=raw_conf,
+            raw_confidence=ci_decision.calibrated_confidence,
             category=classification,
             is_deterministic=is_deterministic,
             cluster_id=sprint_id,
