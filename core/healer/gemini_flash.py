@@ -62,7 +62,7 @@ class GeminiFlashHealer:
             return specialized_analysis
 
         # Attempt diagnosis via HermesLLMAdapter
-        from llm_provider_adapter import AgentRole, HermesLLMAdapter
+        from hermes.execution.llm_provider_adapter import AgentRole, HermesLLMAdapter
         adapter = HermesLLMAdapter()
         provider = adapter.resolve_provider(AgentRole.TEST_HEALER_AGENT)
 
@@ -239,7 +239,7 @@ Follow this exact JSON structure:
             category = "Missing Validation"
             root_cause = "InMemoryLedger does not validate negative/zero deposits or initial balance."
             remediation = "Raise ValueError when initial_balance < 0, deposit <= 0, or withdraw <= 0."
-            from llm_provider_adapter import LocalHeuristicEngine
+            from hermes.execution.llm_provider_adapter import LocalHeuristicEngine
             ticket = type("Ticket", (), {"title": "Fix InMemoryLedger validation", "allowed_files": ["src/InMemoryLedger.py"]})()
             patch = LocalHeuristicEngine.generate_patch(ticket, {})
             return {

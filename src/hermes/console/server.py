@@ -22,14 +22,14 @@ from pydantic import BaseModel
 
 from agents.ci_detective import CIDetectiveAgent
 from agents.test_healer_agent import TestHealerAgent
-from console_demo_manager import demo_manager
-from console_ui import CONSOLE_HTML
+from hermes.console.console_demo_manager import demo_manager
+from hermes.console.console_ui import CONSOLE_HTML
 from core.rerun_bridge.orchestrator import RerunOrchestrator
 from core.time_machine.engine import TimeMachineEngine
 from core.time_machine.patch_guard import analyze_proposed_changes
-from scrum_master_orchestrator import ScrumMasterOrchestrator
-from sprint_state_store import SprintStateStore
-from write_gate_controller import HumanWriteGateController
+from hermes.orchestration.scrum_master_orchestrator import ScrumMasterOrchestrator
+from hermes.orchestration.sprint_state_store import SprintStateStore
+from hermes.guards.write_gate_controller import HumanWriteGateController
 
 app = FastAPI(
     title="Hermes + Rerun Autonomous AI Platform",
@@ -1241,7 +1241,7 @@ def story_demo_workspace_endpoint(workspace_id: str, req: StoryRequest):
 @app.get("/api/providers/config", dependencies=[Depends(verify_hermes_token)])
 def get_providers_config_endpoint():
     """Retrieve all supported LLM providers and active routing configuration."""
-    from llm_provider_adapter import ORDERED_PROVIDERS, resolve_provider, AGENT_SKILL_REGISTRY
+    from hermes.execution.llm_provider_adapter import ORDERED_PROVIDERS, resolve_provider, AGENT_SKILL_REGISTRY
     active = resolve_provider()
     local_providers = {"ollama", "lmstudio", "llamacpp", "vllm", "tgi", "localai", "claude_code"}
     provider_list = []
@@ -1264,7 +1264,7 @@ def get_providers_config_endpoint():
 @app.post("/api/providers/config", dependencies=[Depends(verify_hermes_token)])
 def set_providers_config_endpoint(req: ProviderConfigRequest):
     """Set active provider in environment for Hermes."""
-    from llm_provider_adapter import ORDERED_PROVIDERS
+    from hermes.execution.llm_provider_adapter import ORDERED_PROVIDERS
     if req.active_provider not in ORDERED_PROVIDERS:
         raise HTTPException(status_code=400, detail=f"Unsupported provider: {req.active_provider}")
     os.environ["HERMES_LLM_PROVIDER"] = req.active_provider
@@ -1278,7 +1278,7 @@ def set_providers_config_endpoint(req: ProviderConfigRequest):
 @app.post("/api/providers/test", dependencies=[Depends(verify_hermes_token)])
 def test_provider_endpoint(req: ProviderTestRequest):
     """Health check connectivity to chosen provider."""
-    from llm_provider_adapter import ORDERED_PROVIDERS
+    from hermes.execution.llm_provider_adapter import ORDERED_PROVIDERS
     if req.provider_name not in ORDERED_PROVIDERS:
         raise HTTPException(status_code=400, detail=f"Unsupported provider: {req.provider_name}")
     if req.provider_name in ("ollama", "lmstudio", "llamacpp", "vllm", "localai"):

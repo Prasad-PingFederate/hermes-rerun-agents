@@ -17,7 +17,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from context_slicer import ContextSlicer, PytestFixtureIndexer
+from hermes.ingestion.context_slicer import ContextSlicer, PytestFixtureIndexer
 
 
 @dataclass
@@ -265,6 +265,50 @@ class CIFailureIngestor:
             "edge_cases": ecs,
             "context_slice": context_slice,
         }
+
+    def ingest_artifacts(
+        self,
+        patterns: Union[str, List[str]],
+        cluster_shards: bool = True,
+    ) -> Dict[str, Any]:
+        """Discover, ingest, and cluster test artifacts (JUnit XML, CTRF JSON, Playwright trace.zip)."""
+        from core.ingest.artifact_loader import ArtifactLoader
+        from core.scale.shard_clusterer import ShardClusterer
+
+        normalized_failures = ArtifactLoader.load_artifacts(patterns, workspace_root=self.workspace_root)
+
+        parsed_failures: List[ParsedFailure] = []
+        for nf in normalized_failures:
+            parsed_failures.append(ParsedFailure(
+                test_file=nf.test_file or "tests/test_unknown.py",
+                test_node_id=nf.test_id,
+                exception_type=nf.category or "AssertionError",
+                error_message=nf.error_message,
+                offending_files=[nf.test_file] if nf.test_file else [],
+                frames=[FailureFrame(file_path=nf.test_file or "", line_number=nf.line_number or 1, code_line=nf.stack_trace[:120], function_name="")],
+            ))
+
+        clusters = []
+        if cluster_shards and normalized_failures:
+            clusters = ShardClusterer.cluster_failures([f.to_dict() for f in normalized_failures])
+
+        res = self.ingest_failure_output("\n".join(f.error_message for f in parsed_failures) if not parsed_failures else "Artifact test failure")
+        res["source"] = "multi_format_artifacts"
+        res["normalized_failures"] = [f.to_dict() for f in normalized_failures]
+        res["clusters"] = [c.to_dict() if hasattr(c, "to_dict") else c for c in clusters]
+        return res
+
+    def resolve_failure_intent(
+        self,
+        workspace_path: Optional[Path | str] = None,
+        payload: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Inspect recent git commits and PR intent to differentiate Intentional Drift from Code Regressions."""
+        from agents.ci_detective import CIDetectiveAgent
+        ws = workspace_path or self.workspace_root
+        res = CIDetectiveAgent.extract_commit_and_pr_intent(workspace_path=ws, payload=payload)
+        res["intent_category"] = "INTENTIONAL_API_DRIFT" if res.get("has_intentional_contract_change") else "CODE_REGRESSION"
+        return res
 
     def ingest_user_story(
         self,

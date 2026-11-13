@@ -18,11 +18,11 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
-from context_slicer import ContextSlicer, PytestFixtureIndexer
+from hermes.ingestion.context_slicer import ContextSlicer, PytestFixtureIndexer
 from core.governance.assertion_erosion_guard import ZeroAssertionErosionGuard
 from core.orchestrator.scrum_hierarchy import ModelTier, SubTaskTicket
-from sandbox_executor import ExecutionRun, MultiRunResult, SandboxExecutor
-from sprint_state_store import AttemptRecord
+from hermes.execution.sandbox_executor import ExecutionRun, MultiRunResult, SandboxExecutor
+from hermes.orchestration.sprint_state_store import AttemptRecord
 
 
 @dataclass

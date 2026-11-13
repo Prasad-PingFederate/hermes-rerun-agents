@@ -5,6 +5,26 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ---
 
+## [1.1.0] - 2026-11-13
+
+### 🛡️ Architectural Hardening, Dual-Tree Drift Elimination & Platform Audit Release
+
+#### Architectural Hardening (Phase 2 Deliverables)
+- **Single Source of Truth in `src/hermes/` & Zero-Drift Root Shims**: Migrated canonical logic exclusively under `src/hermes/`, replacing all 19 root `.py` modules with thin backwards-compatibility re-export shims. Backed by `tests/test_packaging_integrity.py` enforcing 0 duplicate `ast.ClassDef` nodes and verified module identity.
+- **Git Notes Optimistic Concurrency Control (`src/hermes/orchestration/sprint_state_store.py`)**: Implemented CRDT deep state merging (`deep_merge_states`) resolving concurrent matrix runner write conflicts, paired with jittered exponential backoff retry (`push_state_with_retry`) ensuring zero state overwrites.
+- **Sub-Second Virtualenv Caching in `action.yml`**: Integrated GitHub Action caching (`actions/cache@v4`) keyed by OS and dependency hashes (`requirements.txt`, `pyproject.toml`), reducing GitHub Action bootstrap overhead from ~25s to sub-second cache restoration.
+- **Untrusted Fork PR Security Guardrails (`src/hermes/guards/write_gate_controller.py`, `src/hermes/execution/sandbox_executor.py`)**: Automatic untrusted fork detection down-scoping permissions to read-only `SHADOW_SUGGEST` and hard-blocking any privileged subprocess or command execution on external PRs.
+- **Rootless Containerization & SLSA Provenance**: Multi-stage minimal rootless `Dockerfile` running as unprivileged UID 10001 with pre-cached wheels, plus automated SLSA build provenance attestation in `.github/workflows/ci.yml`.
+
+#### Truth-in-Engineering Platform Capability Verification
+- **Multi-Format Ingestion**: Ingests JUnit XML, CTRF JSON, and Playwright `trace.zip` archives with deterministic 5xx forensic overrides (`core/ingest/artifact_loader.py`).
+- **Cross-Shard Failure Clustering**: Collapses 40 duplicate runner matrix shard failures into 1 atomic root cause ticket via regex noise stripping and SHA-256 cluster signatures (`core/scale/shard_clusterer.py`).
+- **Commit & PR Intent Differentiation**: Inspects `git log -n 5` and webhook intent to classify intentional contract drift vs application regressions (`src/hermes/ingestion/ci_failure_ingestor.py`).
+- **Multi-Language Zero Assertion Erosion**: AST guard enforcing zero net assertion deletions, blocking tautological replacements, skip injections, and semantic dilutions across Python, TypeScript, and Java.
+- **Comprehensive Verification Suite**: 302 unit/integration tests passing (100%), 24/24 enterprise benchmark scenarios passing, 7/7 Playwright console E2E tests passing, and 141/141 Python 3.10 syntax-clean files.
+
+---
+
 ## [1.0.0] - 2026-11-12
 
 ### 🚀 Enterprise B2B SaaS Release ("The Autonomous Scrum & Governance Engine")

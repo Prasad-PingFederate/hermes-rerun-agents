@@ -24,8 +24,8 @@ from typing import Any, Dict, List, Optional
 
 from core.runners.runner_detector import detect_runner
 from core.time_machine.engine import TimeMachineEngine
-from scrum_master_orchestrator import ScrumMasterOrchestrator
-from sprint_state_store import SprintStateStore
+from hermes.orchestration.scrum_master_orchestrator import ScrumMasterOrchestrator
+from hermes.orchestration.sprint_state_store import SprintStateStore
 
 REGISTRY_DB_PATH = Path(tempfile.gettempdir()) / "hermes_demo_sessions.db"
 

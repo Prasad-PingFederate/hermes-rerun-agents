@@ -184,7 +184,7 @@ class FlakeQuarantineAgent:
                 raise ValueError(f"Quarantine cannot introduce skip modifier: {prohibited}")
 
         diag = self.diagnose_flake(failure_output, test_file)
-        from hermes_workers import WorkerProposal
+        from hermes.orchestration.hermes_workers import WorkerProposal
 
         return WorkerProposal(
             ticket_id=ticket.ticket_id,

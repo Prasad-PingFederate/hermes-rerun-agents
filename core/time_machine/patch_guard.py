@@ -11,7 +11,7 @@ import difflib
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from ts_playwright_ast_guard import PlaywrightASTGuard
+from hermes.guards.ts_playwright_ast_guard import PlaywrightASTGuard
 
 
 def is_test_file(rel_path: str) -> bool:

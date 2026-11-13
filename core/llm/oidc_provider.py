@@ -150,3 +150,95 @@ class OIDCProviderRouter:
             metadata={"description": "Standard zero-API-key deterministic fallback"},
         )
 
+    @classmethod
+    def acquire_github_oidc_token(
+        cls,
+        audience: str = "sts.amazonaws.com",
+        env: Optional[Dict[str, str]] = None,
+    ) -> str:
+        """Acquire short-lived JWT from GitHub Actions ambient Workload Identity OIDC endpoint."""
+        import urllib.parse
+        environ = env if env is not None else os.environ
+        request_url = environ.get("ACTIONS_ID_TOKEN_REQUEST_URL")
+        request_token = environ.get("ACTIONS_ID_TOKEN_REQUEST_TOKEN")
+
+        if not request_url or not request_token:
+            raise PermissionError("ACTIONS_ID_TOKEN_REQUEST_URL or ACTIONS_ID_TOKEN_REQUEST_TOKEN missing; ensure 'permissions: id-token: write' is set in workflow.")
+
+        sep = "&" if "?" in request_url else "?"
+        full_url = f"{request_url}{sep}audience={urllib.parse.quote(audience)}"
+
+        req = urllib.request.Request(
+            full_url,
+            headers={"Authorization": f"Bearer {request_token}", "User-Agent": "hermes-rerun-agents"},
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            return data.get("value", "")
+
+    @classmethod
+    def exchange_aws_bedrock_token(
+        cls,
+        role_arn: str,
+        oidc_token: str,
+        role_session_name: str = "hermes-ci",
+        region: str = "us-east-1",
+    ) -> Dict[str, Any]:
+        """Exchange GitHub OIDC JWT for temporary AWS STS credentials for Bedrock access."""
+        import urllib.parse
+        endpoint = f"https://sts.{region}.amazonaws.com/"
+        params = {
+            "Action": "AssumeRoleWithWebIdentity",
+            "DurationSeconds": "3600",
+            "RoleArn": role_arn,
+            "RoleSessionName": role_session_name,
+            "WebIdentityToken": oidc_token,
+            "Version": "2011-06-15",
+        }
+        data = urllib.parse.urlencode(params).encode("utf-8")
+        req = urllib.request.Request(endpoint, data=data, headers={"Accept": "application/json", "User-Agent": "hermes-rerun-agents"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
+    @classmethod
+    def exchange_azure_federated_token(
+        cls,
+        tenant_id: str,
+        client_id: str,
+        oidc_token: str,
+    ) -> Dict[str, Any]:
+        """Exchange GitHub OIDC JWT for Azure AD OAuth2 access token for Azure OpenAI access."""
+        import urllib.parse
+        endpoint = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
+        params = {
+            "client_id": client_id,
+            "grant_type": "client_credentials",
+            "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+            "client_assertion": oidc_token,
+            "scope": "https://cognitiveservices.azure.com/.default",
+        }
+        data = urllib.parse.urlencode(params).encode("utf-8")
+        req = urllib.request.Request(endpoint, data=data, headers={"User-Agent": "hermes-rerun-agents"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
+    @classmethod
+    def exchange_gcp_vertex_token(
+        cls,
+        workload_pool_provider: str,
+        oidc_token: str,
+    ) -> Dict[str, Any]:
+        """Exchange GitHub OIDC JWT for Google Cloud STS access token for Vertex AI access."""
+        endpoint = "https://sts.googleapis.com/v1/token"
+        payload = json.dumps({
+            "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
+            "audience": f"//iam.googleapis.com/{workload_pool_provider}",
+            "scope": "https://www.googleapis.com/auth/cloud-platform",
+            "requested_token_type": "urn:ietf:params:oauth:token-type:access_token",
+            "subject_token": oidc_token,
+            "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
+        }).encode("utf-8")
+        req = urllib.request.Request(endpoint, data=payload, headers={"Content-Type": "application/json", "User-Agent": "hermes-rerun-agents"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+

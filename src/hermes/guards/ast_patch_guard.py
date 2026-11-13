@@ -18,8 +18,8 @@ from core.security.prompt_sandbox import PromptSandbox
 from core.time_machine.patch_guard import analyze_proposed_changes as analyze_python_ast
 from core.verification.accessibility_locator_guard import AccessibilityLocatorGuard
 from core.verification.semantic_assertion_guard import SemanticAssertionGuard
-from security_blast_radius import SecurityBlastRadiusAgent
-from ts_playwright_ast_guard import PlaywrightASTGuard, analyze_ts_playwright_changes
+from hermes.guards.security_blast_radius import SecurityBlastRadiusAgent
+from hermes.guards.ts_playwright_ast_guard import PlaywrightASTGuard, analyze_ts_playwright_changes
 
 
 class ASTPatchGuard:

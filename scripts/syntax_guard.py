@@ -64,11 +64,28 @@ def run_guard() -> int:
             print(f"❌ {rel}:{line} - {msg}")
             all_errors.append((rel, line, msg))
 
+    # 3. Root shim integrity check (Deliverable 1): ensure root .py files do not define duplicate classes
+    root_shims = [
+        "ast_patch_guard.py", "ci_failure_ingestor.py", "console_demo_manager.py",
+        "console_ui.py", "context_slicer.py", "hermes_cli.py", "hermes_workers.py",
+        "llm_provider_adapter.py", "qa_critic_reviewer.py", "sandbox_executor.py",
+        "scrum_master_orchestrator.py", "security_blast_radius.py", "server.py",
+        "sprint_dag_scheduler.py", "sprint_state_store.py", "ticket_router.py",
+        "ts_playwright_ast_guard.py", "workspace_patch_applier.py", "write_gate_controller.py",
+    ]
+    for shim in root_shims:
+        shim_path = REPO_ROOT / shim
+        if shim_path.is_file():
+            tree = ast.parse(shim_path.read_text(encoding="utf-8"), filename=str(shim_path))
+            classes = [node.name for node in tree.body if isinstance(node, ast.ClassDef)]
+            if classes:
+                all_errors.append((shim, 1, f"Root shim defines duplicate standalone classes: {classes}"))
+
     if all_errors:
         print(f"\n[SYNTAX GUARD FAILED] Found {len(all_errors)} Python 3.10 syntax error(s).")
         return 1
 
-    print(f"✅ [SYNTAX GUARD PASSED] All {len(py_files)} files are 100% Python 3.10 compatible.")
+    print(f"✅ [SYNTAX GUARD PASSED] All {len(py_files)} files are 100% Python 3.10 compatible with clean root shims.")
     return 0
 
 

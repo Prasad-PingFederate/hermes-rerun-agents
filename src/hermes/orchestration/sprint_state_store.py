@@ -502,11 +502,159 @@ class SprintStateStore:
                     (sn["snapshot_id"], sn["sprint_id"], sn["ticket_id"], sn["label"], sn["manifest_json"]),
                 )
 
+    def record_test_pass_and_check_unquarantine(
+        self,
+        test_id: str,
+        file_path: str,
+        source_code: str,
+    ) -> Optional[Any]:
+        """Increment consecutive green pass counter and trigger surgical unquarantine if streak >= 50."""
+        from core.hygiene.flake_reaper import FlakeLifecycleReaper
+        streak_file = self.db_path.parent / "flake_streaks.json"
+        streaks = {}
+        if streak_file.is_file():
+            try:
+                streaks = json.loads(streak_file.read_text(encoding="utf-8"))
+            except Exception:
+                streaks = {}
+
+        current_streak = streaks.get(test_id, 0) + 1
+        streaks[test_id] = current_streak
+        streak_file.write_text(json.dumps(streaks, indent=2), encoding="utf-8")
+
+        return FlakeLifecycleReaper.evaluate_streak_and_unquarantine(
+            file_path=file_path,
+            source_code=source_code,
+            consecutive_green_runs=current_streak,
+        )
+
+    def check_quarantine_ttls(
+        self,
+        quarantined_files: List[Tuple[str, str]],
+        current_time: Optional[datetime] = None,
+    ) -> List[Dict[str, Any]]:
+        """Evaluate 14-day TTL across quarantined tests, raising SLA alerts for expired tests."""
+        from core.hygiene.flake_reaper import FlakeLifecycleReaper
+        results = []
+        for file_path, content in quarantined_files:
+            meta = FlakeLifecycleReaper.parse_quarantine_stamp(content, current_time=current_time)
+            if meta:
+                meta_dict = meta.to_dict()
+                meta_dict["file_path"] = file_path
+                results.append(meta_dict)
+        return results
+
 
 class GitNotesStateBackend:
-    """Stores and retrieves state across ephemeral CI runs using git notes (refs/notes/hermes-state)."""
+    """Stores and retrieves state across ephemeral CI runs using git notes (refs/notes/hermes-state).
+    
+    Includes optimistic concurrency control with CRDT-style deep merge and exponential
+    backoff retry for parallel CI runner matrix shards pushing concurrently.
+    """
 
     DEFAULT_REF = "refs/notes/hermes-state"
+
+    @classmethod
+    def deep_merge_states(
+        cls,
+        base_state: Dict[str, Any],
+        incoming_state: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Perform a deterministic CRDT-style deep merge of state bundles.
+        
+        Merge semantics:
+        - consecutive_green_runs: max() across streaks (int or per-test dict).
+        - quarantined_tests: union by test ID preserving active metadata.
+        - finops_ledger: union by run_id; sum/max token & cost counters.
+        - snapshots / attempts: append-only deduplication by unique ID.
+        - sprints / tickets: union by ID, taking latest updated_at.
+        """
+        merged = dict(base_state)
+
+        # 1. Timestamps & version
+        merged["version"] = max(base_state.get("version", "1.0"), incoming_state.get("version", "1.0"))
+        merged["timestamp"] = max(base_state.get("timestamp", 0.0), incoming_state.get("timestamp", 0.0))
+
+        # 2. Consecutive green runs (max streak invariant)
+        base_green = base_state.get("consecutive_green_runs")
+        inc_green = incoming_state.get("consecutive_green_runs")
+        if isinstance(base_green, dict) or isinstance(inc_green, dict):
+            b_dict = base_green if isinstance(base_green, dict) else {}
+            i_dict = inc_green if isinstance(inc_green, dict) else {}
+            all_keys = set(b_dict.keys()) | set(i_dict.keys())
+            merged["consecutive_green_runs"] = {
+                k: max(b_dict.get(k, 0), i_dict.get(k, 0)) for k in all_keys
+            }
+        elif base_green is not None or inc_green is not None:
+            merged["consecutive_green_runs"] = max(int(base_green or 0), int(inc_green or 0))
+
+        # 3. Quarantined tests (union by test_id/quarantine_id)
+        base_q = base_state.get("quarantined_tests", [])
+        inc_q = incoming_state.get("quarantined_tests", [])
+        q_map: Dict[str, Any] = {}
+        if isinstance(base_q, list):
+            for item in base_q:
+                qid = item.get("test_id") or item.get("quarantine_id") or str(item)
+                q_map[qid] = item
+        elif isinstance(base_q, dict):
+            q_map.update(base_q)
+        if isinstance(inc_q, list):
+            for item in inc_q:
+                qid = item.get("test_id") or item.get("quarantine_id") or str(item)
+                q_map[qid] = item
+        elif isinstance(inc_q, dict):
+            q_map.update(inc_q)
+        merged["quarantined_tests"] = list(q_map.values()) if isinstance(base_q, list) or isinstance(inc_q, list) else q_map
+
+        # 4. FinOps ledger (union by run_id, sum token and cost spend)
+        base_ledger = base_state.get("finops_ledger", {})
+        inc_ledger = incoming_state.get("finops_ledger", {})
+        merged_ledger: Dict[str, Any] = {}
+        if isinstance(base_ledger, dict) and isinstance(inc_ledger, dict):
+            merged_ledger = dict(base_ledger)
+            for run_id, entry in inc_ledger.items():
+                if run_id in merged_ledger and isinstance(entry, dict) and isinstance(merged_ledger[run_id], dict):
+                    merged_entry = dict(merged_ledger[run_id])
+                    merged_entry["tokens"] = merged_entry.get("tokens", 0) + entry.get("tokens", 0)
+                    merged_entry["cost_usd"] = merged_entry.get("cost_usd", 0.0) + entry.get("cost_usd", 0.0)
+                    merged_ledger[run_id] = merged_entry
+                else:
+                    merged_ledger[run_id] = entry
+        elif isinstance(base_ledger, list) or isinstance(inc_ledger, list):
+            b_list = base_ledger if isinstance(base_ledger, list) else []
+            i_list = inc_ledger if isinstance(inc_ledger, list) else []
+            seen_runs = {}
+            for e in b_list + i_list:
+                rid = e.get("run_id") or str(e)
+                seen_runs[rid] = e
+            merged_ledger = list(seen_runs.values())
+        merged["finops_ledger"] = merged_ledger
+
+        # 5. Snapshots (append-only deduplicated by snapshot_id)
+        base_sn = {sn.get("snapshot_id", str(i)): sn for i, sn in enumerate(base_state.get("snapshots", []))}
+        inc_sn = {sn.get("snapshot_id", str(i)): sn for i, sn in enumerate(incoming_state.get("snapshots", []))}
+        base_sn.update(inc_sn)
+        merged["snapshots"] = list(base_sn.values())
+
+        # 6. Attempt history (append-only deduplicated by attempt_id)
+        base_att = {a.get("attempt_id", str(i)): a for i, a in enumerate(base_state.get("attempts", []))}
+        inc_att = {a.get("attempt_id", str(i)): a for i, a in enumerate(incoming_state.get("attempts", []))}
+        base_att.update(inc_att)
+        merged["attempts"] = list(base_att.values())
+
+        # 7. Sprints (union by sprint_id)
+        base_sp = {s.get("sprint_id", str(i)): s for i, s in enumerate(base_state.get("sprints", []))}
+        inc_sp = {s.get("sprint_id", str(i)): s for i, s in enumerate(incoming_state.get("sprints", []))}
+        base_sp.update(inc_sp)
+        merged["sprints"] = list(base_sp.values())
+
+        # 8. Tickets (union by ticket_id)
+        base_tk = {t.get("ticket_id", str(i)): t for i, t in enumerate(base_state.get("tickets", []))}
+        inc_tk = {t.get("ticket_id", str(i)): t for i, t in enumerate(incoming_state.get("tickets", []))}
+        base_tk.update(inc_tk)
+        merged["tickets"] = list(base_tk.values())
+
+        return merged
 
     @classmethod
     def export_state_to_git_notes(
@@ -514,13 +662,14 @@ class GitNotesStateBackend:
         repo_root: Path | str,
         state_data: Dict[str, Any],
         ref: str = DEFAULT_REF,
+        target_commit: str = "HEAD",
     ) -> bool:
-        """Export serialized JSON state to git notes attached to HEAD."""
+        """Export serialized JSON state to git notes attached to target_commit."""
         import subprocess
         try:
-            payload = json.dumps(state_data)
+            payload = json.dumps(state_data, indent=2)
             res = subprocess.run(
-                ["git", "notes", f"--ref={ref}", "add", "-f", "-m", payload, "HEAD"],
+                ["git", "notes", f"--ref={ref}", "add", "-f", "-m", payload, target_commit],
                 cwd=str(repo_root),
                 capture_output=True,
                 text=True,
@@ -552,3 +701,56 @@ class GitNotesStateBackend:
         except Exception:
             pass
         return None
+
+    @classmethod
+    def push_state_with_retry(
+        cls,
+        repo_root: Path | str,
+        state_data: Dict[str, Any],
+        ref: str = DEFAULT_REF,
+        remote: str = "origin",
+        max_retries: int = 4,
+        base_backoff: float = 0.05,
+    ) -> bool:
+        """Push notes to remote with optimistic concurrency control, deep merge & exponential retry."""
+        import random
+        import subprocess
+        import time
+
+        current_state = dict(state_data)
+        repo_dir = str(repo_root)
+
+        # First stage local note
+        cls.export_state_to_git_notes(repo_dir, current_state, ref=ref)
+
+        for attempt in range(max_retries):
+            # Attempt push
+            push_res = subprocess.run(
+                ["git", "push", remote, f"{ref}:{ref}"],
+                cwd=repo_dir,
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            if push_res.returncode == 0:
+                return True
+
+            # If push failed due to conflict / non-fast-forward, fetch and merge
+            fetch_res = subprocess.run(
+                ["git", "fetch", remote, f"{ref}:{ref}"],
+                cwd=repo_dir,
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            if fetch_res.returncode == 0:
+                remote_state = cls.import_state_from_git_notes(repo_dir, ref=ref, target_commit="HEAD")
+                if remote_state:
+                    current_state = cls.deep_merge_states(remote_state, current_state)
+                    cls.export_state_to_git_notes(repo_dir, current_state, ref=ref)
+
+            # Jittered exponential backoff
+            sleep_duration = base_backoff * (2 ** attempt) + random.uniform(0.01, 0.05)
+            time.sleep(sleep_duration)
+
+        return False

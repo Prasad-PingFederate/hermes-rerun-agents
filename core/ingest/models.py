@@ -80,6 +80,22 @@ class NormalizedFailure:
 
         return None
 
+    @property
+    def test_file(self) -> str:
+        return self.file_path
+
+    @property
+    def test_id(self) -> str:
+        return self.test_node_id
+
+    @property
+    def line_number(self) -> Optional[int]:
+        return self.line
+
+    @property
+    def category(self) -> Optional[str]:
+        return self.deterministic_verdict
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to JSON-serializable dictionary."""
         return {

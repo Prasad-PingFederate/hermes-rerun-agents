@@ -12,7 +12,7 @@ import sys
 import tempfile
 import time
 from dataclasses import dataclass
-from sandbox_executor import ExecutionRun, SandboxExecutor
+from hermes.execution.sandbox_executor import ExecutionRun, SandboxExecutor
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 

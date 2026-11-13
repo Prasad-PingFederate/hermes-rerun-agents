@@ -85,7 +85,7 @@ class TestPhase4Contracts(unittest.TestCase):
     """GAP-26: Architectural invariants and API contracts locking single pipeline."""
 
     def test_exactly_one_scrum_master_orchestrator_class(self):
-        """Contract 1: Exactly one class named ScrumMasterOrchestrator exists in the repo, in scrum_master_orchestrator.py."""
+        """Contract 1: Exactly one class named ScrumMasterOrchestrator exists in the repo, in src/hermes/orchestration/scrum_master_orchestrator.py."""
         class_locations = []
         for py_path in REPO_ROOT.rglob("*.py"):
             # Skip virtual environments or hidden dirs if any
@@ -102,8 +102,8 @@ class TestPhase4Contracts(unittest.TestCase):
 
         self.assertEqual(
             class_locations,
-            ["scrum_master_orchestrator.py"],
-            f"Expected exactly one ScrumMasterOrchestrator in scrum_master_orchestrator.py, found in: {class_locations}",
+            ["src/hermes/orchestration/scrum_master_orchestrator.py"],
+            f"Expected exactly one ScrumMasterOrchestrator in src/hermes/orchestration/scrum_master_orchestrator.py, found in: {class_locations}",
         )
 
         # Invariant on core/orchestrator/scrum_hierarchy.py

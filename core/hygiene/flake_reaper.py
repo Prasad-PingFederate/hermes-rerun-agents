@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-from ts_playwright_ast_guard import PlaywrightASTGuard
+from hermes.guards.ts_playwright_ast_guard import PlaywrightASTGuard
 
 
 @dataclass
@@ -138,11 +138,14 @@ class FlakeLifecycleReaper:
     def evaluate_streak_and_unquarantine(
         cls,
         file_path: str,
-        current_content: str,
-        consecutive_green_runs: int,
+        current_content: str = "",
+        consecutive_green_runs: int = 50,
         pass_threshold: int = 50,
+        source_code: Optional[str] = None,
     ) -> Optional[UnquarantineProposal]:
         """Surgically strip quarantine metadata and retry decorators when green streak reaches threshold."""
+        if not current_content and source_code is not None:
+            current_content = source_code
         meta = cls.parse_quarantine_stamp(current_content)
         if not meta or consecutive_green_runs < pass_threshold:
             return None

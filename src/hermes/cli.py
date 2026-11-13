@@ -22,11 +22,11 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from ast_patch_guard import ASTPatchGuard
-from ci_failure_ingestor import CIFailureIngestor
+from hermes.guards.ast_patch_guard import ASTPatchGuard
+from hermes.ingestion.ci_failure_ingestor import CIFailureIngestor
 from core.time_machine.engine import TimeMachineEngine
-from hermes_workers import AutomationTesterAgent, DeveloperAgent, WorkerProposal
-from llm_provider_adapter import (
+from hermes.orchestration.hermes_workers import AutomationTesterAgent, DeveloperAgent, WorkerProposal
+from hermes.execution.llm_provider_adapter import (
     AGENT_SKILL_REGISTRY,
     ORDERED_PROVIDERS,
     PROVIDERS_CONFIG,
@@ -36,11 +36,11 @@ from llm_provider_adapter import (
     resolve_model_for_call,
     resolve_provider,
 )
-from qa_critic_reviewer import QACriticAgent
-from sandbox_executor import SandboxExecutor
-from scrum_master_orchestrator import ScrumMasterOrchestrator
-from sprint_state_store import SprintStateStore
-from write_gate_controller import HumanWriteGateController
+from hermes.orchestration.qa_critic_reviewer import QACriticAgent
+from hermes.execution.sandbox_executor import SandboxExecutor
+from hermes.orchestration.scrum_master_orchestrator import ScrumMasterOrchestrator
+from hermes.orchestration.sprint_state_store import SprintStateStore
+from hermes.guards.write_gate_controller import HumanWriteGateController
 
 
 def print_agents_table() -> None:

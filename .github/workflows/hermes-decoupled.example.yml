@@ -31,6 +31,14 @@ jobs:
           run-id: ${{ github.event.workflow_run.id }}
           path: test-artifacts/
 
+      - name: Detect Untrusted Fork PR Context
+        shell: bash
+        run: |
+          if [ "${{ github.event.workflow_run.head_repository.full_name }}" != "${{ github.repository }}" ]; then
+            echo "HERMES_IS_FORK_PR=true" >> $GITHUB_ENV
+            echo "⚠️ Detected untrusted fork PR from ${{ github.event.workflow_run.head_repository.full_name }}. Enforcing shadow mode & static verification."
+          fi
+
       - name: Run Hermes Decoupled Healer (Artifact Mode)
         id: hermes
         uses: Prasad-PingFederate/hermes-rerun-agents@v1

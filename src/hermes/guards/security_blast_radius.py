@@ -43,6 +43,14 @@ class SecurityAuditReport:
     delta_findings: List[SecurityFinding] = field(default_factory=list)
     legacy_findings: List[SecurityFinding] = field(default_factory=list)
 
+    @property
+    def has_blocking_violations(self) -> bool:
+        return not self.passed or any(f.severity in ("CRITICAL", "HIGH") for f in self.delta_findings)
+
+    @property
+    def verdict(self) -> str:
+        return "PASSED" if not self.has_blocking_violations else "BLOCKED"
+
 
 class ASTSecurityScanner(ast.NodeVisitor):
     """AST visitor detecting dangerous Python syscalls, SQL injection, eval/exec, and timing attacks."""
@@ -339,6 +347,7 @@ class SecurityBlastRadiusAgent:
         existing_workspace_files: Optional[Dict[str, str]] = None,
         workspace_root: Optional[Union[Path, str]] = None,
         ticket: Optional[Any] = None,
+        original_files: Optional[Dict[str, str]] = None,
     ) -> SecurityAuditReport:
         """Run complete static and Delta-SAST security audit against proposed changes.
 
@@ -346,6 +355,9 @@ class SecurityBlastRadiusAgent:
         are recorded in legacy_findings as warnings, but do NOT block write-gate staging.
         Only newly introduced CRITICAL or HIGH vulnerabilities in delta_findings hard-block.
         """
+        if existing_workspace_files is None and original_files is not None:
+            existing_workspace_files = original_files
+
         if isinstance(ticket_or_existing, dict):
             existing_workspace_files = ticket_or_existing
         elif ticket_or_existing is not None and ticket is None:

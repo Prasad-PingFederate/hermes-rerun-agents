@@ -337,3 +337,51 @@ class LanguageASTGuard:
             dangerous_sinks=sinks,
             has_tautologies=has_tautologies,
         )
+
+    @classmethod
+    def check_assertion_erosion(
+        cls,
+        original_code: str,
+        patched_code: str,
+        language: str = "python",
+    ) -> Dict[str, Any]:
+        """Perform full multi-language assertion erosion verification on patched code vs original."""
+        orig_res = cls.analyze(original_code, language)
+        patch_res = cls.analyze(patched_code, language)
+
+        violations: List[str] = []
+
+        # 1. Zero Assertion Erosion: Net assertion count drop
+        if patch_res.assertion_count < orig_res.assertion_count:
+            violations.append(
+                f"EROSION_ASSERTION_DELETED: Assertion count dropped from {orig_res.assertion_count} to {patch_res.assertion_count}"
+            )
+
+        # 2. Tautological assertions
+        if patch_res.has_tautologies:
+            violations.append("EROSION_TAUTOLOGICAL_ASSERTION: Found tautological/hollow assertion (e.g. assert True, 1==1)")
+
+        # 3. Newly added skip decorators
+        new_skips = [s for s in patch_res.skips_detected if s not in orig_res.skips_detected]
+        if new_skips:
+            violations.append(f"EROSION_SKIP_INJECTED: Test skipping detected: {new_skips}")
+
+        # 4. Semantic value dilution / broad exception / timeout inflation
+        dilution_patterns = [
+            (re.compile(r"\bexpect\s*\(.*?\)\s*\.toBeTruthy\s*\(\s*\)"), "Weakened assertion matcher toBeTruthy()"),
+            (re.compile(r"\bexcept\s+(?:Exception|BaseException)\s*:\s*pass\b"), "Broad exception swallowed: except Exception: pass"),
+            (re.compile(r"\bcatch\s*\(\s*(?:Exception|Throwable|any|Error)\b[^)]*\)\s*\{\s*\}"), "Broad exception swallowed in empty catch block"),
+            (re.compile(r"\b(?:timeout|setTimeout)\s*[:=]\s*(?:999999|99999|600000)\b"), "Test timeout artificially inflated"),
+        ]
+        for pat, desc in dilution_patterns:
+            if pat.search(patched_code) and not pat.search(original_code):
+                violations.append(f"EROSION_SEMANTIC_DILUTION: {desc}")
+
+        return {
+            "passed": len(violations) == 0,
+            "violations": violations,
+            "original_assertion_count": orig_res.assertion_count,
+            "patched_assertion_count": patch_res.assertion_count,
+            "language": language,
+            "engine": patch_res.engine,
+        }

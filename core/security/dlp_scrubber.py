@@ -216,6 +216,10 @@ class DLPSessionVault:
             placeholder_counts=counts_by_category,
         )
 
+    def rehydrate(self, text: str, allow_one_way: bool = False) -> str:
+        """Alias for detokenize to support standard DLP rehydration terminology."""
+        return self.detokenize(text, allow_one_way=allow_one_way)
+
     def detokenize(self, text: str, allow_one_way: bool = False) -> str:
         """Rehydrate placeholders back into original secrets locally.
         

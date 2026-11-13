@@ -115,19 +115,31 @@ runs:
       with:
         python-version: '3.10'
 
+    - name: Cache Isolated Hermes Environment
+      id: cache-venv
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.temp }}/hermes_env
+        key: hermes-venv-${{ runner.os }}-${{ hashFiles(format('{0}/requirements.txt', github.action_path), format('{0}/pyproject.toml', github.action_path)) }}
+
     - name: Bootstrap Isolated Hermes Environment
       shell: bash
       run: |
-        python -m venv "${{ runner.temp }}/hermes_env"
+        if [ ! -d "${{ runner.temp }}/hermes_env" ]; then
+          python -m venv "${{ runner.temp }}/hermes_env"
+        fi
         if [ -f "${{ runner.temp }}/hermes_env/Scripts/python.exe" ]; then
           HERMES_PY="${{ runner.temp }}/hermes_env/Scripts/python.exe"
         else
           HERMES_PY="${{ runner.temp }}/hermes_env/bin/python"
         fi
         echo "HERMES_PYTHON=$HERMES_PY" >> $GITHUB_ENV
-        if [ -f "${{ github.action_path }}/requirements.txt" ]; then
-          "$HERMES_PY" -m pip install --upgrade pip -q || true
-          "$HERMES_PY" -m pip install -q -r "${{ github.action_path }}/requirements.txt" || true
+        if [ "${{ steps.cache-venv.outputs.cache-hit }}" != 'true' ]; then
+          if [ -f "${{ github.action_path }}/requirements.txt" ]; then
+            "$HERMES_PY" -m pip install --upgrade pip -q || true
+            "$HERMES_PY" -m pip install -q -r "${{ github.action_path }}/requirements.txt" || true
+          fi
+          "$HERMES_PY" -m pip install -q -e "${{ github.action_path }}" || true
         fi
 
     - name: Fetch Target Base Git Ref for Differential Verification

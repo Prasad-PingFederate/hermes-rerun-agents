@@ -36,6 +36,14 @@ class PolicyEvaluationResult:
     is_finops_open: bool = False
     finops_reason: str = ""
 
+    @property
+    def is_allowed(self) -> bool:
+        return self.allowed
+
+    @property
+    def blocked_files(self) -> List[str]:
+        return self.violated_zones
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "allowed": self.allowed,
@@ -161,7 +169,17 @@ class PolicyEngine:
             # List item
             if stripped.startswith("- "):
                 val = stripped[2:].strip().strip("\"'")
-                if current_key and isinstance(current_dict.get(current_key), list):
+                if not isinstance(current_dict, list):
+                    if len(section_stack) > 1:
+                        parent_dict = section_stack[-2][1]
+                        if current_key and parent_dict.get(current_key) is current_dict:
+                            new_list: List[Any] = []
+                            parent_dict[current_key] = new_list
+                            section_stack[-1] = (section_stack[-1][0], new_list)
+                            current_dict = new_list
+                if isinstance(current_dict, list):
+                    current_dict.append(val)
+                elif current_key and isinstance(current_dict.get(current_key), list):
                     current_dict[current_key].append(val)
                 continue
 
@@ -229,8 +247,14 @@ class PolicyEngine:
             # 2. Check no_heal_zones
             for zone in no_heal_zones:
                 clean_zone = zone.replace("\\", "/").lstrip("/")
-                if fnmatch.fnmatch(norm, clean_zone) or fnmatch.fnmatch(norm, f"*/{clean_zone}"):
-                    violated_zones.append(f"{fp} matches protected zone '{zone}'")
+                base_zone = clean_zone.rstrip("*").rstrip("/")
+                if (
+                    fnmatch.fnmatch(norm, clean_zone)
+                    or fnmatch.fnmatch(norm, f"*/{clean_zone}")
+                    or norm == base_zone
+                    or norm.startswith(f"{base_zone}/")
+                ):
+                    violated_zones.append(fp)
                     reasons.append(f"File '{fp}' is in protected no-heal zone '{zone}'. Forcing TRIAGE_ONLY.")
                     final_mode = "TRIAGE_ONLY"
                     resolved_level = 3

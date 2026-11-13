@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from ts_playwright_ast_guard import PlaywrightASTGuard
+from hermes.guards.ts_playwright_ast_guard import PlaywrightASTGuard
 
 
 @dataclass

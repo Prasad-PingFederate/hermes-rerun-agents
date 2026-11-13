@@ -16,12 +16,13 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
 from core.time_machine.engine import TimeMachineEngine
-from hermes_workers import WorkerProposal
-from sprint_state_store import SprintStateStore
-from workspace_patch_applier import AtomicPatchApplier, UnifiedDiffGenerator, WorkspaceFileReader
+if TYPE_CHECKING:
+    from hermes.orchestration.hermes_workers import WorkerProposal
+from hermes.orchestration.sprint_state_store import SprintStateStore
+from hermes.execution.workspace_patch_applier import AtomicPatchApplier, UnifiedDiffGenerator, WorkspaceFileReader
 
 
 class HumanWriteGateController:
@@ -32,12 +33,14 @@ class HumanWriteGateController:
         workspace_path: Optional[Path | str] = None,
         tm_engine: Optional[TimeMachineEngine] = None,
         store: Optional[SprintStateStore] = None,
+        is_fork_pr: bool = False,
     ):
         self.workspace_path = Path(workspace_path or Path.cwd()).resolve()
         self.tm = tm_engine or TimeMachineEngine(self.workspace_path)
         self.store = store or SprintStateStore()
         self.applier = AtomicPatchApplier(self.workspace_path)
         self.reader = WorkspaceFileReader(self.workspace_path)
+        self.is_fork_pr = is_fork_pr or os.environ.get("HERMES_IS_FORK_PR", "").lower() in ("true", "1")
 
         # Staged proposals in-memory cache
         self._staged: Dict[str, Dict[str, Any]] = {}
@@ -87,6 +90,7 @@ class HumanWriteGateController:
             for t in tickets:
                 p_changes = t.get("proposed_changes", {})
                 if p_changes:
+                    from hermes.orchestration.hermes_workers import WorkerProposal
                     reconstructed = {
                         "stage_id": f"stage_{t.get('ticket_id')}",
                         "sprint_id": sprint_id,
@@ -147,6 +151,16 @@ class HumanWriteGateController:
 
         proposal: WorkerProposal = item["proposal"]
         ticket_id = item["ticket_id"]
+
+        # Untrusted fork security: hard-block workspace mutation
+        if self.is_fork_pr:
+            return {
+                "success": False,
+                "status": "FORK_PR_WRITE_BLOCKED",
+                "mode": "SHADOW_SUGGEST",
+                "sprint_id": sprint_id,
+                "message": "Direct file writes disallowed on untrusted fork PRs. Suggestions staged in shadow mode only.",
+            }
 
         # Check approval
         if not auto_approve:

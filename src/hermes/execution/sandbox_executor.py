@@ -102,10 +102,12 @@ class SandboxExecutor:
         workspace_path: Optional[Path | str] = None,
         artifacts_dir: Optional[Path | str] = None,
         default_timeout_seconds: int = 30,
+        is_untrusted_fork: bool = False,
     ):
         self.workspace_path = Path(workspace_path or Path.cwd()).resolve()
         self.artifacts_dir = Path(artifacts_dir or (self.workspace_path / ".hermes_artifacts")).resolve()
         self.default_timeout_seconds = default_timeout_seconds
+        self.is_untrusted_fork = is_untrusted_fork or os.environ.get("HERMES_IS_FORK_PR", "").lower() in ("true", "1")
 
     def is_git_repo(self) -> bool:
         """Check if workspace is inside an initialized git repository with at least one commit."""
@@ -236,6 +238,24 @@ class SandboxExecutor:
         stdout_str = ""
         stderr_str = ""
         exit_code = -1
+
+        # Deliverable 4: Untrusted Fork PR Guardrail
+        # Disallow arbitrary test command subprocess execution on privileged runners
+        is_privileged_runner = (
+            os.environ.get("GITHUB_EVENT_NAME") == "workflow_run"
+            or os.environ.get("HERMES_PRIVILEGED_RUNNER", "").lower() in ("true", "1")
+        )
+        if self.is_untrusted_fork and is_privileged_runner:
+            return ExecutionRun(
+                run_index=run_index,
+                command=list(command),
+                exit_code=1,
+                passed=False,
+                stdout="",
+                stderr="FORK_PR_SUBPROCESS_BLOCKED: Untrusted code execution disallowed on privileged runner; static AST & Delta-SAST analysis enforced.",
+                duration_seconds=0.0,
+                artifacts={"blocked": "true", "reason": "untrusted_fork_privileged_context"},
+            )
 
         # Prepare env with artifact paths and credential scrubbing
         env = self.sanitize_subprocess_env()
@@ -487,3 +507,25 @@ class SandboxExecutor:
             return "PRODUCT_BUG"
 
         return "TEST_BUG"
+
+    def execute_command(self, command: Union[str, List[str]], repeat: int = 1, **kwargs: Any) -> MultiRunResult:
+        """Execute a command in sandbox (alias for run_tests)."""
+        cmd_list = command.split() if isinstance(command, str) else list(command)
+        return self.run_tests(command=cmd_list, repeat=repeat, **kwargs)
+
+    def run_counterfactual_verification(
+        self,
+        target_test_file: str,
+        test_command: Union[str, List[str]],
+        proposed_patch: Dict[str, str],
+        baseline_ref: str = "HEAD~1",
+    ) -> Any:
+        """Run differential counterfactual verification via CounterfactualVerifier."""
+        from core.verification.counterfactual_verifier import CounterfactualVerifier
+        verifier = CounterfactualVerifier(workspace_root=self.workspace_path)
+        return verifier.verify_candidate_heal(
+            target_test_file=target_test_file,
+            test_command=test_command,
+            candidate_patch=proposed_patch,
+            baseline_ref=baseline_ref,
+        )

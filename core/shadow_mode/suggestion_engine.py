@@ -130,14 +130,23 @@ class ShadowSuggestionFormatter:
         file_path: str,
         start_line: int,
         end_line: int,
-        replacement_code: str,
-        sprint_id: str,
+        replacement_code: str = "",
+        sprint_id: str = "shadow-sprint",
         classification: str = "PRODUCT_BUG",
         root_cause: str = "Defensive validation required",
         governance_badges: Optional[List[str]] = None,
         tricorder_footer: Optional[str] = None,
+        suggested_code: Optional[str] = None,
+        rationale: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Generate GitHub PR Review comment payload with markdown ```suggestion block."""
+        if not replacement_code and suggested_code is not None:
+            clean_replacement = suggested_code.rstrip("\r\n")
+        else:
+            clean_replacement = replacement_code.rstrip("\r\n")
+        if rationale:
+            root_cause = rationale
+
         badges = governance_badges or [
             "✅ `ZERO_ASSERTION_EROSION`",
             "🛡️ `DELTA_SAST_PASSED`",
@@ -146,7 +155,6 @@ class ShadowSuggestionFormatter:
         badge_line = " | ".join(badges)
         marker = cls.get_marker(sprint_id)
 
-        clean_replacement = replacement_code.rstrip("\r\n")
         footer_block = f"\n\n{tricorder_footer}" if tricorder_footer else ""
 
         body = (
