@@ -334,6 +334,7 @@ class TestCounterfactualVerifier(unittest.TestCase):
         self.ws = Path(self.temp_dir.name)
         (self.ws / "src").mkdir(parents=True)
         (self.ws / "tests").mkdir(parents=True)
+        (self.ws / "src" / "__init__.py").write_text("", encoding="utf-8")
 
         # Baseline workspace state (Feature updated: get_status returns 201)
         (self.ws / "src" / "api.py").write_text("def get_status():\n    return 201\n", encoding="utf-8")
@@ -359,7 +360,7 @@ def test_status():
             baseline_source_files=baseline_broken,
         )
 
-        self.assertTrue(res.verified)
+        self.assertTrue(res.verified, f"Differential verification failed: {res.summary} | reasons: {res.reasons} | fwd: {res.forward_output} | cf: {res.counterfactual_output}")
         self.assertFalse(res.is_vacuous)
         self.assertTrue(res.forward_passed)
         self.assertTrue(res.counterfactual_failed)
@@ -411,7 +412,7 @@ def test_status():
             baseline_source_files=test_only_baseline,
         )
 
-        self.assertTrue(res.verified)
+        self.assertTrue(res.verified, f"Differential verification failed: {res.summary} | reasons: {res.reasons} | fwd: {res.forward_output} | cf: {res.counterfactual_output}")
         self.assertFalse(res.is_vacuous)
         self.assertTrue(res.forward_passed)
         self.assertIn("COUNTERFACTUAL_SKIPPED_TEST_ONLY_PR", res.summary)

@@ -31,6 +31,7 @@ jobs:
         id: tests
         run: |
           pip install -r requirements.txt || true
+          pip install -e ".[dev]" || true
           pytest tests/ -q
 
       - name: Run Hermes Autonomous Healer (Triggered on Test Failure)

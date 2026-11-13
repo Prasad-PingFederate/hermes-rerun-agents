@@ -129,7 +129,7 @@ class TestComprehensiveFeatureAudit(unittest.TestCase):
                 "test_id": f"tests/test_api.py::test_endpoint_{i}",
                 "exception_type": "ConnectionRefusedError",
                 "error_message": f"Failed to connect to 127.0.0.1:{50000 + i} at 2026-11-13T10:15:{i:02d}Z (pid={1000 + i})",
-                "stack_trace": f"File '/home/runner/work/app/app/api.py', line 45, in call\n  connect(0x7fff{i:04x})",
+                "stack_trace": ("File '/home/runner/work/app/app/api.py', line 45, in call\n" f"  connect(0x7fff{i:04x})"),
                 "runner": "pytest",
                 "shard_id": shard_id,
             })

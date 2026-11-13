@@ -36,11 +36,18 @@ def check_py310_compatibility(file_path: Path) -> List[Tuple[int, str]]:
                     (node.lineno, "Backslash inside f-string expression (disallowed in Python 3.10)")
                 )
             if node.format_spec:
-                spec_segment = ast.get_source_segment(src, node.format_spec)
-                if spec_segment and "\\" in spec_segment:
-                    errors.append(
-                        (node.lineno, "Backslash inside f-string format_spec (disallowed in Python 3.10)")
-                    )
+                # Walk format_spec nodes to avoid CPython 3.10/3.11 ast.get_source_segment offset issues
+                for sub in ast.walk(node.format_spec):
+                    if isinstance(sub, ast.FormattedValue):
+                        sub_seg = ast.get_source_segment(src, sub.value)
+                        if sub_seg and "\\" in sub_seg:
+                            errors.append(
+                                (node.lineno, "Backslash inside nested f-string expression (disallowed in Python 3.10)")
+                            )
+                    elif isinstance(sub, ast.Constant) and isinstance(sub.value, str) and "\\" in sub.value:
+                        errors.append(
+                            (node.lineno, "Backslash inside f-string format_spec (disallowed in Python 3.10)")
+                        )
 
     return errors
 

@@ -37,7 +37,7 @@ ui = [
 ]
 tree-sitter = [
     "tree-sitter>=0.21.0",
-    "tree-sitter-languages>=1.10.0",
+    "tree-sitter-languages>=1.10.0; python_version < '3.13'",
 ]
 cloud-oidc = [
     "cryptography>=41.0.0",

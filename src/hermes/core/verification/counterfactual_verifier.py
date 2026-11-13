@@ -189,6 +189,15 @@ class CounterfactualVerifier:
                     summary="FORWARD_VERIFIED: Passed forward verification (counterfactual baseline skipped).",
                 )
 
+            # Purge any compiled bytecode from step 1 before counterfactual run
+            for pyc in temp_dir.rglob("*.pyc"):
+                try:
+                    pyc.unlink(missing_ok=True)
+                except Exception:
+                    pass
+            for pycache in temp_dir.rglob("__pycache__"):
+                shutil.rmtree(pycache, ignore_errors=True)
+
             cf_res = self._run_test_in_sandbox(temp_dir, runner_cmd)
             cf_failed = (cf_res.returncode != 0)
 
@@ -235,6 +244,7 @@ class CounterfactualVerifier:
         """Execute command in sandbox directory."""
         env = os.environ.copy()
         env["PYTHONPATH"] = str(sandbox_dir)
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
         try:
             return subprocess.run(
                 cmd,

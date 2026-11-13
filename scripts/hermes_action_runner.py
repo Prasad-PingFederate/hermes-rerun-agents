@@ -265,7 +265,7 @@ def main() -> int:
                 try:
                     with open(gh_summary, "a", encoding="utf-8") as f:
                         f.write(
-                            f"\n### 🤫 Hermes Tricorder Silent Suppression\n"
+                            "\n### 🤫 Hermes Tricorder Silent Suppression\n"
                             f"- **Category**: `{classification}`\n"
                             f"- **Confidence**: {decision.effective_confidence:.0%}\n"
                             f"- **Reason**: {decision.reason}\n"

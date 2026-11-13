@@ -136,7 +136,7 @@ Contact: security@company.com
     print("  Context: 16 parallel Playwright shards fail simultaneously with differing ports and memory addresses.")
     simulated_shards = [
         {
-            "trace": f'File "tests/e2e/login.spec.ts", line 42\nAssertionError: Expected 200 at 0x7f9a{i:04x} port :{50000 + i}',
+            "trace": ('File "tests/e2e/login.spec.ts", line 42\n' f'AssertionError: Expected 200 at 0x7f9a{i:04x} port :{50000 + i}'),
             "test_file": "tests/e2e/login.spec.ts",
             "shard_id": f"shard_{i}/16",
         }

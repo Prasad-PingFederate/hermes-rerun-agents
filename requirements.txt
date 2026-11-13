@@ -12,4 +12,4 @@ playwright>=1.40.0
 
 # Tree-sitter Multi-Language AST Parsing
 tree-sitter>=0.22.0
-tree-sitter-languages>=1.10.0
+tree-sitter-languages>=1.10.0; python_version < "3.13"
