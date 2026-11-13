@@ -24,7 +24,7 @@ from typing import Any, Dict, List, Optional
 
 from hermes.guards.ast_patch_guard import ASTPatchGuard
 from hermes.ingestion.ci_failure_ingestor import CIFailureIngestor
-from core.time_machine.engine import TimeMachineEngine
+from hermes.core.time_machine.engine import TimeMachineEngine
 from hermes.orchestration.hermes_workers import AutomationTesterAgent, DeveloperAgent, WorkerProposal
 from hermes.execution.llm_provider_adapter import (
     AGENT_SKILL_REGISTRY,

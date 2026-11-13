@@ -19,8 +19,8 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from hermes.ingestion.context_slicer import ContextSlicer, PytestFixtureIndexer
-from core.governance.assertion_erosion_guard import ZeroAssertionErosionGuard
-from core.orchestrator.scrum_hierarchy import ModelTier, SubTaskTicket
+from hermes.core.governance.assertion_erosion_guard import ZeroAssertionErosionGuard
+from hermes.core.orchestrator.scrum_hierarchy import ModelTier, SubTaskTicket
 from hermes.execution.sandbox_executor import ExecutionRun, MultiRunResult, SandboxExecutor
 from hermes.orchestration.sprint_state_store import AttemptRecord
 
@@ -220,4 +220,4 @@ class RequirementsAgent:
 
 
 # Export FlakeQuarantineAgent for worker hierarchy
-from core.quarantine.flake_quarantine_agent import FlakeQuarantineAgent
+from hermes.core.quarantine.flake_quarantine_agent import FlakeQuarantineAgent

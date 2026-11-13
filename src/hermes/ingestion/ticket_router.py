@@ -10,12 +10,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from core.orchestrator.scrum_hierarchy import (
+from hermes.core.orchestrator.scrum_hierarchy import (
     ModelTier,
     SubTaskTicket,
     route_tier_by_complexity,
 )
-from core.time_machine.engine import TimeMachineEngine
+from hermes.core.time_machine.engine import TimeMachineEngine
 
 
 class TicketRouter:

@@ -5,7 +5,7 @@ Phase: Option 5 (Cloud OIDC & Zero-Static-Key Router)
 
 from __future__ import annotations
 
-from core.llm.oidc_provider import (
+from hermes.core.llm.oidc_provider import (
     OIDCProviderRouter,
     FederatedCredentials,
     StaticApiKeyForbiddenError,

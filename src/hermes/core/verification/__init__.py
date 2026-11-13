@@ -8,15 +8,15 @@ Provides:
 
 from __future__ import annotations
 
-from core.verification.accessibility_locator_guard import (
+from hermes.core.verification.accessibility_locator_guard import (
     AccessibilityLocatorGuard,
     LocatorAuditResult,
 )
-from core.verification.counterfactual_verifier import (
+from hermes.core.verification.counterfactual_verifier import (
     CounterfactualResult,
     CounterfactualVerifier,
 )
-from core.verification.semantic_assertion_guard import (
+from hermes.core.verification.semantic_assertion_guard import (
     DowngradeFinding,
     SemanticAssertionGuard,
     SemanticGuardResult,

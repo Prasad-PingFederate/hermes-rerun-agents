@@ -17,11 +17,11 @@ import glob
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Union
 
-from core.ingest.ctrf_parser import CTRFParser
-from core.ingest.junit_parser import JUnitParser
-from core.ingest.models import FailedNetworkRequest, NormalizedFailure
-from core.ingest.trace_parser import PlaywrightTraceForensics
-from core.security.dlp_scrubber import DLPSessionVault
+from hermes.core.ingest.ctrf_parser import CTRFParser
+from hermes.core.ingest.junit_parser import JUnitParser
+from hermes.core.ingest.models import FailedNetworkRequest, NormalizedFailure
+from hermes.core.ingest.trace_parser import PlaywrightTraceForensics
+from hermes.core.security.dlp_scrubber import DLPSessionVault
 
 
 class ArtifactLoader:

@@ -19,8 +19,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from core.governance.assertion_erosion_guard import ZeroAssertionErosionGuard
-from core.orchestrator.scrum_hierarchy import ModelTier, SubTaskTicket
+from hermes.core.governance.assertion_erosion_guard import ZeroAssertionErosionGuard
+from hermes.core.orchestrator.scrum_hierarchy import ModelTier, SubTaskTicket
 
 
 @dataclass

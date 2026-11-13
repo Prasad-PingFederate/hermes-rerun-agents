@@ -521,7 +521,7 @@ class SandboxExecutor:
         baseline_ref: str = "HEAD~1",
     ) -> Any:
         """Run differential counterfactual verification via CounterfactualVerifier."""
-        from core.verification.counterfactual_verifier import CounterfactualVerifier
+        from hermes.core.verification.counterfactual_verifier import CounterfactualVerifier
         verifier = CounterfactualVerifier(workspace_root=self.workspace_path)
         return verifier.verify_candidate_heal(
             target_test_file=target_test_file,

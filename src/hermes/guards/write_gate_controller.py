@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
-from core.time_machine.engine import TimeMachineEngine
+from hermes.core.time_machine.engine import TimeMachineEngine
 if TYPE_CHECKING:
     from hermes.orchestration.hermes_workers import WorkerProposal
 from hermes.orchestration.sprint_state_store import SprintStateStore

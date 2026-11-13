@@ -2,7 +2,7 @@
 Hermes Shadow Mode & Zero-Write Suggestion Engine Package.
 """
 
-from core.shadow_mode.suggestion_engine import (
+from hermes.core.shadow_mode.suggestion_engine import (
     DiffHunk,
     DiffHunkParser,
     ExecutionMode,

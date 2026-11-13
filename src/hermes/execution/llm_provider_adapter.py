@@ -21,8 +21,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from core.healer.ast_surgical_patcher import ASTSurgicalPatcher
-from core.orchestrator.scrum_hierarchy import ModelTier
+from hermes.core.healer.ast_surgical_patcher import ASTSurgicalPatcher
+from hermes.core.orchestrator.scrum_hierarchy import ModelTier
 
 
 class AgentRole(str, Enum):
@@ -1362,7 +1362,7 @@ class HermesLLMAdapter:
             elif role_key == AgentRole.TEST_CASE_WRITER_AGENT.value:
                 return LocalHeuristicEngine.author_test_cases(ticket, file_contents, instruction)
             elif role_key == AgentRole.FLAKE_QUARANTINE_AGENT.value:
-                from core.quarantine.flake_quarantine_agent import FlakeQuarantineAgent
+                from hermes.core.quarantine.flake_quarantine_agent import FlakeQuarantineAgent
                 q_agent = FlakeQuarantineAgent(self.workspace_path)
                 res: Dict[str, str] = {}
                 for f in getattr(ticket, "allowed_files", []):

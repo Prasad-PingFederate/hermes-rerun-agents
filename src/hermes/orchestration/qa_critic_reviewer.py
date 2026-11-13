@@ -252,7 +252,7 @@ class QACriticAgent:
         cf_payload: Optional[Dict[str, Any]] = None
         base_src = baseline_source_files or (getattr(ticket, "metadata", {}) or {}).get("baseline_source_files")
         if base_src and allow_test_modification:
-            from core.verification.counterfactual_verifier import CounterfactualVerifier
+            from hermes.core.verification.counterfactual_verifier import CounterfactualVerifier
             test_files = [f for f in proposed_changes if "test" in f.lower() or f.endswith((".py", ".ts", ".js"))]
             for tf in test_files:
                 if tf in proposed_changes:

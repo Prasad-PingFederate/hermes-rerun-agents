@@ -26,20 +26,20 @@ import sys
 from hermes.guards.ast_patch_guard import ASTPatchGuard
 from hermes.guards.language_ast_guard import LanguageASTGuard
 from hermes.ingestion.ci_failure_ingestor import CIFailureIngestor
-from core.audit.otel_exporter import OTLPExporter
-from core.audit.sarif_exporter import SARIFExporter
-from core.context.active_context_pruner import BillionContextManager
-from core.governance.policy_engine import PolicyEngine
-from core.security.dlp_scrubber import DLPSessionVault
-from core.verification.counterfactual_verifier import CounterfactualVerifier
-from core.orchestrator.scrum_hierarchy import (
+from hermes.core.audit.otel_exporter import OTLPExporter
+from hermes.core.audit.sarif_exporter import SARIFExporter
+from hermes.core.context.active_context_pruner import BillionContextManager
+from hermes.core.governance.policy_engine import PolicyEngine
+from hermes.core.security.dlp_scrubber import DLPSessionVault
+from hermes.core.verification.counterfactual_verifier import CounterfactualVerifier
+from hermes.core.orchestrator.scrum_hierarchy import (
     ESCALATION_CHAIN,
     ModelTier,
     SubTaskTicket,
     TIER_COST_WEIGHTS,
     route_tier_by_complexity,
 )
-from core.time_machine.engine import TimeMachineEngine
+from hermes.core.time_machine.engine import TimeMachineEngine
 from hermes.orchestration.hermes_workers import (
     AutomationTesterAgent,
     DeveloperAgent,
@@ -433,12 +433,12 @@ class ScrumMasterOrchestrator:
             ingest_res = ingestor.ingest_artifacts(artifact_paths)
             if not raw_output:
                 raw_output = ingest_res.get("summary", "")
-            from core.scale.shard_clusterer import ShardClusterer
+            from hermes.core.scale.shard_clusterer import ShardClusterer
             parsed_failures = ingest_res.get("parsed_failures", [])
             if parsed_failures:
                 _ = ShardClusterer.cluster_failures(parsed_failures)
 
-        from agents.ci_detective import CIDetectiveAgent
+        from hermes.agents.ci_detective import CIDetectiveAgent
         intent_context = CIDetectiveAgent.extract_commit_and_pr_intent(workspace_path=self.workspace_path)
 
         if mode == "story":
@@ -797,7 +797,7 @@ class ScrumMasterOrchestrator:
             return True
 
         if is_shadow:
-            from core.shadow_mode.suggestion_engine import ShadowSuggestionFormatter
+            from hermes.core.shadow_mode.suggestion_engine import ShadowSuggestionFormatter
             diff_text = self.write_gate.get_diff_summary(sprint_id)
             shadow_payload = ShadowSuggestionFormatter.format_out_of_diff_fallback(
                 diff_summary=diff_text,

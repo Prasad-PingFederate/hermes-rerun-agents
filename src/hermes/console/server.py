@@ -20,13 +20,13 @@ from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, R
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
-from agents.ci_detective import CIDetectiveAgent
-from agents.test_healer_agent import TestHealerAgent
+from hermes.agents.ci_detective import CIDetectiveAgent
+from hermes.agents.test_healer_agent import TestHealerAgent
 from hermes.console.console_demo_manager import demo_manager
 from hermes.console.console_ui import CONSOLE_HTML
-from core.rerun_bridge.orchestrator import RerunOrchestrator
-from core.time_machine.engine import TimeMachineEngine
-from core.time_machine.patch_guard import analyze_proposed_changes
+from hermes.core.rerun_bridge.orchestrator import RerunOrchestrator
+from hermes.core.time_machine.engine import TimeMachineEngine
+from hermes.core.time_machine.patch_guard import analyze_proposed_changes
 from hermes.orchestration.scrum_master_orchestrator import ScrumMasterOrchestrator
 from hermes.orchestration.sprint_state_store import SprintStateStore
 from hermes.guards.write_gate_controller import HumanWriteGateController
@@ -1083,8 +1083,8 @@ def create_demo_pr_endpoint(workspace_id: str, req: CreatePRRequest = CreatePRRe
     if not ws:
         raise HTTPException(status_code=404, detail="Workspace not found")
 
-    from core.quarantine.flake_quarantine_agent import FlakeQuarantineAgent
-    from core.shadow_mode.suggestion_engine import (
+    from hermes.core.quarantine.flake_quarantine_agent import FlakeQuarantineAgent
+    from hermes.core.shadow_mode.suggestion_engine import (
         DiffHunkParser,
         ShadowSuggestionClient,
         ShadowSuggestionFormatter,
@@ -1216,7 +1216,7 @@ def create_demo_pr_endpoint(workspace_id: str, req: CreatePRRequest = CreatePRRe
 @app.get("/api/telemetry/roi", dependencies=[Depends(verify_hermes_token)])
 def get_roi_telemetry_endpoint():
     """Real-time Executive ROI & MTTR Telemetry calculation."""
-    from core.telemetry.roi_calculator import roi_telemetry_engine
+    from hermes.core.telemetry.roi_calculator import roi_telemetry_engine
     workspaces = demo_manager.list_workspaces()
     metrics = roi_telemetry_engine.calculate_from_workspaces(workspaces)
     return metrics.to_dict()
@@ -1225,7 +1225,7 @@ def get_roi_telemetry_endpoint():
 @app.post("/api/telemetry/roi/config", dependencies=[Depends(verify_hermes_token)])
 def set_roi_config_endpoint(req: ROIConfigRequest):
     """Configure ROI hourly rate and manual MTTR baseline."""
-    from core.telemetry.roi_calculator import roi_telemetry_engine
+    from hermes.core.telemetry.roi_calculator import roi_telemetry_engine
     updates: Dict[str, Any] = {}
     if req.hourly_rate_usd is not None:
         updates["hourly_rate_usd"] = req.hourly_rate_usd

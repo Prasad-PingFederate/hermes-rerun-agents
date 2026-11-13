@@ -13,7 +13,7 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from core.context.active_context_pruner import (
+from hermes.core.context.active_context_pruner import (
     BillionContextManager,
     prune_dom,
     prune_logs,

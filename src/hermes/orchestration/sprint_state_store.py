@@ -515,7 +515,7 @@ class SprintStateStore:
         source_code: str,
     ) -> Optional[Any]:
         """Increment consecutive green pass counter and trigger surgical unquarantine if streak >= 50."""
-        from core.hygiene.flake_reaper import FlakeLifecycleReaper
+        from hermes.core.hygiene.flake_reaper import FlakeLifecycleReaper
         streak_file = self.db_path.parent / "flake_streaks.json"
         streaks = {}
         if streak_file.is_file():
@@ -540,7 +540,7 @@ class SprintStateStore:
         current_time: Optional[datetime] = None,
     ) -> List[Dict[str, Any]]:
         """Evaluate 14-day TTL across quarantined tests, raising SLA alerts for expired tests."""
-        from core.hygiene.flake_reaper import FlakeLifecycleReaper
+        from hermes.core.hygiene.flake_reaper import FlakeLifecycleReaper
         results = []
         for file_path, content in quarantined_files:
             meta = FlakeLifecycleReaper.parse_quarantine_stamp(content, current_time=current_time)

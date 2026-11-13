@@ -12,5 +12,6 @@ if _src_dir not in sys.path:
     sys.path.insert(0, _src_dir)
 
 import hermes.core.shadow_mode as _target_module
-sys.modules[__name__] = _target_module
+def __getattr__(name: str):
+    return getattr(_target_module, name)
 from hermes.core.shadow_mode import *

@@ -27,9 +27,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from core.ingest.models import FailedNetworkRequest, NormalizedFailure
-from core.security.dlp_scrubber import DLPSessionVault
-from core.security.prompt_sandbox import PromptSandbox
+from hermes.core.ingest.models import FailedNetworkRequest, NormalizedFailure
+from hermes.core.security.dlp_scrubber import DLPSessionVault
+from hermes.core.security.prompt_sandbox import PromptSandbox
 
 
 class PlaywrightTraceForensics:

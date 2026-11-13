@@ -2,7 +2,7 @@
 Hermes Flake Quarantine Package.
 """
 
-from core.quarantine.flake_quarantine_agent import (
+from hermes.core.quarantine.flake_quarantine_agent import (
     FlakeDiagnosticEvidence,
     FlakeQuarantineAgent,
 )

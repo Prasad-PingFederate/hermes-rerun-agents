@@ -25,8 +25,8 @@ import urllib.request
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from core.security.dlp_scrubber import DLPSessionVault
-from core.security.prompt_sandbox import PromptSandbox
+from hermes.core.security.dlp_scrubber import DLPSessionVault
+from hermes.core.security.prompt_sandbox import PromptSandbox
 
 
 @dataclass

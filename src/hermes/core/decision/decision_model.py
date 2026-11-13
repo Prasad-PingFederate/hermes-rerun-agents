@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional, Union
 
-from core.audit.tricorder_feedback import TricorderLedger
+from hermes.core.audit.tricorder_feedback import TricorderLedger
 
 
 # =====================================================================

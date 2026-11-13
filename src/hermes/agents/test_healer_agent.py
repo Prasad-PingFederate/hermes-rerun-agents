@@ -11,11 +11,11 @@ import subprocess
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from core.healer.gemini_flash import GeminiFlashHealer
-from scrum_master_orchestrator import ScrumMasterOrchestrator
-from core.rerun_bridge.orchestrator import RerunOrchestrator
-from core.sandbox.runner import SandboxRunner
-from core.time_machine.engine import TimeMachineEngine
+from hermes.core.healer.gemini_flash import GeminiFlashHealer
+from hermes.orchestration.scrum_master_orchestrator import ScrumMasterOrchestrator
+from hermes.core.rerun_bridge.orchestrator import RerunOrchestrator
+from hermes.core.sandbox.runner import SandboxRunner
+from hermes.core.time_machine.engine import TimeMachineEngine
 
 
 class TestHealerAgent:

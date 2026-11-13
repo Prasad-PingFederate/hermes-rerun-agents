@@ -5,7 +5,7 @@ Phase: Option 6 (Monorepo Scale & Ecosystem Depth)
 
 from __future__ import annotations
 
-from core.hygiene.flake_reaper import (
+from hermes.core.hygiene.flake_reaper import (
     FlakeLifecycleReaper,
     QuarantineMetadata,
     QuarantineTelemetry,

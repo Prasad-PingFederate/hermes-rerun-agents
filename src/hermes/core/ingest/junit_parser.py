@@ -16,9 +16,9 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
-from core.ingest.models import NormalizedFailure
-from core.security.dlp_scrubber import DLPSessionVault
-from core.security.prompt_sandbox import PromptSandbox
+from hermes.core.ingest.models import NormalizedFailure
+from hermes.core.security.dlp_scrubber import DLPSessionVault
+from hermes.core.security.prompt_sandbox import PromptSandbox
 
 
 class JUnitParser:

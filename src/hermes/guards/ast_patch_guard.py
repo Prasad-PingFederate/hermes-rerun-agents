@@ -13,11 +13,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from core.security.dlp_scrubber import DLPSessionVault
-from core.security.prompt_sandbox import PromptSandbox
-from core.time_machine.patch_guard import analyze_proposed_changes as analyze_python_ast
-from core.verification.accessibility_locator_guard import AccessibilityLocatorGuard
-from core.verification.semantic_assertion_guard import SemanticAssertionGuard
+from hermes.core.security.dlp_scrubber import DLPSessionVault
+from hermes.core.security.prompt_sandbox import PromptSandbox
+from hermes.core.time_machine.patch_guard import analyze_proposed_changes as analyze_python_ast
+from hermes.core.verification.accessibility_locator_guard import AccessibilityLocatorGuard
+from hermes.core.verification.semantic_assertion_guard import SemanticAssertionGuard
 from hermes.guards.language_ast_guard import LanguageASTGuard
 from hermes.guards.security_blast_radius import SecurityBlastRadiusAgent
 from hermes.guards.ts_playwright_ast_guard import PlaywrightASTGuard, analyze_ts_playwright_changes
@@ -142,7 +142,7 @@ class ASTPatchGuard:
                 )
 
         # 8. Delta-SAST Diff Security Scanner (Zero Assertion Erosion & SAST Guard)
-        from core.audit.delta_sast import PatchGuard
+        from hermes.core.audit.delta_sast import PatchGuard
         for rel_f, content in proposed_changes.items():
             orig_file = workspace / rel_f
             orig_content = orig_file.read_text(encoding="utf-8", errors="replace") if orig_file.exists() else ""

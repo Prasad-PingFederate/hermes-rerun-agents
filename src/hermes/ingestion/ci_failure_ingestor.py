@@ -402,8 +402,8 @@ class CIFailureIngestor:
         cluster_shards: bool = True,
     ) -> Dict[str, Any]:
         """Discover, ingest, and cluster test artifacts (JUnit XML, CTRF JSON, Playwright trace.zip)."""
-        from core.ingest.artifact_loader import ArtifactLoader
-        from core.scale.shard_clusterer import ShardClusterer
+        from hermes.core.ingest.artifact_loader import ArtifactLoader
+        from hermes.core.scale.shard_clusterer import ShardClusterer
 
         normalized_failures = ArtifactLoader.load_artifacts(patterns, workspace_root=self.workspace_root)
 
@@ -465,7 +465,7 @@ class CIFailureIngestor:
         payload: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Inspect recent git commits and PR intent to differentiate Intentional Drift from Code Regressions."""
-        from agents.ci_detective import CIDetectiveAgent
+        from hermes.agents.ci_detective import CIDetectiveAgent
         ws = workspace_path or self.workspace_root
         res = CIDetectiveAgent.extract_commit_and_pr_intent(workspace_path=ws, payload=payload)
         res["intent_category"] = "INTENTIONAL_API_DRIFT" if res.get("has_intentional_contract_change") else "CODE_REGRESSION"

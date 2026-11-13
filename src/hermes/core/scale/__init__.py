@@ -5,7 +5,7 @@ Phase: Option 6 (Monorepo Scale & Ecosystem Depth)
 
 from __future__ import annotations
 
-from core.scale.shard_clusterer import (
+from hermes.core.scale.shard_clusterer import (
     FailureCluster,
     NormalizedFailureTrace,
     ShardClusterer,

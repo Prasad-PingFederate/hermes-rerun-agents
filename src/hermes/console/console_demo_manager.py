@@ -22,8 +22,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from core.runners.runner_detector import detect_runner
-from core.time_machine.engine import TimeMachineEngine
+from hermes.core.runners.runner_detector import detect_runner
+from hermes.core.time_machine.engine import TimeMachineEngine
 from hermes.orchestration.scrum_master_orchestrator import ScrumMasterOrchestrator
 from hermes.orchestration.sprint_state_store import SprintStateStore
 

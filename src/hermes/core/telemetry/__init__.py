@@ -2,7 +2,7 @@
 Hermes Telemetry & Executive ROI Engine Package.
 """
 
-from core.telemetry.roi_calculator import (
+from hermes.core.telemetry.roi_calculator import (
     ROIConfig,
     ROIMetrics,
     ROITelemetryEngine,

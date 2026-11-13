@@ -3,7 +3,7 @@ Billion-Context / Active Context Pruning (ACP) Engine
 Hierarchical multi-generational context compression (LSM over prose) for long-running AI agent sessions.
 """
 
-from core.context.active_context_pruner import (
+from hermes.core.context.active_context_pruner import (
     BillionContextManager,
     ContextBlock,
     estimate_tokens,
@@ -11,7 +11,7 @@ from core.context.active_context_pruner import (
     prune_logs,
     prune_traceback,
 )
-from core.context.ticket_hydrator import (
+from hermes.core.context.ticket_hydrator import (
     HydratedTicketContext,
     TicketContextHydrator,
 )

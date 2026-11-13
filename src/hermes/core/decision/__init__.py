@@ -5,7 +5,7 @@ Phase: Phase 4 (Bayesian Confidence Calibration & Cost-Aware CI Decision Model)
 
 from __future__ import annotations
 
-from core.decision.decision_model import (
+from hermes.core.decision.decision_model import (
     DecisionModel,
     DecisionVerdict,
     FailureCategory,
