@@ -2,10 +2,10 @@
 
 [![CI Suite](https://github.com/Prasad-PingFederate/hermes-rerun-agents/actions/workflows/ci.yml/badge.svg)](https://github.com/Prasad-PingFederate/hermes-rerun-agents/actions/workflows/ci.yml)
 [![Hermes Healer](https://github.com/Prasad-PingFederate/hermes-rerun-agents/actions/workflows/hermes-heal.yml/badge.svg)](https://github.com/Prasad-PingFederate/hermes-rerun-agents/actions/workflows/hermes-heal.yml)
-[![Tests](https://img.shields.io/badge/unit%20tests-328%20passed%20(100%25)-brightgreen.svg)](https://github.com/Prasad-PingFederate/hermes-rerun-agents/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/badge/unit%20tests-333%20passed%20(100%25)-brightgreen.svg)](https://github.com/Prasad-PingFederate/hermes-rerun-agents/actions/workflows/ci.yml)
 [![Playwright E2E](https://img.shields.io/badge/console%20e2e-7%20passed%20(100%25)-brightgreen.svg)](https://github.com/Prasad-PingFederate/hermes-rerun-agents/actions/workflows/ci.yml)
 [![Benchmark](https://img.shields.io/badge/evals%20benchmark-24%2F24%20(100%25%20Pass%401)-brightgreen.svg)](#-enterprise-self-healing-benchmark-evals)
-[![Syntax Guard](https://img.shields.io/badge/syntax%20guard-203%2F203%20Python%203.10%20passed-success.svg)](scripts/syntax_guard.py)
+[![Syntax Guard](https://img.shields.io/badge/syntax%20guard-204%2F204%20Python%203.10%20passed-success.svg)](scripts/syntax_guard.py)
 [![Python Matrix](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue.svg)](pyproject.toml)
 [![Governance](https://img.shields.io/badge/governance-Zero%20Assertion%20Erosion-orange.svg)](#-deterministic-5-stage-verification--healing-pipeline)
 [![Security](https://img.shields.io/badge/security-Deterministic%20Delta--SAST-blue.svg)](docs/SECURITY_ARCHITECTURE.md)
@@ -214,13 +214,61 @@ Hermes includes a developer console styled in dark copper (`#14120e` / `#c9854a`
 
 ```bash
 # Start the Hermes Server & Console
-python server.py --host 127.0.0.1 --port 8000
-
-# Or using the hermes CLI
-hermes console --port 8000
+hermes console --workspace /path/to/my-repo --port 8000
 
 # Open in browser
-http://127.0.0.1:8000/console
+http://127.0.0.1:8000/
+```
+
+---
+
+## 💻 Cross-Platform Local LLM Setup Guide (Windows / macOS / Linux)
+
+Hermes supports 100% on-premise local LLM inference using [Ollama](https://ollama.com/) with models like `qwen2.5-coder:7b` (recommended), `deepseek-coder`, or `llama3`.
+
+### 1. Install & Run Ollama
+
+- **Windows**: Download and install [Ollama for Windows](https://ollama.com/download/windows). Run in PowerShell:
+  ```powershell
+  ollama run qwen2.5-coder:7b
+  ```
+- **macOS (Apple Silicon Metal Accelerated)**: Install with Homebrew (`brew install ollama`) or download [Ollama for Mac](https://ollama.com/download/mac). Metal GPU hardware acceleration is utilized automatically:
+  ```bash
+  ollama run qwen2.5-coder:7b
+  ```
+- **Linux**: Install via the official script (detects NVIDIA CUDA or AMD ROCm GPUs):
+  ```bash
+  curl -fsSL https://ollama.com/install.sh | sh
+  ollama run qwen2.5-coder:7b
+  ```
+
+### 2. Configure Environment Variables
+
+- **POSIX (macOS / Linux)**:
+  ```bash
+  export HERMES_LLM_PROVIDER=ollama
+  export OLLAMA_MODEL=qwen2.5-coder:7b
+  export HERMES_LIVE_PROGRESS=1
+  ```
+- **Windows PowerShell**:
+  ```powershell
+  $env:HERMES_LLM_PROVIDER="ollama"
+  $env:OLLAMA_MODEL="qwen2.5-coder:7b"
+  $env:HERMES_LIVE_PROGRESS="1"
+  ```
+
+### 3. Verify Pre-Flight Readiness (`hermes doctor`)
+
+Run pre-flight verification with a live 5-token handshake test:
+```bash
+hermes doctor --ping-llm
+```
+
+### 4. Launch the Interactive Workstation (`hermes console`)
+
+Launch the real workspace console to triage and heal failures visually:
+```bash
+hermes console --workspace /path/to/my-automation-suite
 ```
 
 ---

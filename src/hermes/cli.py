@@ -16,9 +16,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
+import threading
 import time
+import webbrowser
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -291,15 +294,24 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
     # Node / Playwright
     try:
-        n_proc = subprocess.run(["node", "--version"], capture_output=True, text=True, shell=True)
-        if n_proc.returncode == 0:
-            node_ver = n_proc.stdout.strip()
-            pw_proc = subprocess.run(["npx", "--no-install", "playwright", "--version"], capture_output=True, text=True, shell=True)
-            if pw_proc.returncode == 0:
-                pw_ver = pw_proc.stdout.strip()
-                print(f"  ✅ [PASS] Node & Playwright:    Node {node_ver} | {pw_ver}")
+        is_win = (os.name == "nt")
+        node_bin = shutil.which("node")
+        if node_bin:
+            n_proc = subprocess.run([node_bin, "--version"], capture_output=True, text=True, shell=is_win)
+            if n_proc.returncode == 0:
+                node_ver = n_proc.stdout.strip()
+                npx_bin = shutil.which("npx")
+                if npx_bin:
+                    pw_proc = subprocess.run([npx_bin, "--no-install", "playwright", "--version"], capture_output=True, text=True, shell=is_win)
+                    if pw_proc.returncode == 0:
+                        pw_ver = pw_proc.stdout.strip()
+                        print(f"  ✅ [PASS] Node & Playwright:    Node {node_ver} | {pw_ver}")
+                    else:
+                        print(f"  ✅ [PASS] Node CLI:             Node {node_ver} (Playwright project-local via npx/npm)")
+                else:
+                    print(f"  ✅ [PASS] Node CLI:             Node {node_ver} (npx not available in PATH)")
             else:
-                print(f"  ✅ [PASS] Node CLI:             Node {node_ver} (Playwright project-local via npx/npm)")
+                print("  ℹ️ [INFO] Node & Playwright:    Not installed globally (Optional for Python suites)")
         else:
             print("  ℹ️ [INFO] Node & Playwright:    Not installed globally (Optional for Python suites)")
     except Exception:
@@ -463,7 +475,74 @@ def build_parser() -> argparse.ArgumentParser:
     rb_p.add_argument("--workspace", default=".", help="Target workspace path")
     rb_p.add_argument("--snapshot-id", required=True, help="Snapshot ID to restore")
 
+    # console
+    con_p = subparsers.add_parser("console", help="Launch interactive Hermes Tester Console & Real Workspace Webstation")
+    con_p.add_argument("--workspace", default=".", help="Target workspace path to inspect and heal")
+    con_p.add_argument("--host", default="127.0.0.1", help="Host interface to bind (default: 127.0.0.1)")
+    con_p.add_argument("--port", type=int, default=8000, help="Port to bind (default: 8000)")
+    con_p.add_argument("--no-browser", action="store_true", help="Do not automatically open browser on startup")
+
+    # eval
+    subparsers.add_parser("eval", help="Run Hermes 24-scenario enterprise self-healing benchmark suite")
+
     return parser
+
+
+def cmd_console(args: argparse.Namespace) -> int:
+    """Launch the interactive Hermes Tester Console & Real Workspace Webstation."""
+    workspace = Path(args.workspace).resolve()
+    os.environ["HERMES_WORKSPACE"] = str(workspace)
+
+    host = getattr(args, "host", "127.0.0.1")
+    port = int(getattr(args, "port", 8000))
+    no_browser = getattr(args, "no_browser", False)
+
+    try:
+        from hermes.console.server import app, set_active_workspace
+        set_active_workspace(workspace)
+    except Exception:
+        pass
+
+    url = f"http://{host}:{port}"
+    print(f"🚀 Launching Hermes Console for workspace: {workspace}")
+    print(f"🔗 URL: {url}")
+
+    if not no_browser:
+        def _launch_browser():
+            time.sleep(1.0)
+            try:
+                webbrowser.open(url)
+            except Exception:
+                pass
+
+        threading.Thread(target=_launch_browser, daemon=True).start()
+
+    try:
+        import uvicorn
+        from hermes.console.server import app
+        uvicorn.run(app, host=host, port=port, log_level="info")
+        return 0
+    except ImportError:
+        print("❌ Error: 'uvicorn' is required to run the Hermes Console. Install with: pip install uvicorn")
+        return 1
+    except Exception as e:
+        print(f"❌ Error starting console server: {e}")
+        return 1
+
+
+def cmd_eval(args: argparse.Namespace) -> int:
+    """Execute Hermes 24-scenario enterprise self-healing benchmark suite."""
+    bench_path = Path(__file__).resolve().parent.parent.parent / "evals" / "run_benchmarks.py"
+    if not bench_path.exists():
+        bench_path = Path.cwd() / "evals" / "run_benchmarks.py"
+
+    if not bench_path.exists():
+        print(f"❌ Error: Could not locate benchmark script 'evals/run_benchmarks.py' at {bench_path}")
+        return 1
+
+    print(f"🚀 Running Hermes Enterprise Self-Healing Benchmarks ({bench_path})...\n")
+    res = subprocess.run([sys.executable, str(bench_path)], text=True)
+    return res.returncode
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -483,6 +562,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         "heal": cmd_heal,
         "approve": cmd_approve,
         "rollback": cmd_rollback,
+        "console": cmd_console,
+        "eval": cmd_eval,
     }
 
     handler = commands.get(args.command)

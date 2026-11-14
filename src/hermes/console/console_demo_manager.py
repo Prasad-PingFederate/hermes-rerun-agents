@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import asyncio
 import atexit
+import hashlib
 import json
 import os
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -833,6 +835,59 @@ class ConsoleDemoManager:
                 "uploaded_artifact": filename,
                 "artifact_path": str(dest_art),
                 "test_cmd": [sys.executable, "-m", "pytest", scope_file],
+            },
+            updated_at=time.time(),
+        )
+        self.persist_workspace(ws)
+        return ws
+
+    def get_or_create_real_workspace(self, workspace_path: Path | str) -> DemoWorkspace:
+        """Create or retrieve a managed workspace pointing to a real project directory on disk."""
+        target_path = Path(workspace_path).resolve()
+        path_hash = hashlib.sha256(str(target_path).encode("utf-8")).hexdigest()[:8]
+        ws_id = f"real_{re.sub(r'[^a-zA-Z0-9_]', '_', target_path.name)}_{path_hash}"
+
+        if ws_id in self._workspaces:
+            return self._workspaces[ws_id]
+
+        is_git = False
+        try:
+            chk = subprocess.run(["git", "rev-parse", "--is-inside-work-tree"], cwd=str(target_path), capture_output=True, text=True)
+            is_git = (chk.returncode == 0)
+        except Exception:
+            is_git = False
+
+        if not is_git:
+            try:
+                subprocess.run(["git", "init"], cwd=str(target_path), capture_output=True)
+                subprocess.run(["git", "config", "user.name", "HermesTester"], cwd=str(target_path), capture_output=True)
+                subprocess.run(["git", "config", "user.email", "tester@hermes.local"], cwd=str(target_path), capture_output=True)
+            except Exception:
+                pass
+
+        snap_dir = target_path / ".tm_snapshots"
+        snap_dir.mkdir(parents=True, exist_ok=True)
+        tm = TimeMachineEngine(target_path)
+        store = SprintStateStore(snap_dir / "sprint_state.db")
+        orch = ScrumMasterOrchestrator(target_path, tm_engine=tm, store=store)
+
+        ws = DemoWorkspace(
+            workspace_id=ws_id,
+            workspace_name=target_path.name,
+            workspace_path=target_path,
+            failing_test="Workspace Ready",
+            failure_output=f"Connected to local repository at {target_path}",
+            classification="PRODUCT_BUG",
+            owner_agent="ScrumMasterOrchestrator",
+            scope=[],
+            allowed_files=[],
+            status="READY",
+            tm=tm,
+            store=store,
+            orchestrator=orch,
+            metadata={
+                "is_real": True,
+                "workspace_path": str(target_path),
             },
             updated_at=time.time(),
         )

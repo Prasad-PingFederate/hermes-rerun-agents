@@ -5,6 +5,38 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ---
 
+## [1.3.0] - 2026-11-14
+
+### 🚀 Real-Project Workstation UI, CLI Subcommands & Cross-Platform Hardening
+
+#### Part 1: First-Class CLI Subcommands (`src/hermes/cli.py`)
+- **`hermes console` Subcommand**:
+  - Registered `hermes console [--workspace <path>] [--host <ip>] [--port <port>] [--no-browser]`.
+  - Automatically initializes active workspace in server config and opens the default browser on startup.
+- **`hermes eval` Subcommand**:
+  - Registered `hermes eval` to directly execute the 24-scenario enterprise self-healing benchmark suite from any directory.
+- **Unit & Parser Coverage**: Added comprehensive argument parser tests in `tests/test_v130_features.py`.
+
+#### Part 2: Cross-Platform Linux & macOS Hardening
+- **POSIX `shell=True` Subprocess Fix**:
+  - Resolved POSIX `/bin/sh` argument dropping bug by using `shutil.which` and passing `shell=(os.name == "nt")`.
+  - Audited full codebase to ensure zero unsafe `shell=True` subprocess invocations on non-Windows platforms.
+- **Cross-Platform Smoke Testing Matrix in CI**:
+  - Added multi-OS smoke test job across `["ubuntu-latest", "macos-latest", "windows-latest"]` in `.github/workflows/ci.yml`.
+- **Local Ollama Multi-Platform Setup Guide**:
+  - Added dedicated setup documentation in `README.md` for Windows, macOS (Apple Silicon Metal acceleration), and Linux.
+
+#### Part 3: Real Workspace Console Workstation (`console_ui.py` & `server.py`)
+- **Top Environment & Doctor Status Bar**:
+  - Interactive workspace path input and dynamic switcher (`POST /api/real/workspace`) without restarting the server.
+  - Live Doctor status pill showing OS family, Python version, Git status, Node/Playwright detection, and active LLM provider with connectivity latency check (`GET /api/real/doctor`).
+- **Deterministic 3-Action Real Workstation Modes**:
+  - **Mode A (Heal & Shadow Simulation)**: Full UI execution with failure trace input, scope selection, test runner command, and toggle between Live Apply vs. Zero-Write Shadow Mode (`POST /api/real/heal`).
+  - **Mode B (Feature Story DAG)**: User story requirement prompt and target scope test generator (`POST /api/real/story`).
+  - **Mode C (TimeMachine Ledger & Rollback)**: Cryptographic snapshot ledger history with 1-click instant rollback (`POST /api/real/rollback`) and 1-click DLP-scrubbed ZIP Sprint Audit Bundle export (`GET /api/real/audit/export-zip`).
+
+---
+
 ## [1.2.0] - 2026-11-14
 
 ### 🤖 Local LLM Surgical Healing Pipeline & DeepSeek-Inspired Console UX Release

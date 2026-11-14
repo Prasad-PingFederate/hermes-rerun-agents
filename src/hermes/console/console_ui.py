@@ -1072,9 +1072,17 @@ CONSOLE_HTML = """<!DOCTYPE html>
         <span class="dot"></span>
         <span id="label-workspace">InMemoryLedger</span>
       </div>
+      <div class="workspace-selector" style="display: inline-flex; align-items: center; gap: 4px; margin-left: 8px;">
+        <input type="text" id="input-real-workspace" placeholder="Target workspace path..." style="background: #1c1815; border: 1px solid #42382f; color: #f0e6df; padding: 4px 8px; border-radius: 4px; font-size: 11px; font-family: var(--font-mono); width: 220px;" title="Target project workspace path" />
+        <button id="btn-load-workspace" class="btn-top" style="padding: 4px 8px; font-size: 11px;" title="Load local repository workspace">📂 Load</button>
+      </div>
     </div>
 
     <div class="top-meta">
+      <div class="meta-pill" id="pill-doctor" data-testid="pill-doctor" style="cursor: pointer;" title="Hermes Pre-Flight Doctor: OS, Runners, and LLM Status (Click to re-ping)">
+        <span class="dot"></span>
+        <span id="label-doctor">🖥️ Doctor: Checking...</span>
+      </div>
       <button class="btn-top" id="btn-open-story" data-testid="btn-run-story" title="Launch Story Sprint DAG">
         <span>✨ New Story</span>
       </button>
@@ -1219,6 +1227,22 @@ CONSOLE_HTML = """<!DOCTYPE html>
           <div class="dropzone-text"><strong>Drag &amp; drop CI failure artifacts here</strong> or <span class="dropzone-browse" id="dropzone-browse">browse files</span></div>
           <div class="dropzone-subtext">Drop JUnit XML, CTRF JSON, Playwright trace.zip, or failure screenshots (.png, .jpg) to trigger autonomous triage &amp; healing</div>
           <input type="file" id="file-artifact-input" style="display:none;" accept=".xml,.json,.zip,.png,.jpg,.jpeg" />
+        </div>
+
+        <!-- Real Workspace Scope & Action Bar -->
+        <div class="real-workspace-controls" id="real-workspace-controls" style="display: flex; gap: 10px; align-items: flex-end; background: #1a1613; padding: 10px 14px; border-radius: 6px; border: 1px solid #362e26; font-size: 12px; margin-bottom: 12px;">
+          <div style="flex: 1; display: flex; flex-direction: column; gap: 4px;">
+            <label style="color: var(--text-dim); font-size: 11px;">Target Scope (Optional):</label>
+            <input type="text" id="input-heal-scope" placeholder="e.g. src/app.py, src/service.py" style="background: #14120e; border: 1px solid #42382f; color: #f0e6df; padding: 6px 10px; border-radius: 4px; font-family: var(--font-mono); font-size: 12px;" />
+          </div>
+          <div style="flex: 1; display: flex; flex-direction: column; gap: 4px;">
+            <label style="color: var(--text-dim); font-size: 11px;">Verification Command (Optional):</label>
+            <input type="text" id="input-heal-cmd" placeholder="e.g. pytest tests/test_checkout.py" style="background: #14120e; border: 1px solid #42382f; color: #f0e6df; padding: 6px 10px; border-radius: 4px; font-family: var(--font-mono); font-size: 12px;" />
+          </div>
+          <div style="display: flex; gap: 8px;">
+            <button class="btn-top" id="btn-run-shadow" style="background: #25201b; border-color: #5c4d3c; color: #e6a76e; padding: 7px 12px; font-size: 12px;" title="Preview proposed patch in shadow mode without modifying files on disk">🛡️ Shadow Preview</button>
+            <button class="btn-action-primary" id="btn-run-real-heal" style="padding: 7px 14px; font-size: 12px;" title="Apply patch, verify in sandbox, and auto-rollback on failure">⚡ Apply &amp; Verify</button>
+          </div>
         </div>
 
         <div style="display: flex; flex-direction: column; gap: 12px;">
@@ -1772,6 +1796,10 @@ Status: ACTIVE
       <div class="form-group">
         <label class="form-label">Feature User Story Prompt</label>
         <textarea class="form-input" id="input-story-prompt" data-testid="input-story-prompt" rows="4" style="resize: vertical; font-family: var(--font-mono); font-size: 12px;" placeholder="Describe required capability, e.g. 'Add coupon discount code validation to checkout service'"></textarea>
+      </div>
+      <div class="form-group" style="margin-top: 8px;">
+        <label class="form-label">Target Test File Scope (Optional)</label>
+        <input type="text" class="form-input" id="input-story-scope" placeholder="e.g. tests/test_coupon.py" style="font-family: var(--font-mono); font-size: 12px;" />
       </div>
       <div style="display: flex; gap: 10px; justify-content: flex-end; margin-top: 8px;">
         <button class="btn-top" id="btn-cancel-story">Cancel</button>
@@ -2509,11 +2537,13 @@ Status: ACTIVE
 
     // Phase 2: 1-Click .zip Sprint Audit Bundle Download
     function triggerZipDownload() {
-      if (!state.workspaceId) {
-        alert("No active workspace selected.");
-        return;
+      if (state.workspaceId && state.workspaceId.startsWith("real_")) {
+        window.location.href = `/api/real/audit/export-zip`;
+      } else if (state.workspaceId) {
+        window.location.href = `/api/demo/${state.workspaceId}/audit/export-zip`;
+      } else {
+        window.location.href = `/api/real/audit/export-zip`;
       }
-      window.location.href = `/api/demo/${state.workspaceId}/audit/export-zip`;
     }
 
     const btnExportZip = document.getElementById('btn-export-zip');
@@ -2708,10 +2738,18 @@ Status: ACTIVE
       btnSubmitStory.addEventListener('click', async () => {
         const prompt = inputStoryPrompt.value.trim();
         if (!prompt) { alert("Please describe the user story feature."); return; }
+        const inputStoryScope = document.getElementById('input-story-scope');
+        const scopeVal = inputStoryScope ? inputStoryScope.value.trim() : "";
+        const scope = scopeVal ? [scopeVal] : undefined;
         btnSubmitStory.disabled = true;
         btnSubmitStory.innerText = "Executing Governed DAG...";
         try {
-          const res = await apiPost(`/api/demo/${state.workspaceId}/story`, { story_prompt: prompt });
+          let res;
+          if (state.workspaceId && state.workspaceId.startsWith("real_")) {
+            res = await apiPost('/api/real/story', { story: prompt, story_prompt: prompt, scope: scope });
+          } else {
+            res = await apiPost(`/api/demo/${state.workspaceId}/story`, { story_prompt: prompt, scope: scope });
+          }
           modalStory.classList.remove('open');
           state.status = res.status || "AWAITING_WRITE_GATE";
           state.sprintId = res.sprint_id;
@@ -2849,10 +2887,172 @@ Status: ACTIVE
       } catch (e) {}
     }
 
+    // =========================================================================
+    // Real Workspace & Pre-Flight Doctor Workstation (v1.3.0)
+    // =========================================================================
+    const pillDoctor = document.getElementById('pill-doctor');
+    const labelDoctor = document.getElementById('label-doctor');
+    const inputRealWorkspace = document.getElementById('input-real-workspace');
+    const btnLoadWorkspace = document.getElementById('btn-load-workspace');
+    const btnRunShadow = document.getElementById('btn-run-shadow');
+    const btnRunRealHeal = document.getElementById('btn-run-real-heal');
+    const inputHealScope = document.getElementById('input-heal-scope');
+    const inputHealCmd = document.getElementById('input-heal-cmd');
+
+    async function fetchDoctorStatus(ping = false) {
+      if (labelDoctor) labelDoctor.innerText = ping ? "🔄 Pinging LLM..." : "🖥️ Checking Doctor...";
+      try {
+        const res = await apiGet(`/api/real/doctor?ping=${ping}`);
+        if (res && res.status === "success") {
+          if (inputRealWorkspace && (!inputRealWorkspace.value || inputRealWorkspace.value === ".")) {
+            inputRealWorkspace.value = res.workspace_path;
+          }
+          let llmStr = res.llm_provider;
+          if (res.ping_ms !== null && res.ping_ms !== undefined && res.ping_ms >= 0) {
+            llmStr += ` (${res.ping_ms}ms)`;
+          }
+          const pwStr = res.has_playwright ? "🎭 PW Ready" : "🎭 PW None";
+          const text = `🖥️ ${res.os_name} | 🤖 ${llmStr} | 🐍 Py ${res.python_version} | ${pwStr}`;
+          if (labelDoctor) labelDoctor.innerText = text;
+          if (pillDoctor) {
+            pillDoctor.className = res.is_live_llm ? "meta-pill status-green" : "meta-pill";
+          }
+        }
+      } catch (e) {
+        if (labelDoctor) labelDoctor.innerText = "⚠️ Doctor Error";
+      }
+    }
+
+    if (pillDoctor) {
+      pillDoctor.addEventListener('click', () => fetchDoctorStatus(true));
+    }
+
+    if (btnLoadWorkspace && inputRealWorkspace) {
+      btnLoadWorkspace.addEventListener('click', async () => {
+        const path = inputRealWorkspace.value.trim();
+        if (!path) return;
+        try {
+          btnLoadWorkspace.innerText = "Loading...";
+          const res = await apiPost('/api/real/workspace', { workspace_path: path });
+          if (res && res.workspace_id) {
+            state.workspaceId = res.workspace_id;
+            state.workspaceName = res.workspace_name;
+            if (labelWorkspace) labelWorkspace.innerText = res.workspace_name;
+            await fetchDoctorStatus(false);
+            await loadRealSnapshots();
+            alert(`Loaded workspace '${res.workspace_name}'!`);
+          }
+        } catch (err) {
+          alert("Failed to load workspace: " + err.message);
+        } finally {
+          btnLoadWorkspace.innerText = "📂 Load";
+        }
+      });
+    }
+
+    async function executeRealHeal(isShadow) {
+      const scopeVal = inputHealScope ? inputHealScope.value.trim() : "";
+      const cmdVal = inputHealCmd ? inputHealCmd.value.trim() : "";
+      const scope = scopeVal ? scopeVal.split(',').map(s => s.trim()) : null;
+      const pytest_cmd = cmdVal ? cmdVal.split(' ') : null;
+
+      const btn = isShadow ? btnRunShadow : btnRunRealHeal;
+      const origText = btn ? btn.innerText : "";
+      if (btn) {
+        btn.disabled = true;
+        btn.innerText = isShadow ? "🛡️ Running Shadow Pass..." : "⚡ Healing & Verifying...";
+      }
+
+      switchTab('sprint');
+      connectSSE(state.workspaceId);
+
+      try {
+        const res = await apiPost('/api/real/heal', {
+          workspace_path: inputRealWorkspace ? inputRealWorkspace.value.trim() : null,
+          scope: scope,
+          pytest_cmd: pytest_cmd,
+          shadow: isShadow
+        });
+        state.status = res.workspace_status || (isShadow ? "SHADOW_SUGGESTION" : "COMPLETED");
+        state.sprintId = res.sprint_id;
+        state.snapshotId = res.snapshot_id;
+        updateUI();
+        await loadProposalDiff();
+        await loadRealSnapshots();
+      } catch (e) {
+        alert("Heal execution error: " + e.message);
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.innerText = origText;
+        }
+      }
+    }
+
+    if (btnRunShadow) btnRunShadow.addEventListener('click', () => executeRealHeal(true));
+    if (btnRunRealHeal) btnRunRealHeal.addEventListener('click', () => executeRealHeal(false));
+
+    async function loadRealSnapshots() {
+      const tmList = document.getElementById('tm-snapshot-list');
+      if (!tmList) return;
+      try {
+        const res = await apiGet('/api/real/snapshots');
+        if (res && res.snapshots && res.snapshots.length > 0) {
+          let html = '';
+          for (const s of res.snapshots) {
+            const timeStr = s.created_at ? new Date(s.created_at * 1000).toLocaleTimeString() : "Recent";
+            const files = s.files ? Object.keys(s.files).join(', ') : (s.target || "workspace");
+            html += `
+              <div class="detail-card" style="margin-bottom: 8px;">
+                <div class="detail-card-header">
+                  <div>
+                    <div style="font-size: 13px; font-weight: 600; font-family: var(--font-mono);">${s.snapshot_id}</div>
+                    <div style="display: flex; gap: 6px; margin-top: 4px;">
+                      <span class="tag-badge test-bug">${timeStr}</span>
+                      <span class="tag-badge test-bug">Files: ${files}</span>
+                    </div>
+                  </div>
+                  <div style="display: flex; gap: 6px;">
+                    <button class="btn-top btn-snap-diff" data-snap="${s.snapshot_id}" style="padding: 4px 8px; font-size: 11px;">👁️ Diff</button>
+                    <button class="btn-action-rewind btn-snap-rollback" data-snap="${s.snapshot_id}" style="padding: 4px 8px; font-size: 11px;">↺ Rollback</button>
+                  </div>
+                </div>
+              </div>`;
+          }
+          tmList.innerHTML = html;
+
+          document.querySelectorAll('.btn-snap-rollback').forEach(b => {
+            b.addEventListener('click', async () => {
+              const snapId = b.getAttribute('data-snap');
+              if (confirm(`Rollback workspace to snapshot ${snapId}?`)) {
+                try {
+                  await apiPost('/api/real/rollback', { snapshot_id: snapId });
+                  alert(`Restored workspace to ${snapId}!`);
+                  state.status = "ROLLED_BACK";
+                  updateUI();
+                  await loadRealSnapshots();
+                } catch (err) {
+                  alert("Rollback failed: " + err.message);
+                }
+              }
+            });
+          });
+
+          document.querySelectorAll('.btn-snap-diff').forEach(b => {
+            b.addEventListener('click', () => {
+              switchTab('diff');
+            });
+          });
+        }
+      } catch (e) {}
+    }
+
     // Auto-init on page load / reload (AG-10)
     window.addEventListener('DOMContentLoaded', async () => {
       loadInboxList();
       loadROITelemetry();
+      fetchDoctorStatus(false);
+      loadRealSnapshots();
       try {
         const active = await apiGet('/api/demo/active');
         if (active && active.workspace_id) {

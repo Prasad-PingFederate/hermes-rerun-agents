@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import time
 import uuid
 from dataclasses import asdict
@@ -412,6 +413,7 @@ class ScrumMasterOrchestrator:
         auto_approve: bool = False,
         is_fork_pr: bool = False,
         shadow_mode: bool = False,
+        is_shadow: bool = False,
         base_git_ref: Optional[str] = None,
         pr_id: Optional[str] = None,
     ) -> Dict[str, Any]:
@@ -426,6 +428,8 @@ class ScrumMasterOrchestrator:
         Stage 5: Counterfactual Differential Verification (rejects vacuous heals).
         Stage 6: Observability (SARIF, OTel), Shadow Mode formatting, and Flake Reaper state via Git Notes.
         """
+        shadow_mode = shadow_mode or is_shadow or (mode == "shadow")
+        is_shadow = shadow_mode
         ingestor = CIFailureIngestor(self.workspace_path)
         tickets: List[SubTaskTicket] = []
         stages_executed: List[str] = []
@@ -858,10 +862,13 @@ class ScrumMasterOrchestrator:
                 v_proc = subprocess.run([sys.executable, "-m", "pytest", "-q"], cwd=str(self.workspace_path), capture_output=True, text=True)
                 return v_proc.returncode == 0
             try:
-                n_proc = subprocess.run(["npx", "--no-install", "playwright", "--version"], capture_output=True, text=True, shell=True)
-                if n_proc.returncode == 0:
-                    v_proc = subprocess.run(["npx", "playwright", "test"], cwd=str(self.workspace_path), capture_output=True, text=True, shell=True)
-                    return v_proc.returncode == 0
+                is_win = (os.name == "nt")
+                npx_bin = shutil.which("npx")
+                if npx_bin:
+                    n_proc = subprocess.run([npx_bin, "--no-install", "playwright", "--version"], capture_output=True, text=True, shell=is_win)
+                    if n_proc.returncode == 0:
+                        v_proc = subprocess.run([npx_bin, "playwright", "test"], cwd=str(self.workspace_path), capture_output=True, text=True, shell=is_win)
+                        return v_proc.returncode == 0
             except Exception:
                 pass
             return True

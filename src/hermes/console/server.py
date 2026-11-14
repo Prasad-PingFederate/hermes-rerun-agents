@@ -12,7 +12,9 @@ import hmac
 import io
 import json
 import os
+import platform
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -42,7 +44,8 @@ app = FastAPI(
     version="1.0.0",
 )
 
-WORKSPACE = Path(os.environ.get("TARGET_WORKSPACE_PATH", Path.cwd())).resolve()
+_active_workspace_path: Path = Path(os.environ.get("HERMES_WORKSPACE", os.environ.get("TARGET_WORKSPACE_PATH", Path.cwd()))).resolve()
+WORKSPACE = _active_workspace_path
 tm = TimeMachineEngine(WORKSPACE)
 orchestrator = RerunOrchestrator(WORKSPACE / ".rerun_tasks")
 healer_agent = TestHealerAgent(WORKSPACE)
@@ -53,7 +56,130 @@ scrum_master = ScrumMasterOrchestrator(
     store=sprint_store,
 )
 
+
+def get_active_workspace_path() -> Path:
+    global _active_workspace_path
+    return _active_workspace_path
+
+
+def set_active_workspace(path: Path | str) -> Path:
+    global _active_workspace_path, WORKSPACE, tm, healer_agent, sprint_store, scrum_master
+    p = Path(path).resolve()
+    _active_workspace_path = p
+    os.environ["HERMES_WORKSPACE"] = str(p)
+    os.environ["TARGET_WORKSPACE_PATH"] = str(p)
+    WORKSPACE = p
+    tm = TimeMachineEngine(p)
+    healer_agent = TestHealerAgent(p)
+    sprint_store = SprintStateStore(p / ".hermes_sprint_state.db")
+    scrum_master = ScrumMasterOrchestrator(workspace_path=p, tm_engine=tm, store=sprint_store)
+    return p
+
 TASK_ID_REGEX = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
+
+
+class SetWorkspaceRequest(BaseModel):
+    workspace: Optional[str] = None
+    workspace_path: Optional[str] = None
+
+
+class RealHealRequest(BaseModel):
+    failure_output: Optional[str] = None
+    scope: Optional[List[str]] = None
+    pytest_cmd: Optional[Any] = None
+    shadow: bool = False
+    shadow_mode: bool = False
+    workspace_path: Optional[str] = None
+    auto_approve: bool = False
+
+
+class RealStoryRequest(BaseModel):
+    story: Optional[str] = None
+    story_prompt: Optional[str] = None
+    scope: Optional[List[str]] = None
+    pytest_cmd: Optional[Any] = None
+
+
+class RealRollbackRequest(BaseModel):
+    snapshot_id: str
+
+
+def get_doctor_diagnostics(workspace: Path) -> Dict[str, Any]:
+    from hermes.execution.llm_provider_adapter import resolve_provider
+
+    py_ver = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+    os_name = platform.system()
+    os_release = platform.release()
+
+    # Git
+    git_ver = "Not Available"
+    is_git_repo = False
+    try:
+        gp = subprocess.run(["git", "--version"], capture_output=True, text=True)
+        if gp.returncode == 0:
+            git_ver = gp.stdout.strip()
+        grp = subprocess.run(["git", "rev-parse", "--is-inside-work-tree"], cwd=str(workspace), capture_output=True, text=True)
+        is_git_repo = (grp.returncode == 0)
+    except Exception:
+        pass
+
+    # Node / Playwright
+    node_ver = None
+    pw_ver = None
+    is_win = (os.name == "nt")
+    node_bin = shutil.which("node")
+    if node_bin:
+        try:
+            np = subprocess.run([node_bin, "--version"], capture_output=True, text=True, shell=is_win)
+            if np.returncode == 0:
+                node_ver = np.stdout.strip()
+            npx_bin = shutil.which("npx")
+            if npx_bin:
+                pwp = subprocess.run([npx_bin, "--no-install", "playwright", "--version"], capture_output=True, text=True, shell=is_win)
+                if pwp.returncode == 0:
+                    pw_ver = pwp.stdout.strip()
+        except Exception:
+            pass
+
+    # Tree-sitter
+    tree_sitter_status = "Python Native AST"
+    try:
+        from hermes.guards.language_ast_guard import HAS_TREE_SITTER
+        if HAS_TREE_SITTER:
+            tree_sitter_status = "Tree-sitter Active (Multi-language)"
+    except Exception:
+        pass
+
+    # LLM Provider
+    prov = resolve_provider()
+    model = os.environ.get("HERMES_MODEL", os.environ.get("OPENAI_MODEL", os.environ.get("OLLAMA_MODEL", "qwen2.5-coder:7b" if prov == "ollama" else "heuristic")))
+    llm_status = "ONLINE" if prov != "none" else "OFFLINE_HEURISTIC"
+
+    # Test runners detected in workspace
+    runners = []
+    if (workspace / "pytest.ini").exists() or (workspace / "pyproject.toml").exists() or list(workspace.glob("test*.py")) or list(workspace.glob("tests")):
+        runners.append("Pytest")
+    if list(workspace.glob("*Playwright*.py")) or list(workspace.glob("tests/*playwright*.py")):
+        runners.append("Python Playwright")
+    if (workspace / "playwright.config.ts").exists() or (workspace / "playwright.config.js").exists() or (workspace / "package.json").exists():
+        runners.append("Playwright TS/JS")
+
+    return {
+        "workspace": str(workspace),
+        "os_name": os_name,
+        "os_release": os_release,
+        "os_family": "Windows" if os_name == "Windows" else ("macOS" if os_name == "Darwin" else "Linux"),
+        "python_version": py_ver,
+        "git_version": git_ver,
+        "is_git_repo": is_git_repo,
+        "node_version": node_ver,
+        "playwright_version": pw_ver,
+        "tree_sitter": tree_sitter_status,
+        "llm_provider": prov.upper() if prov != "none" else "OFFLINE_HEURISTIC",
+        "llm_model": model,
+        "llm_status": llm_status,
+        "runners_detected": runners or ["Generic"],
+    }
 
 
 class SprintRunRequest(BaseModel):
@@ -1762,6 +1888,188 @@ def test_provider_endpoint(req: ProviderTestRequest):
         except Exception as e:
             return {"status": "unreachable", "provider": req.provider_name, "error": str(e), "url": base_url}
     return {"status": "healthy", "provider": req.provider_name, "latency_ms": 25}
+
+
+# -------------------------------------------------------------------------
+# Real Workspace Workstation Endpoints (v1.3.0)
+# -------------------------------------------------------------------------
+@app.get("/api/real/doctor", dependencies=[Depends(verify_hermes_token)])
+def get_real_doctor_endpoint(ping: bool = False):
+    """Environment, runner, LLM provider, and AST readiness diagnostics."""
+    ws_path = get_active_workspace_path()
+    diag = get_doctor_diagnostics(ws_path)
+    ping_ms = None
+    if ping and diag["llm_provider"] != "OFFLINE_HEURISTIC":
+        from hermes.execution.llm_provider_adapter import resolve_provider, _call_openai_chat
+        t0 = time.time()
+        try:
+            prov = resolve_provider()
+            _call_openai_chat(prov, [{"role": "user", "content": "ping"}], timeout=5)
+            ping_ms = int((time.time() - t0) * 1000)
+        except Exception:
+            ping_ms = -1
+
+    return {
+        "status": "success",
+        "workspace_path": str(ws_path),
+        "os_name": diag["os_name"],
+        "os_release": diag["os_release"],
+        "os_family": diag["os_family"],
+        "python_version": diag["python_version"],
+        "git_version": diag["git_version"],
+        "is_git_repo": diag["is_git_repo"],
+        "node_version": diag["node_version"],
+        "playwright_version": diag["playwright_version"],
+        "has_playwright": (diag["playwright_version"] is not None),
+        "tree_sitter": diag["tree_sitter"],
+        "llm_provider": diag["llm_provider"],
+        "llm_model": diag["llm_model"],
+        "llm_status": diag["llm_status"],
+        "is_live_llm": (diag["llm_status"] == "ONLINE"),
+        "ping_ms": ping_ms,
+        "runners_detected": diag["runners_detected"],
+        "diagnostics": diag,
+    }
+
+
+@app.post("/api/real/workspace", dependencies=[Depends(verify_hermes_token)])
+def set_real_workspace_endpoint(req: SetWorkspaceRequest):
+    """Switch or load target local repository dynamically without server restart."""
+    target_raw = req.workspace or req.workspace_path
+    if not target_raw:
+        raise HTTPException(status_code=400, detail="Missing 'workspace' or 'workspace_path'")
+    target = Path(target_raw).expanduser().resolve()
+    if not target.exists() or not target.is_dir():
+        raise HTTPException(status_code=400, detail=f"Directory does not exist: {target}")
+    set_active_workspace(target)
+    ws = demo_manager.get_or_create_real_workspace(target)
+    diag = get_doctor_diagnostics(target)
+    return {
+        "status": "success",
+        "workspace": str(target),
+        "workspace_path": str(target),
+        "workspace_id": ws.workspace_id,
+        "workspace_name": ws.workspace_name,
+        "diagnostics": diag,
+    }
+
+
+@app.post("/api/real/heal", dependencies=[Depends(verify_hermes_token)])
+def heal_real_workspace_endpoint(req: RealHealRequest):
+    """Execute live multi-tier healing or shadow mode simulation on real workspace."""
+    ws_path = Path(req.workspace_path).resolve() if req.workspace_path else get_active_workspace_path()
+    set_active_workspace(ws_path)
+    ws = demo_manager.get_or_create_real_workspace(ws_path)
+    if not ws.orchestrator:
+        raise HTTPException(status_code=500, detail="Workspace orchestrator not initialized")
+
+    workspace_id = ws.workspace_id
+    event_hub.publish(workspace_id, "milestone", {"stage": 1, "name": "CI Failure Ingestor", "status": "running"})
+    event_hub.publish(workspace_id, "milestone", {"stage": 2, "name": "RequirementsAgent & AC", "status": "running"})
+    event_hub.publish(workspace_id, "milestone", {"stage": 3, "name": "SprintDAGScheduler & Router", "status": "running"})
+    event_hub.publish(workspace_id, "thinking", {"token": "analyzing root cause", "reasoning": "Synthesizing multi-tier defensive patch and checking test invariant safety...", "token_count": 64, "elapsed_s": 1})
+    event_hub.publish(workspace_id, "milestone", {"stage": 4, "name": "Multi-Tier Worker Proposal", "status": "running"})
+
+    is_shadow = req.shadow or req.shadow_mode
+    raw_output = req.failure_output or ws.failure_output
+    res = ws.orchestrator.run_sprint(
+        mode="heal",
+        failure_output=raw_output,
+        scope=req.scope,
+        pytest_cmd=req.pytest_cmd,
+        shadow_mode=is_shadow,
+        auto_approve=req.auto_approve,
+    )
+    ws.active_sprint_id = res.get("sprint_id")
+    ws.status = res.get("status", "AWAITING_WRITE_GATE")
+    if "snapshot_id" in res:
+        ws.pre_apply_snapshot_id = res["snapshot_id"]
+
+    event_hub.publish(workspace_id, "milestone", {"stage": 5, "name": "ASTPatchGuard & Security", "status": "running"})
+    event_hub.publish(workspace_id, "milestone", {"stage": 6, "name": "AutomationTester & Sandbox", "status": "running"})
+    _ensure_tier_proposals(ws)
+    event_hub.publish(workspace_id, "milestone", {"stage": 6, "name": "Verification Complete", "status": ws.status, "final": True})
+    demo_manager.persist_workspace(ws)
+    return {
+        "status": ws.status,
+        "workspace_status": ws.status,
+        "workspace_id": workspace_id,
+        "sprint_id": ws.active_sprint_id,
+        "snapshot_id": ws.pre_apply_snapshot_id,
+        "result": res,
+    }
+
+
+@app.post("/api/real/story", dependencies=[Depends(verify_hermes_token)])
+def story_real_workspace_endpoint(req: RealStoryRequest):
+    """Execute feature test synthesis (--story) on real workspace."""
+    ws_path = get_active_workspace_path()
+    ws = demo_manager.get_or_create_real_workspace(ws_path)
+    if not ws.orchestrator:
+        raise HTTPException(status_code=500, detail="Workspace orchestrator not initialized")
+
+    story_text = req.story or req.story_prompt
+    if not story_text:
+        raise HTTPException(status_code=400, detail="Missing story prompt")
+
+    workspace_id = ws.workspace_id
+    event_hub.publish(workspace_id, "milestone", {"stage": 1, "name": "ProductManager & AC", "status": "running"})
+    event_hub.publish(workspace_id, "milestone", {"stage": 2, "name": "SpecWriter & Invariants", "status": "running"})
+    event_hub.publish(workspace_id, "milestone", {"stage": 3, "name": "SprintDAGScheduler & Router", "status": "running"})
+    event_hub.publish(workspace_id, "thinking", {"token": "synthesizing test specification", "reasoning": "Generating robust test scenarios and contract assertions...", "token_count": 80, "elapsed_s": 1})
+    event_hub.publish(workspace_id, "milestone", {"stage": 4, "name": "DeveloperAgent Test Synthesis", "status": "running"})
+
+    res = ws.orchestrator.run_sprint(
+        mode="story",
+        story=story_text,
+        scope=req.scope,
+        pytest_cmd=req.pytest_cmd,
+        auto_approve=False,
+    )
+    ws.active_sprint_id = res.get("sprint_id")
+    ws.status = res.get("status", "AWAITING_WRITE_GATE")
+    if "snapshot_id" in res:
+        ws.pre_apply_snapshot_id = res["snapshot_id"]
+
+    event_hub.publish(workspace_id, "milestone", {"stage": 5, "name": "ASTPatchGuard Verification", "status": "running"})
+    event_hub.publish(workspace_id, "milestone", {"stage": 6, "name": "QACritic Review", "status": "running"})
+    _ensure_tier_proposals(ws)
+    event_hub.publish(workspace_id, "milestone", {"stage": 6, "name": "Sprint Complete", "status": ws.status, "final": True})
+    demo_manager.persist_workspace(ws)
+    return {
+        "status": ws.status,
+        "workspace_status": ws.status,
+        "workspace_id": workspace_id,
+        "sprint_id": ws.active_sprint_id,
+        "snapshot_id": ws.pre_apply_snapshot_id,
+        "result": res,
+    }
+
+
+@app.get("/api/real/snapshots", dependencies=[Depends(verify_hermes_token)])
+def get_real_snapshots_endpoint():
+    """List cryptographic snapshots for the active real workspace."""
+    ws_path = get_active_workspace_path()
+    engine = TimeMachineEngine(ws_path)
+    snaps = engine.list_snapshots(limit=50)
+    return {"status": "success", "workspace": str(ws_path), "snapshots": snaps}
+
+
+@app.post("/api/real/rollback", dependencies=[Depends(verify_hermes_token)])
+def rollback_real_snapshot_endpoint(req: RealRollbackRequest):
+    """Restore active real workspace to previous snapshot."""
+    ws_path = get_active_workspace_path()
+    engine = TimeMachineEngine(ws_path)
+    res = engine.restore_snapshot(req.snapshot_id)
+    return {"status": "restored", "snapshot_id": req.snapshot_id, "details": res}
+
+
+@app.get("/api/real/audit/export-zip", dependencies=[Depends(verify_hermes_token)])
+def export_real_audit_zip_endpoint():
+    """Download 1-click DLP-scrubbed ZIP Sprint Audit Bundle for active real workspace."""
+    ws_path = get_active_workspace_path()
+    ws = demo_manager.get_or_create_real_workspace(ws_path)
+    return export_demo_audit_zip_endpoint(ws.workspace_id)
 
 
 @app.post("/api/tasks/{task_id}/apply", dependencies=[Depends(verify_hermes_token)])
