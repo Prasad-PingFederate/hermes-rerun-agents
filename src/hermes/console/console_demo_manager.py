@@ -8,6 +8,7 @@ Persists open demo registry state to SQLite so it survives page reloads and proc
 
 from __future__ import annotations
 
+import asyncio
 import atexit
 import json
 import os
@@ -30,6 +31,35 @@ from hermes.orchestration.sprint_state_store import SprintStateStore
 REGISTRY_DB_PATH = Path(tempfile.gettempdir()) / "hermes_demo_sessions.db"
 
 
+class EventHub:
+    """Manages Server-Sent Event (SSE) subscribers for live sprint progress and thinking streaming."""
+
+    def __init__(self):
+        self._listeners: Dict[str, List[asyncio.Queue]] = {}
+
+    def subscribe(self, workspace_id: str) -> asyncio.Queue:
+        q: asyncio.Queue = asyncio.Queue()
+        self._listeners.setdefault(workspace_id, []).append(q)
+        return q
+
+    def unsubscribe(self, workspace_id: str, q: asyncio.Queue) -> None:
+        if workspace_id in self._listeners and q in self._listeners[workspace_id]:
+            self._listeners[workspace_id].remove(q)
+            if not self._listeners[workspace_id]:
+                self._listeners.pop(workspace_id, None)
+
+    def publish(self, workspace_id: str, event_type: str, data: Dict[str, Any]) -> None:
+        if workspace_id in self._listeners:
+            for q in list(self._listeners[workspace_id]):
+                try:
+                    q.put_nowait({"event": event_type, "data": data})
+                except Exception:
+                    pass
+
+
+event_hub = EventHub()
+
+
 @dataclass
 class DemoWorkspace:
     workspace_id: str
@@ -48,6 +78,8 @@ class DemoWorkspace:
     approval_comment: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
     updated_at: float = field(default_factory=time.time)
+    cancelled: bool = False
+    tier_proposals: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
     # Managed orchestrator components
     tm: Optional[TimeMachineEngine] = None
@@ -698,6 +730,111 @@ class ConsoleDemoManager:
                 "test_cmd": [sys.executable, "-m", "pytest", failing_test],
             },
             updated_at=1.0,
+        )
+        self.persist_workspace(ws)
+        return ws
+
+    def create_uploaded_workspace(self, file_path: Path, filename: str) -> DemoWorkspace:
+        """Create a demo workspace from an uploaded artifact (JUnit XML, CTRF JSON, trace.zip, or screenshot)."""
+        from hermes.ingestion.ci_failure_ingestor import CIFailureIngestor
+
+        ws_id = f"demo_upload_{int(time.time())}_{uuid.uuid4().hex[:6]}"
+        demo_dir = Path(tempfile.mkdtemp(prefix=f"hermes_{ws_id}_")).resolve()
+
+        subprocess.run(["git", "init"], cwd=str(demo_dir), capture_output=True, check=True)
+        subprocess.run(["git", "config", "user.name", "HermesTester"], cwd=str(demo_dir), capture_output=True, check=True)
+        subprocess.run(["git", "config", "user.email", "tester@hermes.local"], cwd=str(demo_dir), capture_output=True, check=True)
+        (demo_dir / ".gitignore").write_text(".tm_snapshots/\n__pycache__/\n*.pyc\n", encoding="utf-8")
+
+        art_dir = demo_dir / "artifacts"
+        art_dir.mkdir(parents=True, exist_ok=True)
+        dest_art = art_dir / filename
+        shutil.copy2(file_path, dest_art)
+
+        ingestor = CIFailureIngestor(demo_dir)
+        ext = dest_art.suffix.lower()
+
+        failing_test = "tests/test_uploaded.py"
+        failure_output = f"Ingested failure artifact: {filename}"
+        classification = "PRODUCT_BUG"
+        owner_agent = "DeveloperAgent"
+
+        if ext == ".xml":
+            try:
+                res = ingestor.ingest_artifacts([str(dest_art)])
+                if res.get("failures"):
+                    f0 = res["failures"][0]
+                    failing_test = f0.get("test_name", failing_test) if isinstance(f0, dict) else getattr(f0, "test_name", failing_test)
+                    failure_output = res.get("summary") or res.get("raw_output") or failure_output
+                    classification = res.get("classification", "PRODUCT_BUG")
+            except Exception:
+                pass
+        elif ext == ".json":
+            try:
+                res = ingestor.ingest_artifacts([str(dest_art)])
+                if res.get("failures"):
+                    f0 = res["failures"][0]
+                    failing_test = f0.get("test_name", failing_test) if isinstance(f0, dict) else getattr(f0, "test_name", failing_test)
+                    failure_output = res.get("summary") or failure_output
+                    classification = res.get("classification", "TEST_BUG")
+            except Exception:
+                pass
+        elif ext == ".zip":
+            try:
+                res = ingestor.ingest_artifacts([str(dest_art)])
+                failing_test = "tests/test_playwright_trace.py"
+                failure_output = res.get("summary") or f"Playwright trace.zip failure: {filename}"
+                classification = "TEST_BUG"
+            except Exception:
+                pass
+        elif ext in (".png", ".jpg", ".jpeg"):
+            failing_test = "tests/test_visual_ui.py"
+            failure_output = f"Visual UI Regression: Failure screenshot captured in {filename}. DOM locator mismatch suspected."
+            classification = "TEST_BUG"
+
+        owner_agent = "TestHealerAgent" if classification == "TEST_BUG" else "DeveloperAgent"
+
+        src_dir = demo_dir / "src"
+        src_dir.mkdir(parents=True, exist_ok=True)
+        (src_dir / "app.py").write_text("# Target application code\ndef process_action(data):\n    return True\n", encoding="utf-8")
+
+        test_dir = demo_dir / "tests"
+        test_dir.mkdir(parents=True, exist_ok=True)
+        rel_test = failing_test if failing_test.startswith("tests/") else f"tests/{Path(failing_test).name}"
+        if not rel_test.endswith(".py"):
+            rel_test = f"{rel_test}.py"
+        test_file_path = demo_dir / rel_test
+        test_file_path.parent.mkdir(parents=True, exist_ok=True)
+        test_file_path.write_text(f"# Test reproduced from uploaded artifact: {filename}\nimport pytest\n\ndef test_failure():\n    assert False, 'Reproduced failure from artifact'\n", encoding="utf-8")
+
+        subprocess.run(["git", "add", "."], cwd=str(demo_dir), capture_output=True, check=True)
+        subprocess.run(["git", "commit", "-m", f"Initial commit for uploaded {filename}"], cwd=str(demo_dir), capture_output=True, check=True)
+
+        tm = TimeMachineEngine(demo_dir)
+        store = SprintStateStore(demo_dir / ".tm_snapshots" / "sprint_state.db")
+        orch = ScrumMasterOrchestrator(demo_dir, tm_engine=tm, store=store)
+
+        scope_file = str(test_file_path.relative_to(demo_dir)).replace("\\", "/")
+        ws = DemoWorkspace(
+            workspace_id=ws_id,
+            workspace_name=f"Upload: {filename}",
+            workspace_path=demo_dir,
+            failing_test=scope_file,
+            failure_output=failure_output,
+            classification=classification,
+            owner_agent=owner_agent,
+            scope=[scope_file],
+            allowed_files=[scope_file],
+            status="FAILING",
+            tm=tm,
+            store=store,
+            orchestrator=orch,
+            metadata={
+                "uploaded_artifact": filename,
+                "artifact_path": str(dest_art),
+                "test_cmd": [sys.executable, "-m", "pytest", scope_file],
+            },
+            updated_at=time.time(),
         )
         self.persist_workspace(ws)
         return ws

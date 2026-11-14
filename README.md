@@ -2,10 +2,10 @@
 
 [![CI Suite](https://github.com/Prasad-PingFederate/hermes-rerun-agents/actions/workflows/ci.yml/badge.svg)](https://github.com/Prasad-PingFederate/hermes-rerun-agents/actions/workflows/ci.yml)
 [![Hermes Healer](https://github.com/Prasad-PingFederate/hermes-rerun-agents/actions/workflows/hermes-heal.yml/badge.svg)](https://github.com/Prasad-PingFederate/hermes-rerun-agents/actions/workflows/hermes-heal.yml)
-[![Tests](https://img.shields.io/badge/unit%20tests-315%20passed%20(100%25)-brightgreen.svg)](https://github.com/Prasad-PingFederate/hermes-rerun-agents/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/badge/unit%20tests-328%20passed%20(100%25)-brightgreen.svg)](https://github.com/Prasad-PingFederate/hermes-rerun-agents/actions/workflows/ci.yml)
 [![Playwright E2E](https://img.shields.io/badge/console%20e2e-7%20passed%20(100%25)-brightgreen.svg)](https://github.com/Prasad-PingFederate/hermes-rerun-agents/actions/workflows/ci.yml)
 [![Benchmark](https://img.shields.io/badge/evals%20benchmark-24%2F24%20(100%25%20Pass%401)-brightgreen.svg)](#-enterprise-self-healing-benchmark-evals)
-[![Syntax Guard](https://img.shields.io/badge/syntax%20guard-199%2F199%20Python%203.10%20passed-success.svg)](scripts/syntax_guard.py)
+[![Syntax Guard](https://img.shields.io/badge/syntax%20guard-203%2F203%20Python%203.10%20passed-success.svg)](scripts/syntax_guard.py)
 [![Python Matrix](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue.svg)](pyproject.toml)
 [![Governance](https://img.shields.io/badge/governance-Zero%20Assertion%20Erosion-orange.svg)](#-deterministic-5-stage-verification--healing-pipeline)
 [![Security](https://img.shields.io/badge/security-Deterministic%20Delta--SAST-blue.svg)](docs/SECURITY_ARCHITECTURE.md)
@@ -199,13 +199,17 @@ MTTR Compression % = ((4.2h Baseline - Autonomous Duration) / 4.2h) × 100%
 
 ---
 
-## 🖥️ Interactive Hermes Tester Console
+## 🖥️ Interactive Hermes Tester Console (DeepSeek-Inspired UX)
 
 Hermes includes a developer console styled in dark copper (`#14120e` / `#c9854a`), free of heavy dependencies:
 
-* **Executive ROI Header Bar**: Real-time display of hours saved, MTTR compression (`4.2h → 1.3m -99.5%`), quarantines, and dollar ROI.
-* **Math Breakdown Drawer**: Clickable ROI metric slides out the auditable formula breakdown.
-* **Pipeline Rail**: Visual 5-stage progression from triage clustering to verification gate.
+* **Live SSE Stage Streaming**: Real-time Stage 1–6 execution events with live status badges, stage latencies, and instant Stop/Cancel Sprint control.
+* **Collapsible Thinking & Reasoning Drawer**: Real-time token counter, elapsed seconds timer, and streaming reasoning traces (`delta.reasoning` / `<think>`).
+* **Multi-Artifact Drag-and-Drop Dropzone**: Ingests JUnit XML, CTRF JSON, Playwright `trace.zip`, or failure screenshots directly to spawn triage & healing.
+* **Switchable Multi-Tier Proposals**: Compare proposals from Tier 3 (Junior SWE / Local Ollama), Tier 2 (Senior SWE), and Tier 1 (Tech Lead) with live unified diffs, accompanied by steered prompt re-synthesis with custom instructions.
+* **Mermaid Sprint DAG Visualizer**: Interactive client-rendered dependency graph of the active sprint pipeline.
+* **1-Click DLP-Scrubbed ZIP Audit Bundle**: Export complete cryptographic audit trail (`audit_trail.md`, SARIF v2.1.0 `report.sarif`, `telemetry.json`, `staged_patch.diff`, `verification_verdicts.json`, `sprint_manifest.json`).
+* **Executive ROI Header Bar & Math Drawer**: Real-time display of hours saved, MTTR compression (`4.2h → 1.3m -99.5%`), quarantines, and auditable dollar ROI breakdown.
 * **Time Machine Controls**: 1-click snapshot creation, rollback, and branch PR staging.
 
 ```bash
@@ -272,11 +276,11 @@ Every commit to Hermes is validated against strict verification gates:
 ```bash
 # 1. Syntax Guard: 100% Python 3.10 syntax compatibility
 python scripts/syntax_guard.py
-# Output: ✅ [SYNTAX GUARD PASSED] All 198 files are 100% Python 3.10 compatible with clean root shims.
+# Output: ✅ [SYNTAX GUARD PASSED] All 203 files are 100% Python 3.10 compatible with clean root shims.
 
-# 2. Complete Unit Test Suite (310 tests)
+# 2. Complete Unit Test Suite (328 tests)
 python -m pytest tests/ -q
-# Output: 310 passed
+# Output: 328 passed
 
 # 3. Playwright Console E2E Suite (7 specifications)
 python -m pytest console_tests/ -v

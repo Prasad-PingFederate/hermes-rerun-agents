@@ -15,6 +15,7 @@ CONSOLE_HTML = """<!DOCTYPE html>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
   <style>
     :root {
       --bg-canvas: #14120e;
@@ -902,6 +903,161 @@ CONSOLE_HTML = """<!DOCTYPE html>
         flex-direction: column;
       }
     }
+
+    /* Phase 2: Drag & Drop Ingestion */
+    .dropzone {
+      border: 2px dashed rgba(201, 133, 74, 0.4);
+      border-radius: 6px;
+      padding: 18px 24px;
+      text-align: center;
+      background: rgba(201, 133, 74, 0.04);
+      margin-bottom: 16px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+    .dropzone:hover, .dropzone.dragover {
+      border-color: var(--copper);
+      background: rgba(201, 133, 74, 0.12);
+    }
+    .dropzone-icon {
+      font-size: 22px;
+      margin-bottom: 4px;
+    }
+    .dropzone-text {
+      font-size: 13px;
+      color: var(--text-main);
+    }
+    .dropzone-browse {
+      color: var(--copper);
+      text-decoration: underline;
+      cursor: pointer;
+    }
+    .dropzone-subtext {
+      font-size: 11px;
+      color: var(--text-dim);
+      margin-top: 4px;
+      font-family: var(--font-mono);
+    }
+
+    /* Phase 2: Collapsible LLM Thinking Process (chat-demo style) */
+    .thinking-box {
+      margin-bottom: 16px;
+      border-radius: 6px;
+      background: rgba(20, 24, 33, 0.85);
+      border: 1px solid rgba(59, 130, 246, 0.3);
+      backdrop-filter: blur(10px);
+      overflow: hidden;
+    }
+    .thinking-details {
+      padding: 12px 16px;
+    }
+    .thinking-summary {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      user-select: none;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      color: #93c5fd;
+      font-weight: 600;
+    }
+    .thinking-summary::-webkit-details-marker {
+      display: none;
+    }
+    .thinking-badge {
+      margin-left: auto;
+      font-size: 10px;
+      padding: 2px 6px;
+      background: rgba(59, 130, 246, 0.2);
+      border: 1px solid rgba(59, 130, 246, 0.4);
+      border-radius: 3px;
+      color: #60a5fa;
+    }
+    .thinking-content {
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: #cbd5e1;
+      line-height: 1.6;
+      max-height: 220px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+    }
+
+    /* Phase 2: SprintDAGScheduler Mermaid Container */
+    .dag-box {
+      margin-bottom: 16px;
+      border: 1px solid var(--border-hairline);
+      border-radius: 6px;
+      background: var(--bg-panel);
+      padding: 14px 18px;
+    }
+    .dag-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--copper);
+      margin-bottom: 10px;
+    }
+    .mermaid {
+      overflow-x: auto;
+      padding: 10px 0;
+    }
+
+    /* Phase 2: Tier Switcher & Cancel Button */
+    .tier-switcher-bar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 12px;
+      padding: 8px 12px;
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid var(--border-hairline);
+      border-radius: 4px;
+    }
+    .tier-tab {
+      background: transparent;
+      border: 1px solid var(--border-hairline);
+      color: var(--text-dim);
+      padding: 4px 10px;
+      font-size: 11px;
+      font-family: var(--font-mono);
+      border-radius: 3px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .tier-tab:hover {
+      color: var(--text-main);
+      border-color: var(--border-mid);
+    }
+    .tier-tab.active {
+      background: rgba(201, 133, 74, 0.15);
+      border-color: var(--copper);
+      color: var(--copper);
+      font-weight: 600;
+    }
+    .btn-cancel {
+      background: rgba(239, 83, 80, 0.12);
+      border: 1px solid rgba(239, 83, 80, 0.4);
+      color: #ef5350;
+      padding: 6px 12px;
+      font-size: 11px;
+      font-family: var(--font-mono);
+      border-radius: 3px;
+      cursor: pointer;
+      font-weight: 600;
+      transition: all 0.15s ease;
+    }
+    .btn-cancel:hover {
+      background: rgba(239, 83, 80, 0.25);
+      border-color: #ef5350;
+    }
   </style>
 </head>
 <body>
@@ -1057,6 +1213,14 @@ CONSOLE_HTML = """<!DOCTYPE html>
           <button class="btn-top" id="btn-reseed-demo">↻ Reset Queue</button>
         </div>
 
+        <!-- Drag & Drop Artifact Ingestion Zone -->
+        <div class="dropzone" id="artifact-dropzone" data-testid="artifact-dropzone">
+          <div class="dropzone-icon">📥</div>
+          <div class="dropzone-text"><strong>Drag &amp; drop CI failure artifacts here</strong> or <span class="dropzone-browse" id="dropzone-browse">browse files</span></div>
+          <div class="dropzone-subtext">Drop JUnit XML, CTRF JSON, Playwright trace.zip, or failure screenshots (.png, .jpg) to trigger autonomous triage &amp; healing</div>
+          <input type="file" id="file-artifact-input" style="display:none;" accept=".xml,.json,.zip,.png,.jpg,.jpeg" />
+        </div>
+
         <div style="display: flex; flex-direction: column; gap: 12px;">
           <!-- Item 1: InMemoryLedger -->
           <div class="detail-card" data-testid="inbox-item-ledger" id="card-ledger">
@@ -1199,7 +1363,48 @@ E   ConnectionRefusedError: address already in use or service offline</div>
             <h2>Governed Multi-Agent Sprint Execution</h2>
             <p id="sprint-subhead">Topological DAG orchestration with architectural verification gates.</p>
           </div>
-          <button class="btn-action-primary" id="btn-goto-diff">Review Staged Diff →</button>
+          <div style="display: flex; gap: 8px;">
+            <button class="btn-cancel" id="btn-cancel-sprint" data-testid="btn-cancel-sprint">⏹ Stop Sprint</button>
+            <button class="btn-action-primary" id="btn-goto-diff">Review Staged Diff →</button>
+          </div>
+        </div>
+
+        <!-- Collapsible LLM Thinking Process (chat-demo style) -->
+        <div class="thinking-box" id="thinking-box" style="display: none;">
+          <details class="thinking-details" id="thinking-details" open>
+            <summary class="thinking-summary">
+              <span class="thinking-icon">🧠</span>
+              <span id="thinking-title">Thinking Process (~0 tokens, 0s)</span>
+              <span class="thinking-badge" id="thinking-badge">LIVE STREAM</span>
+            </summary>
+            <div class="thinking-content" id="thinking-content">
+              <em>Streaming agent reasoning &amp; token telemetry...</em>
+            </div>
+          </details>
+        </div>
+
+        <!-- Mermaid SprintDAGScheduler Topological Dependency Graph -->
+        <div class="dag-box" id="dag-box">
+          <div class="dag-header">
+            <span>⚡ SPRINT DAG SCHEDULER DEPENDENCY GRAPH</span>
+            <span style="font-size: 10px; color: var(--text-dim);">Topologically Sorted Execution Pipeline</span>
+          </div>
+          <div class="mermaid" id="sprint-mermaid-graph" data-testid="sprint-mermaid-graph">
+graph LR
+  S1["1. CIFailureIngestor"] --> S2["2. Requirements &amp; AC"]
+  S2 --> S3["3. SprintDAGScheduler"]
+  S3 --> S4["4. Multi-Tier Worker"]
+  S4 --> S5["5. AST &amp; Security Guards"]
+  S5 --> S6["6. Sandbox Verification"]
+  S6 --> S7["7. Human Write Gate"]
+  style S1 fill:#1e293b,stroke:#3b82f6,stroke-width:1.5px,color:#f8fafc
+  style S2 fill:#1e293b,stroke:#3b82f6,stroke-width:1.5px,color:#f8fafc
+  style S3 fill:#1e293b,stroke:#3b82f6,stroke-width:1.5px,color:#f8fafc
+  style S4 fill:#1e293b,stroke:#f59e0b,stroke-width:1.5px,color:#f8fafc
+  style S5 fill:#1e293b,stroke:#10b981,stroke-width:1.5px,color:#f8fafc
+  style S6 fill:#1e293b,stroke:#10b981,stroke-width:1.5px,color:#f8fafc
+  style S7 fill:#1e293b,stroke:#6366f1,stroke-width:1.5px,color:#f8fafc
+          </div>
         </div>
 
         <div class="sprint-timeline" id="sprint-cards-container">
@@ -1337,6 +1542,19 @@ E   ConnectionRefusedError: address already in use or service offline</div>
           </div>
         </div>
 
+        <!-- Tier Switcher Bar -->
+        <div class="tier-switcher-bar">
+          <span style="font-size: 11px; font-weight: 600; font-family: var(--font-mono); color: var(--text-dim); letter-spacing: 0.05em;">PROPOSAL TIER:</span>
+          <div class="tier-switcher-tabs" data-testid="tier-switcher-tabs" style="display: inline-flex; gap: 6px;">
+            <button class="tier-tab active" data-tier="TIER_3_JUNIOR_SWE" data-testid="tab-tier-3">Tier 3 (Junior SWE)</button>
+            <button class="tier-tab" data-tier="TIER_2_SENIOR_SWE" data-testid="tab-tier-2">Tier 2 (Senior SWE)</button>
+            <button class="tier-tab" data-tier="TIER_1_TECH_LEAD" data-testid="tab-tier-1">Tier 1 (Tech Lead)</button>
+          </div>
+          <button class="btn-action-secondary" id="btn-export-zip" data-testid="btn-export-zip" style="margin-left: auto; padding: 4px 10px; font-size: 11px;">
+            📦 Download .zip Audit Bundle
+          </button>
+        </div>
+
         <div class="diff-container" data-testid="diff-container">
           <div class="diff-header">
             <span id="diff-file-label">src/InMemoryLedger.py (Unified Diff vs Baseline)</span>
@@ -1350,6 +1568,20 @@ E   ConnectionRefusedError: address already in use or service offline</div>
 +            raise ValueError("Deposit amount must be positive")
          self._balance += amount
          return self._balance</div>
+        </div>
+
+        <!-- Instruction Edit & Regenerate -->
+        <div class="instruction-box" id="instruction-box" style="margin-top: 12px; margin-bottom: 12px; padding: 12px; background: rgba(255,255,255,0.03); border: 1px solid var(--border-hairline); border-radius: 6px;">
+          <label for="input-custom-instruction" style="display: flex; justify-content: space-between; font-weight: 600; font-size: 11px; font-family: var(--font-mono); color: var(--copper); margin-bottom: 6px;">
+            <span>✍️ STEERING INSTRUCTION (RE-SYNTHESIZE PROPOSAL)</span>
+            <span style="color: var(--text-dim);">Tier guidance &amp; constraints</span>
+          </label>
+          <div style="display: flex; gap: 8px;">
+            <input type="text" id="input-custom-instruction" data-testid="input-custom-instruction" class="form-input" style="flex: 1;" placeholder="E.g., 'Add explicit type validation and structured logging', 'Use resilient Playwright locator'..." />
+            <button class="btn-action-primary" id="btn-regenerate-proposal" data-testid="btn-regenerate-proposal" style="white-space: nowrap; padding: 6px 14px; font-size: 12px;">
+              🔄 Re-synthesize
+            </button>
+          </div>
         </div>
 
         <!-- Approval & Verification Bar -->
@@ -1477,6 +1709,7 @@ Status: ACTIVE
         <button class="btn-top" id="btn-export-md" data-testid="btn-export-md">📥 Download .md</button>
         <button class="btn-top" id="btn-export-json" data-testid="btn-export-json">📥 Download .json</button>
         <button class="btn-top" id="btn-export-html" data-testid="btn-export-html">🌐 View HTML</button>
+        <button class="btn-action-primary" id="btn-export-zip-audit" data-testid="btn-export-zip-audit" style="padding: 4px 10px; font-size: 11px;">📦 Download .zip Bundle</button>
       </div>
     </div>
   </div>
@@ -2024,10 +2257,42 @@ Status: ACTIVE
       const originalText = triggerBtn.innerText;
       triggerBtn.innerText = "⚡ Running Governed Pipeline...";
 
+      const thinkingBox = document.getElementById('thinking-box');
+      const thinkingContent = document.getElementById('thinking-content');
+      const thinkingTitle = document.getElementById('thinking-title');
+      if (thinkingBox) {
+        thinkingBox.style.display = "block";
+        if (thinkingContent) thinkingContent.innerText = "Analyzing failure trace and ingesting DOM/locator context...";
+      }
+
+      let sse = null;
       try {
         if (!state.workspaceId) {
           await loadLedgerWorkspace();
         }
+
+        try {
+          sse = new EventSource(`/api/demo/${state.workspaceId}/stream`);
+          sse.addEventListener('milestone', (ev) => {
+            try {
+              const m = JSON.parse(ev.data);
+              if (m.stage && typeof setRailPassedUpTo === 'function') {
+                setRailPassedUpTo(m.stage);
+              }
+            } catch (err) {}
+          });
+          sse.addEventListener('thinking', (ev) => {
+            try {
+              const t = JSON.parse(ev.data);
+              if (thinkingTitle) {
+                thinkingTitle.innerText = `Thinking Process (~${t.token_count || 48} tokens, ${t.elapsed_s || 1}s)`;
+              }
+              if (t.reasoning && thinkingContent) {
+                thinkingContent.innerText = t.reasoning;
+              }
+            } catch (err) {}
+          });
+        } catch (err) {}
 
         const res = await apiPost(`/api/demo/${state.workspaceId}/heal`);
         state.status = res.status || "AWAITING_WRITE_GATE";
@@ -2061,15 +2326,203 @@ Status: ACTIVE
           auditContent.innerText = state.auditLog;
         } catch (e) {}
 
+        await loadTierProposals();
+        await loadMermaidDAG();
+
         updateUI();
         switchTab('sprint');
         loadROITelemetry();
       } catch (e) {
         alert("Sprint heal error: " + e.message);
       } finally {
+        if (sse) {
+          try { sse.close(); } catch (err) {}
+        }
         triggerBtn.disabled = false;
         triggerBtn.innerText = originalText;
       }
+    }
+
+    // Phase 2: Tier Proposals & Mermaid DAG
+    async function loadTierProposals() {
+      try {
+        const res = await apiGet(`/api/demo/${state.workspaceId}/proposals`);
+        if (res && res.proposals) {
+          const activeTier = state.activeTier || res.active_tier || "TIER_3_JUNIOR_SWE";
+          if (res.proposals[activeTier]) {
+            state.diffText = res.proposals[activeTier].diff || state.diffText;
+            if (diffTextContainer) diffTextContainer.innerText = state.diffText;
+          }
+        }
+      } catch (err) {}
+    }
+
+    async function loadMermaidDAG() {
+      try {
+        const res = await apiGet(`/api/demo/${state.workspaceId}/dag`);
+        const el = document.getElementById('sprint-mermaid-graph');
+        if (el && res && res.mermaid) {
+          el.removeAttribute('data-processed');
+          el.innerHTML = res.mermaid;
+          if (window.mermaid) {
+            window.mermaid.run({ nodes: [el] });
+          }
+        }
+      } catch (err) {}
+    }
+
+    // Phase 2: Drag & Drop CI Failure Artifact Ingestion
+    const artifactDropzone = document.getElementById('artifact-dropzone');
+    const fileArtifactInput = document.getElementById('file-artifact-input');
+    const dropzoneBrowse = document.getElementById('dropzone-browse');
+
+    if (dropzoneBrowse && fileArtifactInput) {
+      dropzoneBrowse.addEventListener('click', (e) => {
+        e.stopPropagation();
+        fileArtifactInput.click();
+      });
+    }
+
+    if (artifactDropzone && fileArtifactInput) {
+      artifactDropzone.addEventListener('click', () => {
+        fileArtifactInput.click();
+      });
+      artifactDropzone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        artifactDropzone.classList.add('dragover');
+      });
+      artifactDropzone.addEventListener('dragleave', () => {
+        artifactDropzone.classList.remove('dragover');
+      });
+      artifactDropzone.addEventListener('drop', async (e) => {
+        e.preventDefault();
+        artifactDropzone.classList.remove('dragover');
+        if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+          await handleArtifactUpload(e.dataTransfer.files[0]);
+        }
+      });
+      fileArtifactInput.addEventListener('change', async () => {
+        if (fileArtifactInput.files && fileArtifactInput.files.length > 0) {
+          await handleArtifactUpload(fileArtifactInput.files[0]);
+        }
+      });
+    }
+
+    async function handleArtifactUpload(file) {
+      const formData = new FormData();
+      formData.append('file', file);
+      const textEl = artifactDropzone.querySelector('.dropzone-text');
+      const origHtml = textEl.innerHTML;
+      try {
+        textEl.innerHTML = `<strong>⚡ Uploading and decomposing ${file.name}...</strong>`;
+        const res = await fetch('/api/demo/upload', {
+          method: 'POST',
+          body: formData,
+        });
+        const data = await res.json();
+        if (data && data.workspace_id) {
+          state.workspaceId = data.workspace_id;
+          state.workspaceName = data.workspace_name;
+          state.status = data.workspace_status || "FAILING";
+          if (labelWorkspace) labelWorkspace.innerText = data.workspace_name;
+          updateUI();
+          alert(`Successfully ingested ${file.name}! New autonomous healing workspace created.`);
+        }
+      } catch (err) {
+        alert("Artifact upload failed: " + err.message);
+      } finally {
+        textEl.innerHTML = origHtml;
+      }
+    }
+
+    // Phase 2: Stop/Cancel Sprint Button
+    const btnCancelSprint = document.getElementById('btn-cancel-sprint');
+    if (btnCancelSprint) {
+      btnCancelSprint.addEventListener('click', async () => {
+        if (!state.workspaceId) return;
+        try {
+          btnCancelSprint.disabled = true;
+          btnCancelSprint.innerText = "Stopping...";
+          await apiPost(`/api/demo/${state.workspaceId}/cancel`);
+          state.status = "CANCELLED";
+          updateUI();
+          alert("Sprint execution halted by user.");
+        } catch (err) {
+          alert("Cancel failed: " + err.message);
+        } finally {
+          btnCancelSprint.disabled = false;
+          btnCancelSprint.innerText = "⏹ Stop Sprint";
+        }
+      });
+    }
+
+    // Phase 2: Switchable Tier Tabs
+    const tierTabs = document.querySelectorAll('.tier-tab');
+    tierTabs.forEach(tab => {
+      tab.addEventListener('click', async () => {
+        tierTabs.forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        const tier = tab.getAttribute('data-tier');
+        state.activeTier = tier;
+        try {
+          const res = await apiGet(`/api/demo/${state.workspaceId}/proposals`);
+          if (res && res.proposals && res.proposals[tier]) {
+            const prop = res.proposals[tier];
+            state.diffText = prop.diff || "";
+            if (diffTextContainer) diffTextContainer.innerText = state.diffText;
+            if (diffAssertionLabel) {
+              diffAssertionLabel.innerText = `Proposal: ${prop.title} (${prop.model || ''})`;
+            }
+          }
+        } catch (err) {}
+      });
+    });
+
+    // Phase 2: Instruction Edit & Regenerate
+    const btnRegenerate = document.getElementById('btn-regenerate-proposal');
+    const inputInstruction = document.getElementById('input-custom-instruction');
+    if (btnRegenerate) {
+      btnRegenerate.addEventListener('click', async () => {
+        if (!state.workspaceId) return;
+        const tier = state.activeTier || "TIER_3_JUNIOR_SWE";
+        const instruction = inputInstruction ? inputInstruction.value.trim() : "";
+        btnRegenerate.disabled = true;
+        btnRegenerate.innerText = "🔄 Re-synthesizing...";
+        try {
+          const res = await apiPost(`/api/demo/${state.workspaceId}/regenerate`, {
+            tier: tier,
+            instruction: instruction,
+          });
+          if (res && res.diff) {
+            state.diffText = res.diff;
+            if (diffTextContainer) diffTextContainer.innerText = state.diffText;
+            alert(`Re-synthesized proposal for ${tier} with custom steering instruction!`);
+          }
+        } catch (err) {
+          alert("Regeneration failed: " + err.message);
+        } finally {
+          btnRegenerate.disabled = false;
+          btnRegenerate.innerText = "🔄 Re-synthesize";
+        }
+      });
+    }
+
+    // Phase 2: 1-Click .zip Sprint Audit Bundle Download
+    function triggerZipDownload() {
+      if (!state.workspaceId) {
+        alert("No active workspace selected.");
+        return;
+      }
+      window.location.href = `/api/demo/${state.workspaceId}/audit/export-zip`;
+    }
+
+    const btnExportZip = document.getElementById('btn-export-zip');
+    if (btnExportZip) {
+      btnExportZip.addEventListener('click', triggerZipDownload);
+    }
+    const btnExportZipAudit = document.getElementById('btn-export-zip-audit');
+    if (btnExportZipAudit) {
+      btnExportZipAudit.addEventListener('click', triggerZipDownload);
     }
 
     btnRunHeal.addEventListener('click', async () => {

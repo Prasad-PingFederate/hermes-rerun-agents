@@ -1,5 +1,6 @@
 # Core Framework & Server
 fastapi>=0.112.0
+python-multipart>=0.0.9
 uvicorn[standard]>=0.30.0
 pydantic>=2.8.0
 python-dotenv>=1.0.1

@@ -5,6 +5,41 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ---
 
+## [1.2.0] - 2026-11-14
+
+### 🤖 Local LLM Surgical Healing Pipeline & DeepSeek-Inspired Console UX Release
+
+#### Phase 1: Local LLM Surgical Healing Pipeline (Ollama `qwen2.5-coder:7b`)
+- **Live SSE Streaming & Context Window Hardening (`src/hermes/execution/llm_provider_adapter.py`)**:
+  - Implemented SSE streaming for live token-by-token generation with reasoning traces (`delta.reasoning` / `<think>`), live token counting, and elapsed timing.
+  - Applied `"options": {"num_ctx": 8192}` for local Ollama deployments to prevent context truncation on larger test suites.
+- **3-Level Surgical Fuzzy Matcher (`src/hermes/execution/llm_provider_adapter.py`)**:
+  - Replaced brittle search-and-replace edit rejection with 3 deterministic fallback tiers:
+    1. Exact string and stripped whitespace matching.
+    2. Normalized line matching (ignoring `\r\n`, quotes `r"..."` vs `"..."`, trailing punctuation).
+    3. Indentation-preserving `difflib.SequenceMatcher` line-window best-block replacement.
+- **Large-File Context Slicing**:
+  - Extracts focused code windows centered around failing line numbers from tracebacks, allowing local LLMs with moderate parameter size to generate precise surgical patches while saving full files cleanly to disk.
+
+#### Phase 2: Next-Gen Console UI Upgrade & CLI Diagnostics
+- **`hermes doctor` Workspace Discovery Hardening (`src/hermes/cli.py`)**:
+  - Deterministically excludes `_reference/`, `node_modules/`, `.venv/`, `venv/`, and `__pycache__/` when scanning external workspaces.
+  - Accurately classifies Python Playwright files (`*_Playwright.py` or `.py` files importing Playwright) as Python Playwright instead of TypeScript/JavaScript.
+- **DeepSeek Chat-Demo Inspired Console UX (`src/hermes/console/console_ui.py`, `server.py`, `console_demo_manager.py`)**:
+  - **Live Stage 1–6 SSE Event Streaming**: Real-time progress updates with milestone animations, stage latencies, and instant Stop/Cancel Sprint control.
+  - **Collapsible Thinking Box**: Real-time token counter, elapsed seconds clock, and streamed LLM reasoning traces.
+  - **Multi-Artifact Drag-and-Drop Ingestion**: Ingests JUnit XML, CTRF JSON, Playwright `trace.zip`, or failure screenshots directly into automated triage and workspace creation.
+  - **Switchable Tier Proposals & Steered Re-Synthesis**: Tabbed comparison of Tier 3 (Junior SWE / Local Ollama), Tier 2 (Senior SWE), and Tier 1 (Tech Lead) proposals with live unified diffs, accompanied by steered prompt re-synthesis with custom developer instructions.
+  - **Mermaid Sprint DAG Visualizer**: Dynamic client-rendered dependency graph of sprint pipeline stages.
+  - **1-Click DLP-Scrubbed ZIP Sprint Audit Bundle**: In-memory bundle export containing `audit_trail.md`, `report.sarif` (SARIF v2.1.0), `telemetry.json`, `staged_patch.diff`, `verification_verdicts.json`, and `sprint_manifest.json`.
+- **Comprehensive Quality Gates**:
+  - 328 unit & integration tests passing (100%).
+  - 7 Playwright console E2E specifications passing (100%).
+  - 24/24 enterprise benchmark scenarios passing (100% Pass@1).
+  - 203 Python files 100% Python 3.10 syntax compatible.
+
+---
+
 ## [1.1.0] - 2026-11-13
 
 ### 🛡️ Architectural Hardening, Dual-Tree Drift Elimination & Platform Audit Release

@@ -358,17 +358,51 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     print("\n[4] WORKSPACE & TEST ARTIFACT DISCOVERY:")
     print(f"  * Target Workspace:            {workspace}")
     if workspace.is_dir():
-        py_tests = list(workspace.glob("tests/**/test_*.py")) + list(workspace.glob("tests/**/*_test.py"))
-        ts_tests = list(workspace.glob("**/*.spec.ts")) + list(workspace.glob("**/*.test.ts"))
-        js_tests = list(workspace.glob("**/*.spec.js")) + list(workspace.glob("**/*.test.js"))
-        total_tests = len(py_tests) + len(ts_tests) + len(js_tests)
+        exclude_dirs = {"_reference", "node_modules", ".venv", "venv", "env", ".env", "__pycache__", ".git", ".pytest_cache", ".idea", ".vscode", "build", "dist"}
 
-        junit_files = list(workspace.glob("**/junit*.xml")) + list(workspace.glob("**/*test-results*.xml"))
-        ctrf_files = list(workspace.glob("**/ctrf*.json"))
-        trace_files = list(workspace.glob("**/trace.zip"))
+        def _is_excluded(p: Path) -> bool:
+            return any(part in exclude_dirs for part in p.parts)
+
+        py_pytest_tests: List[Path] = []
+        py_pw_tests: List[Path] = []
+        ts_js_tests: List[Path] = []
+        junit_files: List[Path] = []
+        ctrf_files: List[Path] = []
+        trace_files: List[Path] = []
+
+        for p in workspace.rglob("*"):
+            if not p.is_file() or _is_excluded(p):
+                continue
+            name_lower = p.name.lower()
+            if p.suffix == ".py":
+                is_test = name_lower.startswith("test_") or name_lower.endswith("_test.py") or "playwright" in name_lower or "test" in name_lower
+                if is_test:
+                    if "playwright" in name_lower:
+                        py_pw_tests.append(p)
+                    else:
+                        try:
+                            sample = p.read_text(encoding="utf-8", errors="ignore")[:1000].lower()
+                            if "playwright" in sample:
+                                py_pw_tests.append(p)
+                            else:
+                                py_pytest_tests.append(p)
+                        except Exception:
+                            py_pytest_tests.append(p)
+            elif p.suffix in (".ts", ".js") and not name_lower.endswith(".d.ts"):
+                if name_lower.endswith((".spec.ts", ".test.ts", ".spec.js", ".test.js")):
+                    ts_js_tests.append(p)
+            elif p.suffix == ".xml":
+                if any(k in name_lower for k in ("junit", "test-result", "test_result", "testresult", "fail", "report")):
+                    junit_files.append(p)
+            elif p.suffix == ".json" and "ctrf" in name_lower:
+                ctrf_files.append(p)
+            elif p.name == "trace.zip" or (p.suffix == ".zip" and "trace" in name_lower):
+                trace_files.append(p)
+
+        total_tests = len(py_pytest_tests) + len(py_pw_tests) + len(ts_js_tests)
         total_artifacts = len(junit_files) + len(ctrf_files) + len(trace_files)
 
-        print(f"  * Discovered Test Suites:      {total_tests} ({len(py_tests)} Python, {len(ts_tests) + len(js_tests)} Playwright/TS/JS)")
+        print(f"  * Discovered Test Suites:      {total_tests} ({len(py_pytest_tests)} Pytest, {len(py_pw_tests)} Python Playwright, {len(ts_js_tests)} Playwright/TS/JS)")
         print(f"  * Discovered CI Artifacts:     {total_artifacts} ({len(junit_files)} JUnit XML, {len(ctrf_files)} CTRF JSON, {len(trace_files)} Playwright Traces)")
     else:
         print("  ⚠️ [WARN] Workspace directory does not exist yet.")

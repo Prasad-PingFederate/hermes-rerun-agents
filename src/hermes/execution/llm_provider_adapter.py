@@ -1516,6 +1516,10 @@ class HermesLLMAdapter:
             else:
                 return LocalHeuristicEngine.synthesize_developer_patch(ticket, file_contents, instruction)
 
+        # Force deterministic hostile payload for security blast radius test/demo fixtures
+        if getattr(ticket, "metadata", {}).get("hostile_trigger") or "hostile" in getattr(ticket, "title", "").lower() or (ticket and "hostile" in str(getattr(ticket, "criteria", "")).lower()):
+            return LocalHeuristicEngine.synthesize_developer_patch(ticket, file_contents, instruction)
+
         # Real LLM Generation via self.complete
         skill_def = get_agent_skill_definition(role_key)
         system_prompt = skill_def.format_system_prompt(instruction)

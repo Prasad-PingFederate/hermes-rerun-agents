@@ -157,6 +157,24 @@ class PytestTracebackParser:
     TEST_HEADER_PATTERN = re.compile(r"^_{3,}\s*(?P<name>[A-Za-z0-9_\[\]\-\.\:]+)\s*_{3,}$", re.MULTILINE)
 
     @classmethod
+    def parse_frames(cls, output: str) -> List[FailureFrame]:
+        """Extract traceback frames from pytest failure output."""
+        frames: List[FailureFrame] = []
+        if not output:
+            return frames
+        for m in cls.FRAME_PATTERN.finditer(output):
+            f_path = m.group("file").replace("\\", "/")
+            l_num = int(m.group("line"))
+            func = m.group("func") or ""
+            frames.append(FailureFrame(file_path=f_path, line_number=l_num, function_name=func))
+        for m in cls.IN_FRAME_PATTERN.finditer(output):
+            f_path = m.group("file").replace("\\", "/")
+            l_num = int(m.group("line"))
+            func = m.group("func") or ""
+            frames.append(FailureFrame(file_path=f_path, line_number=l_num, function_name=func))
+        return frames
+
+    @classmethod
     def parse(cls, output: str) -> List[ParsedFailure]:
         """Extract structured failures from pytest output."""
         failures: List[ParsedFailure] = []
