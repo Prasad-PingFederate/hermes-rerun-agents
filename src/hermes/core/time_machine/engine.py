@@ -272,14 +272,21 @@ class TimeMachineEngine:
         saved_files: List[str] = []
         files_manifest: Dict[str, Dict[str, Any]] = {}
 
+        def _wp(p: Path) -> Path:
+            s = str(p.resolve()) if not str(p).startswith("\\\\?\\") else str(p)
+            return Path("\\\\?\\" + s) if (os.name == "nt" and len(s) >= 240 and not s.startswith("\\\\?\\")) else p
+
         for rel_file in files_to_save:
-            src_f = self.workspace_path / rel_file
+            src_f = _wp(self.workspace_path / rel_file)
             if src_f.is_file():
-                dest_f = snap_dir / rel_file
-                dest_f.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(src_f, dest_f)
-                f_sha = _compute_sha256(dest_f)
-                f_size = dest_f.stat().st_size
+                dest_f = _wp(snap_dir / rel_file)
+                try:
+                    dest_f.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(src_f, dest_f)
+                    f_sha = _compute_sha256(dest_f)
+                    f_size = dest_f.stat().st_size
+                except OSError:
+                    continue
                 saved_files.append(rel_file)
                 files_manifest[rel_file] = {
                     "sha256": f_sha,
@@ -417,21 +424,28 @@ class TimeMachineEngine:
 
         # Restore files by copying from store safely
         restored_files = []
-        for rel_file in files_to_restore:
-            source_file = data_dir / rel_file
+        def _wp_r(p: Path) -> Path:
+            s = str(p.resolve()) if not str(p).startswith("\\\\?\\") else str(p)
+            return Path("\\\\?\\" + s) if (os.name == "nt" and len(s) >= 240 and not s.startswith("\\\\?\\")) else p
 
-            # If destination path or symlink exists in workspace, unlink it first
+        for rel_file in files_to_restore:
+            source_file = _wp_r(data_dir / rel_file)
+            if not source_file.is_file():
+                continue
+
             dest_file = self.workspace_path / rel_file
             if dest_file.is_symlink() or os.path.islink(str(dest_file)):
                 dest_file.unlink()
 
-            safe_dest = self._validate_safe_workspace_path(rel_file, allow_missing=True)
-            safe_dest.parent.mkdir(parents=True, exist_ok=True)
-            if safe_dest.is_symlink() or os.path.islink(str(safe_dest)) or safe_dest.is_file():
-                safe_dest.unlink()
-
-            shutil.copy2(source_file, safe_dest)
-            restored_files.append(rel_file)
+            safe_dest = _wp_r(self._validate_safe_workspace_path(rel_file, allow_missing=True))
+            try:
+                safe_dest.parent.mkdir(parents=True, exist_ok=True)
+                if safe_dest.is_symlink() or os.path.islink(str(safe_dest)) or safe_dest.is_file():
+                    safe_dest.unlink()
+                shutil.copy2(source_file, safe_dest)
+                restored_files.append(rel_file)
+            except OSError:
+                continue
 
         # Only delete files if caller passed an explicit list
         if delete_files:

@@ -15,6 +15,7 @@ Coordinates the complete Hermes multi-agent pipeline:
 from __future__ import annotations
 
 import os
+import re
 import time
 import uuid
 from dataclasses import asdict
@@ -535,7 +536,7 @@ class ScrumMasterOrchestrator:
                     if not (f.startswith("tests/") or Path(f).name.startswith("test_") or f.endswith("_test.py"))
                 ]
                 if not impl_files:
-                    for fail in failure_context.get("failures", []):
+                    for fail in (failure_context.get("failures") or failure_context.get("parsed_failures") or failure_context.get("diagnostics") or []):
                         for off in fail.get("offending_files", []):
                             clean = off.replace("\\", "/").lstrip("/")
                             if not (clean.startswith("tests/") or Path(clean).name.startswith("test_") or clean.endswith("_test.py")):
@@ -681,7 +682,7 @@ class ScrumMasterOrchestrator:
                     if len(content.splitlines()) > 120:
                         target_line = 1
                         if failure_context:
-                            for fail in failure_context.get("failures", []):
+                            for fail in (failure_context.get("failures") or failure_context.get("parsed_failures") or failure_context.get("diagnostics") or []):
                                 frames = fail.get("frames", []) if isinstance(fail, dict) else getattr(fail, "frames", [])
                                 for frame in frames:
                                     fp = frame.get("file_path", "") if isinstance(frame, dict) else getattr(frame, "file_path", "")
@@ -696,7 +697,11 @@ class ScrumMasterOrchestrator:
                                     target_line = int(fail_ln)
                                     break
                             if target_line <= 1:
-                                raw_c = f"{failure_context.get('summary', '')}\n{failure_context.get('raw_output', '')}"
+                                fail_raws = "\n".join(
+                                    str(fl.get("raw_output", "") if isinstance(fl, dict) else getattr(fl, "raw_output", ""))
+                                    for fl in (failure_context.get("failures") or failure_context.get("parsed_failures") or failure_context.get("diagnostics") or [])
+                                )
+                                raw_c = f"{failure_context.get('summary', '')}\n{failure_context.get('raw_output', '')}\n{fail_raws}"
                                 bname = Path(f).name
                                 m_ln = re.search(rf"{re.escape(bname)}:(\d+)", raw_c, re.IGNORECASE)
                                 if m_ln:

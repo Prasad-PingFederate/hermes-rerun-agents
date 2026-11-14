@@ -148,6 +148,16 @@ class JUnitParser:
                     error_msg = first_line[:200]
 
                 stack_trace = raw_text
+                if line_val is None and raw_text:
+                    m_ln = re.search(r"(?P<fp>[A-Za-z0-9_\-./\\]+\.(?:py|ts|js|java|go|cs)):(?P<ln>\d+):", raw_text)
+                    if m_ln:
+                        line_val = int(m_ln.group("ln"))
+                        if file_path == "unknown" or "/" not in file_path:
+                            file_path = m_ln.group("fp").replace("\\", "/")
+                    else:
+                        m_py = re.search(r"line\s+(?P<ln>\d+)", raw_text, re.IGNORECASE)
+                        if m_py:
+                            line_val = int(m_py.group("ln"))
 
                 # Detect runner signature
                 runner = "junit"
