@@ -147,6 +147,12 @@ class PytestTracebackParser:
         re.MULTILINE,
     )
 
+    # Matches pytest traceback frame: Test_Suite3\Logout_Playwright.py:152: in test_tc02
+    IN_FRAME_PATTERN = re.compile(
+        r"^(?P<file>[A-Za-z0-9_\-./\\]+\.(?:py|ts|js)):(?P<line>\d+):\s+in\s+(?P<func>[A-Za-z0-9_]+)",
+        re.MULTILINE,
+    )
+
     # Matches pytest failure header: ____ test_name ____
     TEST_HEADER_PATTERN = re.compile(r"^_{3,}\s*(?P<name>[A-Za-z0-9_\[\]\-\.\:]+)\s*_{3,}$", re.MULTILINE)
 
@@ -180,6 +186,13 @@ class PytestTracebackParser:
             err_msg = (m.group("msg") or "").strip()
             offending_set.add(f_path)
             if "test" in f_path.lower():
+                test_file = f_path
+
+        for m in cls.IN_FRAME_PATTERN.finditer(output):
+            f_path = m.group("file").replace("\\", "/")
+            frames.append(FailureFrame(file_path=f_path, line_number=int(m.group("line")), function_name=m.group("func")))
+            offending_set.add(f_path)
+            if not test_file:
                 test_file = f_path
 
         for m in cls.FAILED_LINE_PATTERN.finditer(output):
@@ -239,14 +252,18 @@ class JUnitXMLIngestor:
                 exc_type = target_node.get("type") or target_node.get("message") or "AssertionError"
                 body_text = target_node.text or ""
 
-                # Extract file paths from classname or body
-                offending: List[str] = []
+                # Extract file paths and frames from classname or body
+                frames = PytestTracebackParser.parse_frames(body_text)
+                offending: List[str] = [fr.file_path for fr in frames]
                 test_file = ""
-                file_match = re.search(r"([A-Za-z0-9_\-/\\]+\.py)", body_text)
+                file_match = re.search(r"([A-Za-z0-9_\-/\\]+\.(?:py|ts|js))", body_text)
                 if file_match:
                     f_clean = file_match.group(1).replace("\\", "/")
-                    offending.append(f_clean)
+                    if f_clean not in offending:
+                        offending.append(f_clean)
                     test_file = f_clean
+                elif frames:
+                    test_file = frames[0].file_path
 
                 failures.append(
                     ParsedFailure(
@@ -255,6 +272,7 @@ class JUnitXMLIngestor:
                         offending_files=offending,
                         exception_type=exc_type,
                         error_message=msg,
+                        frames=frames,
                         raw_output=body_text[:2000],
                     )
                 )
@@ -312,12 +330,14 @@ class CIFailureIngestor:
             if (self.workspace_root / candidate_py).is_file():
                 return candidate_py
 
-        # Match by filename within workspace_root
+        # Match by filename (or classname.py) within workspace_root
         filename = p_obj.name
         if filename:
-            for match in self.workspace_root.rglob(filename):
-                if match.is_file() and not any(part.startswith(".") for part in match.parts):
-                    return str(match.relative_to(self.workspace_root)).replace("\\", "/")
+            candidates = [filename] if "." in filename else [filename, f"{filename}.py", f"{filename}.ts", f"{filename}.js"]
+            for cand_name in candidates:
+                for match in self.workspace_root.rglob(cand_name):
+                    if match.is_file() and not any(part.startswith(".") for part in match.parts):
+                        return str(match.relative_to(self.workspace_root)).replace("\\", "/")
 
         return clean_rel
 

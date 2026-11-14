@@ -116,6 +116,65 @@ class ContextSlicer:
     """Extracts read-only public AST signatures of imported modules without file modification scope."""
 
     @classmethod
+    def slice_file_around_line(
+        cls,
+        content: str,
+        target_line: int = 1,
+        window_size: int = 60,
+    ) -> str:
+        """Slice ~60 lines around target line for files >120 lines, preserving header/imports."""
+        lines = content.splitlines()
+        total_lines = len(lines)
+        if total_lines <= 120:
+            return content
+
+        import_end = 0
+        for idx, l in enumerate(lines[:35]):
+            s = l.strip()
+            if (
+                s.startswith("import ")
+                or s.startswith("from ")
+                or s.startswith("#")
+                or s.startswith('"""')
+                or s.startswith("'''")
+                or not s
+            ):
+                import_end = idx + 1
+            elif s.startswith("def ") or s.startswith("class ") or s.startswith("@"):
+                break
+
+        import_end = min(import_end, 30)
+        header_lines = lines[:import_end]
+
+        t_idx = max(0, target_line - 1) if target_line > 0 else 0
+        half = window_size // 2
+        win_start = max(0, t_idx - half)
+        win_end = min(total_lines, t_idx + half)
+
+        omitted_top = win_start - import_end
+        omitted_bottom = total_lines - win_end
+
+        if win_start <= import_end + 5:
+            sliced = lines[:win_end]
+            if omitted_bottom > 0:
+                sliced.append("")
+                sliced.append(f"# ... [Remaining {omitted_bottom} lines omitted for context brevity] ...")
+        else:
+            sliced = list(header_lines)
+            sliced.append("")
+            sliced.append(f"# ... [{omitted_top} lines omitted for context brevity] ...")
+            sliced.append("")
+            sliced.extend(lines[win_start:win_end])
+            if omitted_bottom > 0:
+                sliced.append("")
+                sliced.append(f"# ... [Remaining {omitted_bottom} lines omitted for context brevity] ...")
+
+        result = "\n".join(sliced)
+        if content.endswith("\n"):
+            result += "\n"
+        return result
+
+    @classmethod
     def estimate_tokens(cls, text: str) -> int:
         """Rough token estimate (~4 chars per token)."""
         return max(1, len(text) // 4)

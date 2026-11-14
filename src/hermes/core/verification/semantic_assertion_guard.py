@@ -247,10 +247,14 @@ class SemanticAssertionGuard:
                     )
 
         # 3. Check Python Playwright/Async Timeout Masking
-        exist_timeout_map = {target: ms for target, ms, _ in cls._extract_python_timeouts(exist_tree)}
+        exist_timeouts_list = cls._extract_python_timeouts(exist_tree)
+        exist_exact_pairs = {(target, ms) for target, ms, _ in exist_timeouts_list}
+        exist_timeout_map = {target: ms for target, ms, _ in exist_timeouts_list}
         prop_timeouts = cls._extract_python_timeouts(prop_tree)
 
         for prop_target, prop_val, line_no in prop_timeouts:
+            if (prop_target, prop_val) in exist_exact_pairs:
+                continue
             exist_val = exist_timeout_map.get(prop_target)
             if exist_val is not None:
                 # If increased by >= 3x or inflated from <= 10s to >= 30s

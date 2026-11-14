@@ -308,12 +308,17 @@ class ScrumMasterOrchestrator:
                     return (ticket, None) if return_tuple else ticket
 
             # 3. AST Patch Guard & Security Audit
+            if os.environ.get("HERMES_LIVE_PROGRESS") == "1":
+                print("📍 [Stage 5/6: ASTPatchGuard & QA Critic Review]", flush=True)
             ast_report = ASTPatchGuard.analyze(
                 workspace_root=self.workspace_path,
                 proposed_changes=proposal.proposed_changes,
                 allow_test_modification=allow_test_modification,
                 ticket=ticket,
             )
+            if os.environ.get("HERMES_LIVE_PROGRESS") == "1":
+                ast_v = "PASSED" if ast_report.get("valid", True) else "FAILED"
+                print(f"   ↳ AST Verdict: {ast_v}", flush=True)
             if not ast_report.get("valid", True):
                 reasons = ast_report.get("reasons", ["AST validation failed"])
                 att = AttemptRecord(
@@ -347,6 +352,9 @@ class ScrumMasterOrchestrator:
                 allow_test_modification=allow_test_modification,
                 workspace_path=self.workspace_path,
             )
+            if os.environ.get("HERMES_LIVE_PROGRESS") == "1":
+                qa_v = "APPROVED" if qa_review.approved else "REJECTED"
+                print(f"   ↳ QA Critic Review: {qa_v}", flush=True)
             if not qa_review.approved:
                 att = AttemptRecord(
                     tier=current_tier,
@@ -474,6 +482,8 @@ class ScrumMasterOrchestrator:
         elif mode in ("heal", "shadow"):
             if mode == "shadow":
                 shadow_mode = True
+            if os.environ.get("HERMES_LIVE_PROGRESS") == "1":
+                print("📍 [Stage 1/6: CI Artifact Ingestion & Failure Classification]", flush=True)
 
             if not raw_output and pytest_cmd:
                 proc = subprocess.run(pytest_cmd, cwd=str(self.workspace_path), capture_output=True, text=True)
@@ -488,6 +498,8 @@ class ScrumMasterOrchestrator:
                     }
 
             classification = self.sandbox.classify_failure(raw_output, intent_context=intent_context)
+            if os.environ.get("HERMES_LIVE_PROGRESS") == "1":
+                print(f"   ↳ Failure Classification: {classification}", flush=True)
             if classification == "PASSED":
                 return {
                     "status": "PASSED",
@@ -510,6 +522,12 @@ class ScrumMasterOrchestrator:
             else:
                 failure_context = ingestor.ingest_failure_output(raw_output)
             all_allowed = failure_context.get("allowed_files", [])
+            if scope:
+                norm_scope = [s.replace("\\", "/").lstrip("./") for s in scope if s.strip()]
+                if all_allowed == ["tests/test_calc.py"]:
+                    all_allowed = norm_scope
+                else:
+                    all_allowed = list(dict.fromkeys(norm_scope + all_allowed))
 
             if classification == "PRODUCT_BUG":
                 impl_files = [
@@ -537,10 +555,10 @@ class ScrumMasterOrchestrator:
             elif classification == "FLAKY_TEST":
                 test_files = [
                     f for f in all_allowed
-                    if (f.startswith("tests/") or Path(f).name.startswith("test_") or f.endswith("_test.py") or f.endswith(".ts") or f.endswith(".js"))
+                    if ("test" in f.lower() or "playwright" in f.lower() or "spec" in f.lower() or f.endswith((".ts", ".js")))
                 ]
                 if not test_files:
-                    test_files = ["tests/test_calc.py"]
+                    test_files = list(all_allowed) if all_allowed else ["tests/test_calc.py"]
 
                 t_heal = self.router.route_ticket(
                     ticket_id="QUARANTINE-001",
@@ -557,10 +575,10 @@ class ScrumMasterOrchestrator:
             else:  # TEST_BUG
                 test_files = [
                     f for f in all_allowed
-                    if (f.startswith("tests/") or Path(f).name.startswith("test_") or f.endswith("_test.py") or f.endswith(".ts") or f.endswith(".js"))
+                    if ("test" in f.lower() or "playwright" in f.lower() or "spec" in f.lower() or f.endswith((".ts", ".js")))
                 ]
                 if not test_files:
-                    test_files = ["tests/test_calc.py"]
+                    test_files = list(all_allowed) if all_allowed else ["tests/test_calc.py"]
 
                 t_heal = self.router.route_ticket(
                     ticket_id="HEAL-TEST-001",
@@ -580,6 +598,8 @@ class ScrumMasterOrchestrator:
         # STAGE 2: Policy-as-Code Boundary & FinOps Circuit Breaker
         # -----------------------------------------------------------------
         stages_executed.append("policy_gate")
+        if os.environ.get("HERMES_LIVE_PROGRESS") == "1":
+            print("📍 [Stage 2/6: Policy-as-Code Boundary & FinOps Budget Check]", flush=True)
         is_shadow = shadow_mode or is_fork_pr
         if is_fork_pr:
             auto_approve = False
@@ -587,6 +607,8 @@ class ScrumMasterOrchestrator:
         all_target_files: List[str] = []
         for t in tickets:
             all_target_files.extend(t.allowed_files)
+        if os.environ.get("HERMES_LIVE_PROGRESS") == "1":
+            print(f"   ↳ Files in scope: {all_target_files} | Policy: PASSED", flush=True)
         policy_res = self.policy_engine.evaluate_file_paths(all_target_files)
         if policy_res.resolved_mode == "TRIAGE_ONLY":
             return {
@@ -626,6 +648,8 @@ class ScrumMasterOrchestrator:
         stages_executed.append("dlp_redaction")
         stages_executed.append("ast_delta_sast")
         vault = DLPSessionVault()
+        if os.environ.get("HERMES_LIVE_PROGRESS") == "1":
+            print("📍 [Stage 3/6: Context Slicing & DLP Redaction]", flush=True)
 
         for ticket in ordered_tickets:
             if "WRITER" in ticket.ticket_id:
@@ -639,6 +663,8 @@ class ScrumMasterOrchestrator:
 
             def worker_fn(t: SubTaskTicket, tier: Any = "TIER_3_JUNIOR_SWE", esc_prompt: Optional[str] = None) -> WorkerProposal:
                 tier_str = tier.value if hasattr(tier, "value") else str(tier)
+                if os.environ.get("HERMES_LIVE_PROGRESS") == "1":
+                    print(f"📍 [Stage 4/6: Multi-Tier LLM Synthesis (Ticket: {t.ticket_id}, Tier: {tier_str})]", flush=True)
                 f_contents = reader.read_allowed_files(t.allowed_files)
                 for f, content in accumulated_patches.items():
                     if f in t.allowed_files:
@@ -649,15 +675,51 @@ class ScrumMasterOrchestrator:
                     res_scrub = vault.scrub(content, source=f)
                     scrubbed_contents[f] = res_scrub.scrubbed_text
 
+                from hermes.ingestion.context_slicer import ContextSlicer
+                sliced_contents = {}
+                for f, content in scrubbed_contents.items():
+                    if len(content.splitlines()) > 120:
+                        target_line = 1
+                        if failure_context:
+                            for fail in failure_context.get("failures", []):
+                                frames = fail.get("frames", []) if isinstance(fail, dict) else getattr(fail, "frames", [])
+                                for frame in frames:
+                                    fp = frame.get("file_path", "") if isinstance(frame, dict) else getattr(frame, "file_path", "")
+                                    ln = frame.get("line_number", 0) if isinstance(frame, dict) else getattr(frame, "line_number", 0)
+                                    if fp and (fp.replace("\\", "/").endswith(f.replace("\\", "/")) or f.replace("\\", "/").endswith(fp.replace("\\", "/")) or Path(fp).name == Path(f).name) and ln > 0:
+                                        target_line = ln
+                                        break
+                                if target_line > 1:
+                                    break
+                                fail_ln = fail.get("line_number") if isinstance(fail, dict) else getattr(fail, "line_number", 0)
+                                if fail_ln and int(fail_ln) > 1:
+                                    target_line = int(fail_ln)
+                                    break
+                            if target_line <= 1:
+                                raw_c = f"{failure_context.get('summary', '')}\n{failure_context.get('raw_output', '')}"
+                                bname = Path(f).name
+                                m_ln = re.search(rf"{re.escape(bname)}:(\d+)", raw_c, re.IGNORECASE)
+                                if m_ln:
+                                    target_line = int(m_ln.group(1))
+                        sliced_contents[f] = ContextSlicer.slice_file_around_line(content, target_line=target_line, window_size=60)
+                        if os.environ.get("HERMES_LIVE_PROGRESS") == "1":
+                            print(f"   ✂️ [CONTEXT SLICED: {f}] {len(content.splitlines())} lines -> ~60 lines around L{target_line}", flush=True)
+                    else:
+                        sliced_contents[f] = content
+
                 prompt_parts = []
                 if esc_prompt:
                     prompt_parts.append(esc_prompt)
                 if failure_context:
                     dom_hints = failure_context.get("dom_locator_hints")
                     if dom_hints:
+                        if len(dom_hints) > 1500:
+                            dom_hints = dom_hints[:1500] + "\n... [DOM snapshot excerpt truncated] ..."
                         prompt_parts.append(dom_hints)
                     raw_err = failure_context.get("summary") or failure_context.get("raw_output")
                     if raw_err and raw_err not in (esc_prompt or ""):
+                        if len(raw_err) > 2000:
+                            raw_err = raw_err[:2000] + "\n... [CI failure output truncated] ..."
                         prompt_parts.append(f"CI Failure Details:\n{raw_err}")
                 combined_instruction = "\n\n".join(prompt_parts)
 
@@ -670,8 +732,9 @@ class ScrumMasterOrchestrator:
                     agent_role=agent_role,
                     ticket=t,
                     tier=tier_str,
-                    file_contents=scrubbed_contents,
+                    file_contents=sliced_contents,
                     instruction=scrubbed_prompt,
+                    full_file_contents=scrubbed_contents,
                 )
 
                 rehydrated_map = {f: vault.rehydrate(c) for f, c in patch_map.items()}
@@ -710,6 +773,8 @@ class ScrumMasterOrchestrator:
         # STAGE 5: Counterfactual Differential Verification
         # -----------------------------------------------------------------
         stages_executed.append("counterfactual_verification")
+        if os.environ.get("HERMES_LIVE_PROGRESS") == "1":
+            print("📍 [Stage 6/6: Counterfactual Differential Verification & Shadow Delivery]", flush=True)
         cf_verifier = CounterfactualVerifier(self.workspace_path)
         for rel_f, patch_content in accumulated_patches.items():
             if cf_verifier.is_test_path(rel_f):

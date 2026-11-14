@@ -1009,6 +1009,101 @@ def resolve_model_for_call(
     )
 
 
+def apply_surgical_edit(orig_text: str, search_str: str, replace_str: str) -> Optional[str]:
+    """Applies a surgical search-and-replace edit with 3-level deterministic fallback:
+    1. Exact substring & stripped match.
+    2. Normalized line-by-line match (ignoring whitespace, CRLF, raw string r'' vs '', quotes '' vs "").
+    3. difflib.SequenceMatcher line-window best-block match (ratio >= 0.85), preserving indentation.
+    """
+    if not search_str or not orig_text:
+        return None
+
+    orig = orig_text.replace("\r\n", "\n")
+    sn = search_str.replace("\r\n", "\n")
+    rn = replace_str.replace("\r\n", "\n")
+
+    # Level 1: Exact substring match
+    if sn in orig:
+        res = orig.replace(sn, rn, 1)
+        return res.replace("\n", "\r\n") if "\r\n" in orig_text else res
+    if sn.strip() in orig:
+        res = orig.replace(sn.strip(), rn.strip(), 1)
+        return res.replace("\n", "\r\n") if "\r\n" in orig_text else res
+
+    orig_lines = orig.splitlines()
+    search_lines = [l for l in sn.splitlines() if l.strip()]
+    if not search_lines:
+        return None
+
+    def _norm(line: str) -> str:
+        s = line.strip()
+        s = re.sub(r'\br(["\'])', r'\1', s)
+        s = s.replace("'", '"')
+        return s
+
+    norm_search = [_norm(l) for l in search_lines]
+    K = len(search_lines)
+
+    # Level 2: Normalized line-by-line match
+    matched_idx = -1
+    for i in range(0, len(orig_lines) - K + 1):
+        window = orig_lines[i : i + K]
+        if all(_norm(window[j]) == norm_search[j] for j in range(K)):
+            matched_idx = i
+            break
+
+    if matched_idx >= 0:
+        i = matched_idx
+        window = orig_lines[i : i + K]
+        orig_indent = len(window[0]) - len(window[0].lstrip()) if window else 0
+        sr_indent = len(search_lines[0]) - len(search_lines[0].lstrip())
+        delta = max(0, orig_indent - sr_indent)
+        prefix = " " * delta
+
+        rn_lines = rn.strip("\r\n").splitlines()
+        new_lines = [(prefix + l if l.strip() else "") for l in rn_lines]
+        res_lines = orig_lines[:i] + new_lines + orig_lines[i + K :]
+        res = "\n".join(res_lines)
+        if orig.endswith("\n"):
+            res += "\n"
+        return res.replace("\n", "\r\n") if "\r\n" in orig_text else res
+
+    # Level 3: SequenceMatcher line-window best-block match (ratio >= 0.85)
+    import difflib
+    norm_search_str = "\n".join(norm_search)
+    best_ratio = 0.0
+    best_window = None
+
+    min_w = max(1, K - 2)
+    max_w = min(len(orig_lines), K + 3)
+
+    for W in range(min_w, max_w + 1):
+        for i in range(0, len(orig_lines) - W + 1):
+            window_str = "\n".join(_norm(l) for l in orig_lines[i : i + W])
+            ratio = difflib.SequenceMatcher(None, window_str, norm_search_str).ratio()
+            if ratio > best_ratio:
+                best_ratio = ratio
+                best_window = (i, W)
+
+    if best_ratio >= 0.85 and best_window is not None:
+        i, W = best_window
+        window = orig_lines[i : i + W]
+        orig_indent = len(window[0]) - len(window[0].lstrip()) if window else 0
+        sr_indent = len(search_lines[0]) - len(search_lines[0].lstrip())
+        delta = max(0, orig_indent - sr_indent)
+        prefix = " " * delta
+
+        rn_lines = rn.strip("\r\n").splitlines()
+        new_lines = [(prefix + l if l.strip() else "") for l in rn_lines]
+        res_lines = orig_lines[:i] + new_lines + orig_lines[i + W :]
+        res = "\n".join(res_lines)
+        if orig.endswith("\n"):
+            res += "\n"
+        return res.replace("\n", "\r\n") if "\r\n" in orig_text else res
+
+    return None
+
+
 # -----------------------------------------------------------------------------
 # Hermes Multi-Tier LLM Adapter
 # -----------------------------------------------------------------------------
@@ -1272,6 +1367,7 @@ class HermesLLMAdapter:
         user_prompt: str,
         timeout: int,
     ) -> str:
+        import time
         import urllib.request
         cfg = PROVIDERS_CONFIG.get(provider, {})
         base_env = cfg.get("base_url_env")
@@ -1298,11 +1394,17 @@ class HermesLLMAdapter:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": user_prompt})
 
-        body = {
+        body: Dict[str, Any] = {
             "model": model_name,
             "messages": messages,
             "temperature": 0.2,
         }
+        live_progress = os.environ.get("HERMES_LIVE_PROGRESS") == "1"
+        if live_progress:
+            body["stream"] = True
+        if provider == "ollama":
+            body["options"] = {"num_ctx": 8192}
+
         req = urllib.request.Request(
             url,
             data=json.dumps(body).encode("utf-8"),
@@ -1310,8 +1412,49 @@ class HermesLLMAdapter:
         )
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-                return data["choices"][0]["message"]["content"]
+                content_type = resp.headers.get("Content-Type", "")
+                if "text/event-stream" in content_type:
+                    collected: List[str] = []
+                    token_count = 0
+                    start_time = time.time()
+                    last_print = 0.0
+                    prov_tag = provider.upper()
+                    if live_progress:
+                        print(f"\n   🤖 [{prov_tag} | {model_name}] thinking & generating...", flush=True)
+                    for raw_line in resp:
+                        line = raw_line.decode("utf-8", errors="replace").strip()
+                        if not line:
+                            continue
+                        if line.startswith("data:"):
+                            payload = line[5:].strip()
+                            if payload == "[DONE]":
+                                break
+                            try:
+                                chunk = json.loads(payload)
+                                choice = chunk.get("choices", [{}])[0]
+                                delta = choice.get("delta", {})
+                                c = delta.get("content") or ""
+                                reasoning = delta.get("reasoning") or delta.get("reasoning_content")
+                                if reasoning and live_progress:
+                                    r_snippet = reasoning.replace("\n", " ")[:60]
+                                    print(f"\r   🤔 [REASONING] {r_snippet}...", end="", flush=True)
+                                if c:
+                                    collected.append(c)
+                                    token_count += 1
+                                    now = time.time()
+                                    if live_progress and (now - last_print > 0.5):
+                                        elapsed = int(now - start_time)
+                                        print(f"\r   🤖 [{prov_tag} | {model_name}] tokens: ~{token_count} | elapsed: {elapsed}s", end="", flush=True)
+                                        last_print = now
+                            except Exception:
+                                continue
+                    if live_progress:
+                        total_sec = max(1, int(time.time() - start_time))
+                        print(f"\r   🤖 [{prov_tag} | {model_name}] tokens: ~{token_count} | elapsed: {total_sec}s (done)       \n", flush=True)
+                    return "".join(collected)
+                else:
+                    data = json.loads(resp.read().decode("utf-8"))
+                    return data["choices"][0]["message"]["content"]
         except Exception as e:
             raise RuntimeError(f"OpenAI-compatible provider '{provider}' call to {url} failed: {e}") from e
 
@@ -1348,6 +1491,7 @@ class HermesLLMAdapter:
         tier: str,
         file_contents: Dict[str, str],
         instruction: str = "",
+        full_file_contents: Optional[Dict[str, str]] = None,
     ) -> Dict[str, str]:
         """Produce proposed code modifications within ticket.allowed_files."""
         role_key = agent_role.value if isinstance(agent_role, AgentRole) else str(agent_role)
@@ -1375,43 +1519,57 @@ class HermesLLMAdapter:
         # Real LLM Generation via self.complete
         skill_def = get_agent_skill_definition(role_key)
         system_prompt = skill_def.format_system_prompt(instruction)
-        user_prompt = (
-            f"Ticket: {getattr(ticket, 'ticket_id', '')} - {getattr(ticket, 'title', '')}\n"
-            f"Allowed Files: {', '.join(getattr(ticket, 'allowed_files', []))}\n"
-            f"Current File Contents:\n{json.dumps(file_contents)}\n\n"
-            f"CRITICAL REQUIREMENT:\n"
-            f"Provide a valid JSON response with format:\n"
-            f'{{"proposed_changes": {{"<relative_file_path>": "<full_new_content>"}}}}'
+        has_existing = any(isinstance(v, str) and v.strip() for v in file_contents.values())
+        fmt_instr = (
+            "CRITICAL REQUIREMENT:\nDo NOT rewrite the entire file — preserve all other tests and assertions!\n"
+            'Return ONLY valid JSON using surgical edits:\n{"edits": [{"file": "<relative_file_path>", "search": "<exact lines>", "replace": "<new lines>"}]}'
+            if has_existing else
+            'CRITICAL REQUIREMENT:\nProvide a valid JSON response:\n{"proposed_changes": {"<relative_file_path>": "<full_new_content>"}}'
         )
+        user_prompt = f"Ticket: {getattr(ticket, 'ticket_id', '')} - {getattr(ticket, 'title', '')}\nAllowed Files: {', '.join(getattr(ticket, 'allowed_files', []))}\nCurrent File Contents:\n{json.dumps(file_contents)}\n\n{fmt_instr}"
         if instruction:
             user_prompt += f"\n\n[FAILURE CONTEXT & LOCATOR/DOM HINTS]\n{instruction}\n"
-
-        raw_text = self.complete(
-            role=role_key,
-            tier=tier,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            ticket=ticket,
-            allowed_files=getattr(ticket, "allowed_files", []),
-            cwd=self.workspace_path,
-        )
+        raw_text = self.complete(role=role_key, tier=tier, system_prompt=system_prompt, user_prompt=user_prompt, ticket=ticket, allowed_files=getattr(ticket, "allowed_files", []), cwd=self.workspace_path)
         json_data = extract_json_from_response(raw_text)
+        allowed = set(getattr(ticket, "allowed_files", []))
+        norm_a = {a.replace("\\", "/"): a for a in allowed}
+        base_a = {a.replace("\\", "/").rsplit("/", 1)[-1]: a for a in allowed}
+        def _res(p):
+            nk = (p or "").replace("\\", "/").lstrip("./")
+            if not allowed: return nk
+            if nk in norm_a: return norm_a[nk]
+            if nk in base_a: return base_a[nk]
+            return next(iter(allowed)) if len(allowed) == 1 else None
 
+        base_contents = full_file_contents if full_file_contents is not None else file_contents
         proposed: Dict[str, str] = {}
         if isinstance(json_data, dict):
-            if "proposed_changes" in json_data and isinstance(json_data["proposed_changes"], dict):
-                proposed = json_data["proposed_changes"]
-            elif "files" in json_data and isinstance(json_data["files"], dict):
-                proposed = json_data["files"]
+            if isinstance(json_data.get("edits"), list):
+                work = dict(base_contents)
+                for ed in json_data["edits"]:
+                    if not isinstance(ed, dict): continue
+                    t, sr, rp = _res(ed.get("file", "")), ed.get("search", ""), ed.get("replace", "")
+                    if not t or not sr or t not in work: continue
+                    new_text = apply_surgical_edit(work[t], sr, rp)
+                    if new_text is not None:
+                        work[t] = new_text
+                        proposed[t] = work[t]
+                    elif os.environ.get("HERMES_LIVE_PROGRESS") == "1":
+                        print(f"   ⚠️ [SURGICAL EDIT SKIPPED] No match in {t} for: {sr[:45]}...", flush=True)
+            if not proposed:
+                raw_m = json_data.get("proposed_changes") if isinstance(json_data.get("proposed_changes"), dict) else (json_data.get("files") if isinstance(json_data.get("files"), dict) else {k: v for k, v in json_data.items() if isinstance(v, str) and k not in ("error", "raw")})
+                for k, v in raw_m.items():
+                    t = _res(k)
+                    if t: proposed[t] = extract_code_or_diff(v)
+        if os.environ.get("HERMES_LIVE_PROGRESS") == "1":
+            if proposed:
+                import difflib as _dl
+                for fn, nt in proposed.items():
+                    dl = list(_dl.unified_diff(base_contents.get(fn, "").splitlines(), nt.splitlines(), fromfile=f"a/{fn}", tofile=f"b/{fn}", lineterm="", n=2))
+                    if dl:
+                        print(f"   🔍 [PROPOSED EDIT PREVIEW: {fn}]", flush=True)
+                        for x in dl[:25]: print(f"      {x}", flush=True)
             else:
-                proposed = {k: v for k, v in json_data.items() if isinstance(v, str)}
-
-        # Sanitize markdown fences from all proposed file contents
-        proposed = {k: extract_code_or_diff(v) for k, v in proposed.items()}
-
-        # Filter out files outside ticket.allowed_files
-        allowed = set(getattr(ticket, "allowed_files", []))
-        if allowed:
-            proposed = {k: v for k, v in proposed.items() if k in allowed}
-
+                err_msg = json_data.get("error", "") if isinstance(json_data, dict) else ""
+                print(f"   ⚠️ [LLM RESPONSE] No edits parsed. {err_msg}", flush=True)
         return proposed

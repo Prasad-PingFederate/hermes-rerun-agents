@@ -169,6 +169,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         print("🔍 [Hermes Run] Initializing test triage & heal sprint")
         res = orchestrator.run_sprint(
             mode="shadow" if shadow else "heal",
+            scope=scope,
             artifact_paths=artifact_path,
             pytest_cmd=pytest_cmd,
             auto_approve=auto_approve,
