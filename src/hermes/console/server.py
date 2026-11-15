@@ -104,6 +104,30 @@ class RealRollbackRequest(BaseModel):
     snapshot_id: str
 
 
+class RunTestRequest(BaseModel):
+    test_path: str
+    cmd: Optional[str] = None
+
+
+class IngestArtifactRequest(BaseModel):
+    artifact_rel_path: str
+
+
+class ValidateASTRequest(BaseModel):
+    code: str
+    filepath: str = "snippet.py"
+    allow_test_modification: bool = True
+
+
+class LocatorAuditRequest(BaseModel):
+    selector: str
+    is_python: bool = True
+
+
+class OpenTraceRequest(BaseModel):
+    trace_path: str
+
+
 def get_doctor_diagnostics(workspace: Path) -> Dict[str, Any]:
     from hermes.execution.llm_provider_adapter import resolve_provider
 
@@ -1262,6 +1286,29 @@ def get_demo_diff_endpoint(workspace_id: str):
     elif ws.metadata.get("cached_diff"):
         diff_text = ws.metadata["cached_diff"]
 
+    if not diff_text:
+        if ws.workspace_name == "PlaywrightFlake":
+            diff_text = (
+                "--- a/tests/test_flake.py (Baseline)\n"
+                "+++ b/tests/test_flake.py (Staged Proposal)\n"
+                "@@ -4,4 +4,6 @@\n"
+                " def test_intermittent_locator():\n"
+                "-    val = random.choice([True, False, True])\n"
+                "-    assert val is True, 'Timeout 3000ms waiting for locator button#checkout'\n"
+                "+    # Healed: Replaced brittle CSS locator with auto-waiting semantic locator\n"
+                "+    button = page.get_by_role(\"button\", name=\"Checkout\")\n"
+                "+    expect(button).to_be_visible(timeout=5000)\n"
+            )
+        elif ws.workspace_name == "EnvironmentNoise":
+            diff_text = (
+                "# [ENVIRONMENT_NOISE] AUTOMATED CODE MODIFICATION PROHIBITED\n"
+                "# ConnectionRefusedError: [Errno 111] Connection refused on 127.0.0.1:5432\n"
+                "#\n"
+                "# Root Cause: Database service is offline or port 5432 is unreachable.\n"
+                "# Action: SRE / DevOps incident ticket dispatched.\n"
+                "# Repository files remain 100% byte-for-byte untouched.\n"
+            )
+
     if diff_text:
         ws.metadata["cached_diff"] = diff_text
         demo_manager.persist_workspace(ws)
@@ -2070,6 +2117,274 @@ def export_real_audit_zip_endpoint():
     ws_path = get_active_workspace_path()
     ws = demo_manager.get_or_create_real_workspace(ws_path)
     return export_demo_audit_zip_endpoint(ws.workspace_id)
+
+
+@app.get("/api/real/discover", dependencies=[Depends(verify_hermes_token)])
+def discover_real_workspace_endpoint():
+    """Discover all test suites and failure artifacts in active workspace."""
+    ws_path = get_active_workspace_path()
+    tests = []
+    artifacts = []
+    skip_dirs = {".git", ".venv", "venv", "node_modules", ".tm_snapshots", "__pycache__", ".idea", ".claude"}
+
+    for root, dirs, files in os.walk(ws_path):
+        dirs[:] = [d for d in dirs if d not in skip_dirs and not d.startswith(".tm_")]
+        for f in files:
+            full_path = Path(root) / f
+            rel_path = str(full_path.relative_to(ws_path)).replace("\\", "/")
+
+            # Detect test files
+            if f.endswith(".py") and ("test" in f.lower() or "playwright" in f.lower()):
+                framework = "Python Playwright" if "playwright" in f.lower() else "Pytest"
+                tests.append({
+                    "file_name": f,
+                    "rel_path": rel_path,
+                    "framework": framework,
+                    "size_bytes": full_path.stat().st_size,
+                })
+            elif f.endswith((".spec.ts", ".test.ts", ".spec.js", ".test.js")):
+                tests.append({
+                    "file_name": f,
+                    "rel_path": rel_path,
+                    "framework": "Playwright TS/JS",
+                    "size_bytes": full_path.stat().st_size,
+                })
+
+            # Detect artifacts
+            if f.endswith(".xml") and ("junit" in f.lower() or "test" in f.lower() or "report" in f.lower()):
+                artifacts.append({"file_name": f, "rel_path": rel_path, "type": "JUNIT_XML"})
+            elif f.endswith(".json") and ("ctrf" in f.lower() or "report" in f.lower()):
+                artifacts.append({"file_name": f, "rel_path": rel_path, "type": "CTRF_JSON"})
+            elif f.endswith(".zip") and ("trace" in f.lower() or "artifact" in f.lower()):
+                artifacts.append({"file_name": f, "rel_path": rel_path, "type": "PLAYWRIGHT_TRACE"})
+            elif f.endswith((".png", ".jpg", ".jpeg")) and ("failure" in f.lower() or "error" in f.lower() or "diff" in f.lower()):
+                artifacts.append({"file_name": f, "rel_path": rel_path, "type": "FAILURE_SCREENSHOT"})
+
+    return {
+        "status": "success",
+        "workspace": str(ws_path),
+        "workspace_name": ws_path.name,
+        "test_count": len(tests),
+        "tests": sorted(tests, key=lambda x: x["rel_path"]),
+        "artifact_count": len(artifacts),
+        "artifacts": sorted(artifacts, key=lambda x: x["rel_path"]),
+    }
+
+
+@app.post("/api/real/run-test", dependencies=[Depends(verify_hermes_token)])
+def run_real_test_endpoint(req: RunTestRequest):
+    """Run a specific test in the workspace and return stdout/stderr/returncode."""
+    ws_path = get_active_workspace_path()
+    test_file = ws_path / req.test_path
+    if not test_file.exists():
+        raise HTTPException(status_code=404, detail=f"Test file not found: {req.test_path}")
+
+    # Determine runner
+    if req.cmd:
+        cmd_list = req.cmd.split()
+    elif req.test_path.endswith((".ts", ".js")):
+        npx_bin = shutil.which("npx") or "npx"
+        cmd_list = [npx_bin, "playwright", "test", req.test_path]
+    else:
+        cmd_list = [sys.executable, "-m", "pytest", req.test_path, "-v"]
+
+    is_win = (os.name == "nt")
+    t0 = time.time()
+    try:
+        proc = subprocess.run(cmd_list, cwd=str(ws_path), capture_output=True, text=True, timeout=120, shell=is_win)
+        elapsed_s = round(time.time() - t0, 2)
+        passed = (proc.returncode == 0)
+        output = proc.stdout + ("\n" + proc.stderr if proc.stderr else "")
+        return {
+            "status": "passed" if passed else "failed",
+            "passed": passed,
+            "returncode": proc.returncode,
+            "output": output,
+            "elapsed_s": elapsed_s,
+            "cmd": " ".join(cmd_list),
+            "test_path": req.test_path,
+        }
+    except subprocess.TimeoutExpired:
+        return {
+            "status": "timeout",
+            "passed": False,
+            "returncode": -1,
+            "output": f"Test timed out after 120s: {' '.join(cmd_list)}",
+            "elapsed_s": 120.0,
+            "cmd": " ".join(cmd_list),
+            "test_path": req.test_path,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/real/ingest-artifact", dependencies=[Depends(verify_hermes_token)])
+def ingest_real_artifact_endpoint(req: IngestArtifactRequest):
+    """Ingest a discovered CI artifact file and return triage diagnostic."""
+    ws_path = get_active_workspace_path()
+    art_file = ws_path / req.artifact_rel_path
+    if not art_file.exists():
+        raise HTTPException(status_code=404, detail=f"Artifact not found: {req.artifact_rel_path}")
+
+    from hermes.agents.ci_failure_ingestor import CIFailureIngestor
+    ingestor = CIFailureIngestor(ws_path)
+    tickets = ingestor.ingest([str(art_file)])
+    return {
+        "status": "success",
+        "artifact": req.artifact_rel_path,
+        "tickets_found": len(tickets),
+        "tickets": [t.__dict__ if hasattr(t, "__dict__") else t for t in tickets],
+    }
+
+
+@app.post("/api/real/validate-ast", dependencies=[Depends(verify_hermes_token)])
+def validate_ast_endpoint(req: ValidateASTRequest):
+    """Validate patch code against AST syntax, zero assertion erosion, and security blast-radius."""
+    from hermes.guards.ast_patch_guard import ASTPatchGuard
+    ws_path = get_active_workspace_path()
+    try:
+        report = ASTPatchGuard.analyze(
+            workspace_root=ws_path,
+            proposed_changes={req.filepath: req.code},
+            allow_test_modification=req.allow_test_modification,
+        )
+        is_valid = report.get("valid", True) and not report.get("tampering_detected", False)
+        reasons = report.get("reasons", [])
+        return {
+            "status": "success",
+            "valid": is_valid,
+            "error": "\n".join(reasons) if not is_valid else None,
+            "tampering_detected": report.get("tampering_detected", False),
+            "reasons": reasons,
+            "blast_radius": report.get("blast_radius", {}),
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "valid": False,
+            "error": str(e),
+            "tampering_detected": True,
+            "reasons": [str(e)],
+            "blast_radius": {},
+        }
+
+
+@app.post("/api/real/locator-audit", dependencies=[Depends(verify_hermes_token)])
+def locator_audit_endpoint(req: LocatorAuditRequest):
+    """Audit UI locator/selector resilience and generate accessible Playwright recommendations."""
+    from hermes.core.verification.accessibility_locator_guard import AccessibilityLocatorGuard
+    sel = req.selector.strip()
+    score = 95
+    is_brittle = False
+    strategy = "SEMANTIC_ROLE"
+    reasons = []
+
+    if re.search(r":nth-child|:nth-of-type|:first-child|:last-child", sel):
+        score = 25
+        is_brittle = True
+        strategy = "STRUCTURAL_POSITIONAL"
+        reasons.append("Positional selector (nth-child) breaks whenever DOM hierarchy shifts or items re-order.")
+    elif re.search(r"//|\bxpath\b", sel) or sel.startswith("/"):
+        score = 30
+        is_brittle = True
+        strategy = "XPATH_DOM_PATH"
+        reasons.append("Absolute or deep XPath is fragile across responsive layouts and framework updates.")
+    elif sel.count(">") >= 2 or sel.count(" ") >= 3:
+        score = 35
+        is_brittle = True
+        strategy = "DEEP_TAG_CHAIN"
+        reasons.append("Deep tag chain (> 2 levels) tightly couples test to layout implementation details.")
+    elif re.search(r"\b(css|jsx)_[a-zA-Z0-9]{4,}\b|\bcss-[0-9a-z]{4,}\b", sel):
+        score = 20
+        is_brittle = True
+        strategy = "HASHED_CLASS_NAME"
+        reasons.append("CSS hash or minified class name regenerates on every build/bundle.")
+    elif sel.startswith("#") or ("#" in sel and " " not in sel):
+        score = 50
+        is_brittle = True
+        strategy = "CSS_ID"
+        reasons.append("Raw ID attributes often regenerate dynamically in modern React/Vue SPAs.")
+    elif "get_by_role" in sel or "getByRole" in sel:
+        score = 98
+        is_brittle = False
+        strategy = "SEMANTIC_ROLE"
+    elif "get_by_test_id" in sel or "getByTestId" in sel:
+        score = 95
+        is_brittle = False
+        strategy = "DATA_TESTID"
+    elif "get_by_text" in sel or "getByText" in sel or "has-text" in sel:
+        score = 85
+        is_brittle = False
+        strategy = "TEXT_CONTENT"
+
+    clean_target = re.sub(r"^[#\.]|[>\(\)\"']", "", sel).strip().split()[-1] if sel else "element"
+    clean_target_title = clean_target.replace("-", " ").replace("_", " ").title()
+
+    upgraded_py = AccessibilityLocatorGuard.generate_upgrade_suggestion(sel, strategy, is_python=True)
+    upgraded_ts = AccessibilityLocatorGuard.generate_upgrade_suggestion(sel, strategy, is_python=False)
+
+    alternatives = [
+        {
+            "strategy": "Semantic Role (Playwright Recommended)",
+            "resilience": 98,
+            "py": f'page.get_by_role("button", name="{clean_target_title}")',
+            "ts": f'page.getByRole("button", {{ name: "{clean_target_title}" }})',
+        },
+        {
+            "strategy": "Dedicated Test ID Invariant",
+            "resilience": 95,
+            "py": f'page.get_by_test_id("{clean_target.lower()}-btn")',
+            "ts": f'page.getByTestId("{clean_target.lower()}-btn")',
+        },
+        {
+            "strategy": "Accessible Label / Placeholder",
+            "resilience": 90,
+            "py": f'page.get_by_label("{clean_target_title}")',
+            "ts": f'page.getByLabel("{clean_target_title}")',
+        },
+        {
+            "strategy": "Visible Text Match",
+            "resilience": 82,
+            "py": f'page.get_by_text("{clean_target_title}")',
+            "ts": f'page.getByText("{clean_target_title}")',
+        },
+    ]
+
+    return {
+        "status": "success",
+        "original_selector": sel,
+        "is_brittle": is_brittle,
+        "resilience_score": score,
+        "strategy": strategy,
+        "reasons": reasons,
+        "upgraded_python": upgraded_py or alternatives[0]["py"],
+        "upgraded_ts": upgraded_ts or alternatives[0]["ts"],
+        "alternatives": alternatives,
+    }
+
+
+@app.post("/api/real/open-trace", dependencies=[Depends(verify_hermes_token)])
+def open_trace_endpoint(req: OpenTraceRequest):
+    """Launch Playwright Trace Viewer non-blocking for a target trace.zip."""
+    ws_path = get_active_workspace_path()
+    trace_file = ws_path / req.trace_path
+    if not trace_file.exists():
+        trace_file = Path(req.trace_path)
+    if not trace_file.exists():
+        raise HTTPException(status_code=404, detail=f"Trace file not found: {req.trace_path}")
+
+    npx_bin = shutil.which("npx") or "npx"
+    is_win = (os.name == "nt")
+    cmd = [npx_bin, "playwright", "show-trace", str(trace_file)]
+    try:
+        subprocess.Popen(cmd, cwd=str(ws_path), shell=is_win)
+        return {
+            "status": "success",
+            "message": f"Playwright Trace Viewer launched for {req.trace_path}",
+            "cmd": " ".join(cmd),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to launch trace viewer: {e}")
 
 
 @app.post("/api/tasks/{task_id}/apply", dependencies=[Depends(verify_hermes_token)])

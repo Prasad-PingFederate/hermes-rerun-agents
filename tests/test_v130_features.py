@@ -158,6 +158,134 @@ class TestV130Features(unittest.TestCase):
             current_code = file_to_heal.read_text(encoding="utf-8")
             self.assertEqual(current_code, original_code, "Shadow mode should not mutate files on disk")
 
+    def test_6_real_workspace_discovery_and_runner(self):
+        """Verifies GET /api/real/discover and POST /api/real/run-test on workspace."""
+        with tempfile.TemporaryDirectory() as td:
+            ws = Path(td).resolve()
+            test_dir = ws / "tests"
+            test_dir.mkdir()
+            test_file = test_dir / "test_simple.py"
+            test_file.write_text("def test_ok(): assert 1 == 1\n", encoding="utf-8")
+
+            # Also create an artifact
+            artifact_file = ws / "junit_report.xml"
+            artifact_file.write_text("<testsuites></testsuites>", encoding="utf-8")
+
+            # Switch workspace
+            self.client.post("/api/real/workspace", json={"workspace": str(ws)}, headers=self.headers)
+
+            # Discover
+            res_disc = self.client.get("/api/real/discover", headers=self.headers)
+            self.assertEqual(res_disc.status_code, 200)
+            disc_data = res_disc.json()
+            self.assertEqual(disc_data["status"], "success")
+            self.assertGreaterEqual(disc_data["test_count"], 1)
+            self.assertTrue(any(t["rel_path"] == "tests/test_simple.py" for t in disc_data["tests"]))
+            self.assertGreaterEqual(disc_data["artifact_count"], 1)
+
+            # Run test
+            res_run = self.client.post(
+                "/api/real/run-test",
+                json={"test_path": "tests/test_simple.py"},
+                headers=self.headers,
+            )
+            self.assertEqual(res_run.status_code, 200)
+            run_data = res_run.json()
+            self.assertTrue(run_data["passed"])
+            self.assertEqual(run_data["returncode"], 0)
+
+    def test_7_real_workspace_validate_ast_endpoint(self):
+        """Verifies POST /api/real/validate-ast detects syntax errors and prohibited constructs."""
+        # 1. Clean valid Python code
+        res_ok = self.client.post(
+            "/api/real/validate-ast",
+            json={"code": "def valid():\n    return 42\n", "filepath": "clean.py"},
+            headers=self.headers,
+        )
+        self.assertEqual(res_ok.status_code, 200)
+        data_ok = res_ok.json()
+        self.assertTrue(data_ok["valid"])
+        self.assertIsNone(data_ok["error"])
+
+        # 2. Syntax error
+        res_bad = self.client.post(
+            "/api/real/validate-ast",
+            json={"code": "def syntax_err(\n    return 42\n", "filepath": "bad.py"},
+            headers=self.headers,
+        )
+        self.assertEqual(res_bad.status_code, 200)
+        data_bad = res_bad.json()
+        self.assertFalse(data_bad["valid"])
+
+        # 3. Security violation: shell=True
+        res_sec = self.client.post(
+            "/api/real/validate-ast",
+            json={"code": "import subprocess\ndef hack():\n    subprocess.run('echo hello', shell=True)\n", "filepath": "sec.py"},
+            headers=self.headers,
+        )
+        self.assertEqual(res_sec.status_code, 200)
+        data_sec = res_sec.json()
+        self.assertFalse(data_sec["valid"])
+        self.assertTrue(data_sec["tampering_detected"])
+
+    def test_8_real_workspace_locator_audit_endpoint(self):
+        """Verifies POST /api/real/locator-audit scores resilience and suggests Playwright upgrades."""
+        # 1. Brittle CSS ID
+        res_brittle = self.client.post(
+            "/api/real/locator-audit",
+            json={"selector": "button#checkout", "is_python": True},
+            headers=self.headers,
+        )
+        self.assertEqual(res_brittle.status_code, 200)
+        data_brittle = res_brittle.json()
+        self.assertTrue(data_brittle["is_brittle"])
+        self.assertLessEqual(data_brittle["resilience_score"], 50)
+        self.assertIn("get_by_role", data_brittle["upgraded_python"])
+        self.assertGreaterEqual(len(data_brittle["alternatives"]), 2)
+
+        # 2. Positional nth-child
+        res_nth = self.client.post(
+            "/api/real/locator-audit",
+            json={"selector": "div > form > button:nth-child(2)"},
+            headers=self.headers,
+        )
+        self.assertEqual(res_nth.status_code, 200)
+        data_nth = res_nth.json()
+        self.assertTrue(data_nth["is_brittle"])
+        self.assertEqual(data_nth["strategy"], "STRUCTURAL_POSITIONAL")
+        self.assertLessEqual(data_nth["resilience_score"], 30)
+
+        # 3. Semantic Playwright locator
+        res_resilient = self.client.post(
+            "/api/real/locator-audit",
+            json={"selector": 'page.get_by_role("button", name="Submit")'},
+            headers=self.headers,
+        )
+        self.assertEqual(res_resilient.status_code, 200)
+        data_resilient = res_resilient.json()
+        self.assertFalse(data_resilient["is_brittle"])
+        self.assertGreaterEqual(data_resilient["resilience_score"], 90)
+
+    def test_9_real_workspace_open_trace_endpoint(self):
+        """Verifies POST /api/real/open-trace handles trace file paths safely."""
+        with tempfile.TemporaryDirectory() as td:
+            ws = Path(td).resolve()
+            trace_path = ws / "trace.zip"
+            trace_path.write_bytes(b"dummy zip content")
+
+            self.client.post("/api/real/workspace", json={"workspace": str(ws)}, headers=self.headers)
+
+            with patch("subprocess.Popen") as mock_popen:
+                res = self.client.post(
+                    "/api/real/open-trace",
+                    json={"trace_path": "trace.zip"},
+                    headers=self.headers,
+                )
+                self.assertEqual(res.status_code, 200)
+                data = res.json()
+                self.assertEqual(data["status"], "success")
+                self.assertTrue(mock_popen.called)
+
 
 if __name__ == "__main__":
     unittest.main()

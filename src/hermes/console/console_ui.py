@@ -75,15 +75,16 @@ CONSOLE_HTML = """<!DOCTYPE html>
 
     /* Top Bar */
     header.top-bar {
-      height: 48px;
+      height: 52px;
       background-color: var(--bg-panel);
       border-bottom: 1px solid var(--border-hairline);
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 0 20px;
+      padding: 0 16px;
       flex-shrink: 0;
       z-index: 10;
+      gap: 12px;
     }
 
     .brand-section {
@@ -247,13 +248,23 @@ CONSOLE_HTML = """<!DOCTYPE html>
 
     /* Left Rail */
     aside.left-rail {
-      width: 260px;
+      width: 270px;
       background-color: var(--bg-panel);
       border-right: 1px solid var(--border-hairline);
       display: flex;
       flex-direction: column;
-      justify-content: space-between;
+      height: 100%;
       flex-shrink: 0;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    .rail-top-group {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      overflow: hidden;
     }
 
     .rail-section-header {
@@ -329,11 +340,28 @@ CONSOLE_HTML = """<!DOCTYPE html>
 
     /* Inbox List on Left Rail */
     .inbox-list {
+      flex: 1;
       display: flex;
       flex-direction: column;
       gap: 4px;
       padding: 4px 8px;
       overflow-y: auto;
+      min-height: 0;
+    }
+
+    .inbox-list::-webkit-scrollbar, .view-panel::-webkit-scrollbar, .terminal-body::-webkit-scrollbar {
+      width: 5px;
+      height: 5px;
+    }
+    .inbox-list::-webkit-scrollbar-track, .view-panel::-webkit-scrollbar-track, .terminal-body::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    .inbox-list::-webkit-scrollbar-thumb, .view-panel::-webkit-scrollbar-thumb, .terminal-body::-webkit-scrollbar-thumb {
+      background: rgba(231, 225, 214, 0.18);
+      border-radius: 3px;
+    }
+    .inbox-list::-webkit-scrollbar-thumb:hover, .view-panel::-webkit-scrollbar-thumb:hover, .terminal-body::-webkit-scrollbar-thumb:hover {
+      background: var(--copper);
     }
 
     .inbox-row {
@@ -1058,6 +1086,80 @@ CONSOLE_HTML = """<!DOCTYPE html>
       background: rgba(239, 83, 80, 0.25);
       border-color: #ef5350;
     }
+
+    /* Split Side-by-Side Diff View */
+    .diff-split-container {
+      display: flex;
+      width: 100%;
+      background: #0f0d0b;
+      min-height: 180px;
+    }
+    .diff-split-col {
+      flex: 1;
+      min-width: 0;
+    }
+    .diff-split-body {
+      font-family: var(--font-mono);
+      font-size: 11px;
+    }
+    .diff-line-row {
+      display: flex;
+      min-height: 20px;
+      line-height: 20px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.02);
+    }
+    .diff-line-num {
+      width: 38px;
+      padding-right: 8px;
+      text-align: right;
+      color: var(--text-dim);
+      background: rgba(0, 0, 0, 0.25);
+      border-right: 1px solid var(--border-hairline);
+      user-select: none;
+      flex-shrink: 0;
+      font-size: 10px;
+    }
+    .diff-line-del {
+      background: rgba(248, 113, 113, 0.12);
+      color: #fca5a5;
+    }
+    .diff-line-add {
+      background: rgba(74, 222, 128, 0.12);
+      color: #86efac;
+    }
+
+    /* Playwright Locator Studio */
+    .locator-studio-card {
+      transition: border-color 0.15s ease;
+    }
+    .locator-alt-tag {
+      background: var(--bg-code);
+      padding: 2px 6px;
+      border-radius: 3px;
+      border: 1px solid var(--border-hairline);
+      font-size: 10px;
+      transition: all 0.15s ease;
+    }
+    .locator-alt-tag:hover {
+      border-color: var(--copper);
+      color: var(--copper);
+    }
+
+    /* Filter pills */
+    .filter-type-pill {
+      transition: all 0.15s ease;
+    }
+    .filter-type-pill.active {
+      background: var(--bg-card) !important;
+      color: var(--text-main) !important;
+      border-color: var(--border-hairline) !important;
+    }
+
+    .diff-mode-btn.active {
+      background: var(--bg-card) !important;
+      color: var(--text-main) !important;
+      border-color: var(--border-hairline) !important;
+    }
   </style>
 </head>
 <body>
@@ -1072,23 +1174,23 @@ CONSOLE_HTML = """<!DOCTYPE html>
         <span class="dot"></span>
         <span id="label-workspace">InMemoryLedger</span>
       </div>
-      <div class="workspace-selector" style="display: inline-flex; align-items: center; gap: 4px; margin-left: 8px;">
-        <input type="text" id="input-real-workspace" placeholder="Target workspace path..." style="background: #1c1815; border: 1px solid #42382f; color: #f0e6df; padding: 4px 8px; border-radius: 4px; font-size: 11px; font-family: var(--font-mono); width: 220px;" title="Target project workspace path" />
-        <button id="btn-load-workspace" class="btn-top" style="padding: 4px 8px; font-size: 11px;" title="Load local repository workspace">📂 Load</button>
+      <div class="workspace-selector" style="display: inline-flex; align-items: center; gap: 6px; margin-left: 8px;">
+        <input type="text" id="input-real-workspace" placeholder="Target workspace path..." style="background: #1c1815; border: 1px solid #42382f; color: #f0e6df; padding: 5px 10px; border-radius: 4px; font-size: 11px; font-family: var(--font-mono); width: 280px;" title="Target project workspace path" />
+        <button id="btn-load-workspace" class="btn-top" style="padding: 5px 10px; font-size: 11px;" title="Load local repository workspace">📂 Load</button>
       </div>
     </div>
 
     <div class="top-meta">
-      <div class="meta-pill" id="pill-doctor" data-testid="pill-doctor" style="cursor: pointer;" title="Hermes Pre-Flight Doctor: OS, Runners, and LLM Status (Click to re-ping)">
+      <div class="meta-pill status-green" id="pill-doctor" data-testid="pill-doctor" style="cursor: pointer;" title="Hermes Pre-Flight Doctor: OS, Runners, and LLM Status (Click to re-ping)">
         <span class="dot"></span>
-        <span id="label-doctor">🖥️ Doctor: Checking...</span>
+        <span id="label-doctor">🩺 Doctor: Ready</span>
       </div>
       <button class="btn-top" id="btn-open-story" data-testid="btn-run-story" title="Launch Story Sprint DAG">
         <span>✨ New Story</span>
       </button>
       <div class="meta-pill" id="pill-provider" data-testid="pill-provider" style="cursor: pointer;" title="Configure LLM Providers">
         <span class="dot"></span>
-        <span id="label-provider">LocalHeuristicEngine · MOCK</span>
+        <span id="label-provider">🤖 OLLAMA · qwen2.5-coder:7b</span>
       </div>
       <div class="meta-pill status-red" id="pill-status" data-testid="pill-status">
         <span class="dot"></span>
@@ -1127,7 +1229,7 @@ CONSOLE_HTML = """<!DOCTYPE html>
   <div class="app-body">
     <!-- Left Rail -->
     <aside class="left-rail">
-      <div>
+      <div class="rail-top-group">
         <div class="rail-section-header">Views</div>
         <ul class="nav-list">
           <li class="nav-item active" data-tab="inbox" id="nav-inbox" data-testid="nav-inbox">
@@ -1151,10 +1253,15 @@ CONSOLE_HTML = """<!DOCTYPE html>
           </li>
         </ul>
 
-        <div class="rail-section-header" style="display: flex; justify-content: space-between; align-items: center;">
-          <span>Failure Queue</span>
-          <button class="btn-connect-sm" id="btn-open-connect" data-testid="btn-connect-repo">+ Connect</button>
+        <!-- Dual Mode Switcher: Failures vs Discovered Tests -->
+        <div style="display: flex; align-items: center; justify-content: space-between; padding: 8px 12px 6px; border-top: 1px solid var(--border-hairline);">
+          <div style="display: flex; gap: 4px;">
+            <button class="rail-tab-btn active" id="btn-tab-failures" style="background: var(--bg-card); border: 1px solid var(--border-hairline); color: var(--text-main); font-family: var(--font-mono); font-size: 10px; padding: 3px 8px; border-radius: 3px; cursor: pointer;">🔥 Failures</button>
+            <button class="rail-tab-btn" id="btn-tab-tests" style="background: transparent; border: 1px solid transparent; color: var(--text-dim); font-family: var(--font-mono); font-size: 10px; padding: 3px 8px; border-radius: 3px; cursor: pointer;">📂 Tests (<span id="count-discovered-tests">0</span>)</button>
+          </div>
+          <button class="btn-connect-sm" id="btn-open-connect" data-testid="btn-connect-repo" title="Connect another repo">+ Connect</button>
         </div>
+
         <div class="inbox-list" id="rail-inbox-list">
           <!-- Row 1: Ledger -->
           <div class="inbox-row selected" id="row-ledger" data-target="ledger" data-testid="inbox-row-ledger">
@@ -1199,6 +1306,24 @@ CONSOLE_HTML = """<!DOCTYPE html>
           <!-- Dynamic tasks / connected repos -->
           <div id="dynamic-inbox-items"></div>
         </div>
+
+        <!-- Discovered Tests Container (shown when 'Tests' tab is active) -->
+        <div id="rail-tests-container" style="display: none; flex: 1; flex-direction: column; min-height: 0; overflow: hidden;">
+          <div style="padding: 6px 8px; border-bottom: 1px solid var(--border-hairline); display: flex; flex-direction: column; gap: 6px; background: rgba(0,0,0,0.15);">
+            <input type="text" id="filter-tests-input" placeholder="🔍 Filter tests..." style="width: 100%; background: #1c1815; border: 1px solid #42382f; color: #f0e6df; padding: 4px 8px; border-radius: 4px; font-size: 10px; font-family: var(--font-mono);" />
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <div style="display: flex; gap: 4px; font-size: 9px; font-family: var(--font-mono);">
+                <button id="filter-pill-all" class="filter-type-pill active" style="background: var(--bg-card); border: 1px solid var(--border-hairline); color: var(--text-main); padding: 2px 5px; border-radius: 3px; cursor: pointer;">All (<span id="count-all-tests">0</span>)</button>
+                <button id="filter-pill-py" class="filter-type-pill" style="background: transparent; border: 1px solid transparent; color: var(--text-dim); padding: 2px 5px; border-radius: 3px; cursor: pointer;">🐍 Py</button>
+                <button id="filter-pill-pw" class="filter-type-pill" style="background: transparent; border: 1px solid transparent; color: var(--text-dim); padding: 2px 5px; border-radius: 3px; cursor: pointer;">🎭 PW</button>
+              </div>
+              <button id="btn-run-all-tests" class="btn-top" style="padding: 2px 6px; font-size: 9px;" title="Execute entire test suite in workspace">▶ Run All</button>
+            </div>
+          </div>
+          <div class="inbox-list" id="rail-tests-list" style="flex: 1; overflow-y: auto;">
+            <!-- Dynamically populated with discovered test files -->
+          </div>
+        </div>
       </div>
 
       <div class="rail-footer">
@@ -1242,6 +1367,62 @@ CONSOLE_HTML = """<!DOCTYPE html>
           <div style="display: flex; gap: 8px;">
             <button class="btn-top" id="btn-run-shadow" style="background: #25201b; border-color: #5c4d3c; color: #e6a76e; padding: 7px 12px; font-size: 12px;" title="Preview proposed patch in shadow mode without modifying files on disk">🛡️ Shadow Preview</button>
             <button class="btn-action-primary" id="btn-run-real-heal" style="padding: 7px 14px; font-size: 12px;" title="Apply patch, verify in sandbox, and auto-rollback on failure">⚡ Apply &amp; Verify</button>
+          </div>
+        </div>
+
+        <!-- Playwright Locator Resilience Studio (UI Automation Self-Healing) -->
+        <div class="locator-studio-card" id="locator-studio-card" style="background: #171411; border: 1px solid #4a3828; border-radius: 6px; padding: 14px 16px; margin-bottom: 14px; box-shadow: 0 4px 16px rgba(0,0,0,0.3);">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; border-bottom: 1px solid var(--border-hairline); padding-bottom: 8px;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span style="font-size: 15px;">🎭</span>
+              <span style="font-size: 13px; font-weight: 600; font-family: var(--font-mono); color: var(--copper);">PLAYWRIGHT LOCATOR RESILIENCE STUDIO</span>
+              <span class="tag-badge" id="locator-studio-badge" style="background: rgba(248,113,113,0.15); color: #f87171; border: 1px solid rgba(248,113,113,0.3);">BRITTLE DETECTED</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 6px; font-size: 11px; font-family: var(--font-mono); color: var(--text-dim);">
+              <span>Resilience Score:</span>
+              <strong id="locator-score-label" style="color: #f87171; font-size: 13px;">35%</strong>
+            </div>
+          </div>
+
+          <!-- Selector Audit Live Input Bar -->
+          <div style="display: flex; gap: 8px; margin-bottom: 12px;">
+            <input type="text" id="input-audit-selector" placeholder="Inspect or paste any selector (e.g., button#checkout, //div[2]/button, .submit-btn)..." value="button#checkout" style="flex: 1; background: #0f0d0b; border: 1px solid #42382f; color: #f0e6df; padding: 6px 12px; border-radius: 4px; font-family: var(--font-mono); font-size: 12px;" />
+            <button id="btn-audit-selector" class="btn-top" style="padding: 6px 12px; font-size: 11px; white-space: nowrap;">⚡ Audit Resilience</button>
+          </div>
+
+          <!-- Comparison Grid: Brittle vs Healed -->
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 10px;">
+            <div style="background: rgba(248,113,113,0.05); border: 1px solid rgba(248,113,113,0.25); border-radius: 4px; padding: 10px 12px;">
+              <div style="font-size: 10px; font-weight: 600; font-family: var(--font-mono); color: #f87171; margin-bottom: 4px;">⚠️ BRITTLE FAILING LOCATOR (CLASS/CSS ID)</div>
+              <code id="locator-brittle-text" style="font-size: 12px; color: #fca5a5; word-break: break-all;">button#checkout</code>
+              <div id="locator-brittle-reason" style="font-size: 10px; color: var(--text-dim); margin-top: 6px; line-height: 1.4;">
+                Tightly coupled to CSS ID. Breaks on dynamic hydration, re-renders, and ID hashing.
+              </div>
+            </div>
+            <div style="background: rgba(74,222,128,0.06); border: 1px solid rgba(74,222,128,0.25); border-radius: 4px; padding: 10px 12px;">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                <div style="font-size: 10px; font-weight: 600; font-family: var(--font-mono); color: #4ade80;">🛡️ HEALED ACCESSIBLE LOCATOR (RECOMMENDED)</div>
+                <div style="display: flex; gap: 4px;">
+                  <button id="btn-copy-py-locator" class="btn-top" style="padding: 1px 6px; font-size: 9px;" title="Copy Python Playwright locator">📋 Python</button>
+                  <button id="btn-copy-ts-locator" class="btn-top" style="padding: 1px 6px; font-size: 9px;" title="Copy TypeScript Playwright locator">📋 TS</button>
+                </div>
+              </div>
+              <code id="locator-healed-text" style="font-size: 12px; color: #86efac; word-break: break-all;">page.get_by_role("button", name="Checkout")</code>
+              <div id="locator-healed-reason" style="font-size: 10px; color: var(--text-dim); margin-top: 6px; line-height: 1.4;">
+                User-facing semantic accessibility role. Resilient across frontend refactors and responsive UI changes.
+              </div>
+            </div>
+          </div>
+
+          <!-- Alternative Strategies & Trace Trigger Bar -->
+          <div style="display: flex; justify-content: space-between; align-items: center; font-size: 11px; font-family: var(--font-mono); color: var(--text-dim); border-top: 1px solid var(--border-hairline); padding-top: 8px;">
+            <div id="locator-alt-list" style="display: flex; gap: 8px; flex-wrap: wrap;">
+              <span>Alternatives:</span>
+              <span class="locator-alt-tag" style="color: var(--copper); cursor: pointer;" title="Click to use test ID">data-testid="checkout-btn"</span>
+              <span>&middot;</span>
+              <span class="locator-alt-tag" style="color: var(--copper); cursor: pointer;" title="Click to use text match">has-text('Checkout')</span>
+            </div>
+            <button id="btn-open-trace-viewer" class="btn-top" style="display: none; padding: 3px 8px; font-size: 10px; color: #60a5fa; border-color: rgba(96,165,250,0.3);" title="Open Playwright Trace Viewer">🎭 Open in Trace Viewer</button>
           </div>
         </div>
 
@@ -1580,10 +1761,22 @@ graph LR
         </div>
 
         <div class="diff-container" data-testid="diff-container">
-          <div class="diff-header">
-            <span id="diff-file-label">src/InMemoryLedger.py (Unified Diff vs Baseline)</span>
-            <span id="diff-assertion-label">Test assertions preserved (2/2)</span>
+          <div class="diff-header" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <span id="diff-file-label">src/InMemoryLedger.py (Unified Diff vs Baseline)</span>
+              <div class="diff-view-mode-tabs" style="display: inline-flex; gap: 4px; background: rgba(0,0,0,0.3); padding: 2px 4px; border-radius: 4px; border: 1px solid var(--border-hairline);">
+                <button id="btn-diff-mode-unified" class="diff-mode-btn active" style="background: var(--bg-card); border: 1px solid var(--border-hairline); color: var(--text-main); font-family: var(--font-mono); font-size: 10px; padding: 2px 8px; border-radius: 3px; cursor: pointer;">📄 Unified</button>
+                <button id="btn-diff-mode-split" class="diff-mode-btn" style="background: transparent; border: 1px solid transparent; color: var(--text-dim); font-family: var(--font-mono); font-size: 10px; padding: 2px 8px; border-radius: 3px; cursor: pointer;">📑 Split Side-by-Side</button>
+                <button id="btn-diff-mode-edit" class="diff-mode-btn" style="background: transparent; border: 1px solid transparent; color: var(--text-dim); font-family: var(--font-mono); font-size: 10px; padding: 2px 8px; border-radius: 3px; cursor: pointer;">✏️ Manual Tweak</button>
+              </div>
+            </div>
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span id="diff-assertion-label">Test assertions preserved (2/2)</span>
+              <button id="btn-copy-diff" class="btn-top" style="padding: 2px 8px; font-size: 10px;" title="Copy Unified Diff to Clipboard">📋 Copy Diff</button>
+              <button id="btn-download-patch" class="btn-top" style="padding: 2px 8px; font-size: 10px;" title="Download .patch file">📥 Download .patch</button>
+            </div>
           </div>
+          <!-- Unified Diff View (Default) -->
           <div class="diff-content" id="diff-text">--- a/src/InMemoryLedger.py (Baseline)
 +++ b/src/InMemoryLedger.py (Staged Proposal)
 @@ -10,6 +10,10 @@
@@ -1592,6 +1785,33 @@ graph LR
 +            raise ValueError("Deposit amount must be positive")
          self._balance += amount
          return self._balance</div>
+
+          <!-- Split Side-by-Side Diff View -->
+          <div id="diff-split-view" class="diff-split-container" style="display: none; width: 100%; border-top: 1px solid var(--border-hairline); font-family: var(--font-mono); font-size: 11px;">
+            <div class="diff-split-col baseline" style="flex: 1; border-right: 1px solid var(--border-hairline); overflow-x: auto;">
+              <div class="diff-split-header" style="padding: 6px 10px; background: rgba(248,113,113,0.08); color: #f87171; font-weight: 600; border-bottom: 1px solid var(--border-hairline);">BASELINE (ORIGINAL)</div>
+              <div id="diff-split-left" class="diff-split-body" style="padding: 4px 0; line-height: 1.5;"></div>
+            </div>
+            <div class="diff-split-col proposal" style="flex: 1; overflow-x: auto;">
+              <div class="diff-split-header" style="padding: 6px 10px; background: rgba(74,222,128,0.08); color: #4ade80; font-weight: 600; border-bottom: 1px solid var(--border-hairline);">PROPOSED HEALED (NEW)</div>
+              <div id="diff-split-right" class="diff-split-body" style="padding: 4px 0; line-height: 1.5;"></div>
+            </div>
+          </div>
+
+          <!-- Manual Code Tweaker & AST Validation View -->
+          <div id="diff-manual-view" style="display: none; width: 100%; padding: 10px; border-top: 1px solid var(--border-hairline); background: #0c0a08;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+              <div style="font-family: var(--font-mono); font-size: 11px; color: var(--copper); font-weight: 600;">
+                ✏️ IN-PLACE CODE TWEAKER &middot; AST PATCH GUARD
+              </div>
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <span id="diff-ast-badge" class="tag-badge" style="background: rgba(74,222,128,0.12); color: #4ade80; display: none;">✓ AST VERIFIED</span>
+                <button id="btn-validate-manual-ast" class="btn-action-primary" style="padding: 4px 10px; font-size: 11px;">✓ Validate AST &amp; Apply</button>
+              </div>
+            </div>
+            <textarea id="diff-manual-editor" class="form-input" style="width: 100%; height: 260px; font-family: var(--font-mono); font-size: 11px; line-height: 1.5; background: #12100d; color: #f0e6df; border: 1px solid #362e26; border-radius: 4px; padding: 10px; resize: vertical; tab-size: 4;" spellcheck="false"></textarea>
+            <div id="diff-ast-feedback" style="margin-top: 6px; font-family: var(--font-mono); font-size: 11px; display: none;"></div>
+          </div>
         </div>
 
         <!-- Instruction Edit & Regenerate -->
@@ -1830,6 +2050,70 @@ Status: ACTIVE
     </div>
   </div>
 
+  <!-- Modal: Agent Step Inspector -->
+  <div class="modal-overlay" id="modal-agent-inspector" style="display: none;">
+    <div class="modal-box" style="width: 640px; max-width: 90vw;">
+      <div class="drawer-header" style="margin-bottom: 0;">
+        <div class="drawer-title" id="inspector-agent-title">Agent Inspection Details</div>
+        <button class="btn-close" id="btn-close-inspector">&times;</button>
+      </div>
+      <div style="display: flex; gap: 8px; border-bottom: 1px solid var(--border-hairline); padding: 8px 0; margin-bottom: 12px;">
+        <button class="inspector-tab active" id="tab-insp-overview" style="background: var(--bg-card); border: 1px solid var(--border-hairline); color: var(--text-main); font-family: var(--font-mono); font-size: 11px; padding: 3px 10px; border-radius: 3px; cursor: pointer;">Overview</button>
+        <button class="inspector-tab" id="tab-insp-prompt" style="background: transparent; border: 1px solid transparent; color: var(--text-dim); font-family: var(--font-mono); font-size: 11px; padding: 3px 10px; border-radius: 3px; cursor: pointer;">System Directive</button>
+        <button class="inspector-tab" id="tab-insp-ast" style="background: transparent; border: 1px solid transparent; color: var(--text-dim); font-family: var(--font-mono); font-size: 11px; padding: 3px 10px; border-radius: 3px; cursor: pointer;">AST &amp; Safety Rubric</button>
+      </div>
+      <div id="inspector-tab-overview" class="inspector-tab-content">
+        <div id="inspector-overview-body" style="font-family: var(--font-mono); font-size: 12px; line-height: 1.6; color: var(--text-main);"></div>
+      </div>
+      <div id="inspector-tab-prompt" class="inspector-tab-content" style="display: none;">
+        <pre id="inspector-prompt-body" style="font-family: var(--font-mono); font-size: 11px; line-height: 1.5; color: #dcd6cd; background: var(--bg-code); padding: 12px; border-radius: 4px; overflow-x: auto; white-space: pre-wrap; max-height: 300px;"></pre>
+      </div>
+      <div id="inspector-tab-ast" class="inspector-tab-content" style="display: none;">
+        <pre id="inspector-ast-body" style="font-family: var(--font-mono); font-size: 11px; line-height: 1.5; color: #86efac; background: #0c0a08; padding: 12px; border-radius: 4px; overflow-x: auto; white-space: pre-wrap; max-height: 300px;"></pre>
+      </div>
+      <div style="display: flex; justify-content: flex-end; margin-top: 14px;">
+        <button class="btn-top" id="btn-close-inspector-footer">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Failure Screenshot Previewer -->
+  <div class="modal-overlay" id="modal-screenshot-preview" style="display: none;">
+    <div class="modal-box" style="width: 800px; max-width: 95vw; background: #0a0806;">
+      <div class="drawer-header" style="margin-bottom: 8px;">
+        <div class="drawer-title" id="screenshot-preview-title">🖼️ CI Failure Screenshot</div>
+        <button class="btn-close" id="btn-close-screenshot">&times;</button>
+      </div>
+      <div style="display: flex; justify-content: center; align-items: center; background: #000; border-radius: 4px; padding: 10px; max-height: 70vh; overflow: auto;">
+        <img id="screenshot-preview-img" src="" alt="Failure Screenshot" style="max-width: 100%; max-height: 65vh; border-radius: 3px; box-shadow: 0 4px 20px rgba(0,0,0,0.6);" />
+      </div>
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 10px;">
+        <span id="screenshot-preview-caption" style="font-family: var(--font-mono); font-size: 11px; color: var(--text-dim);"></span>
+        <button class="btn-top" id="btn-close-screenshot-footer">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Live Terminal / Test Runner Drawer -->
+  <div id="terminal-drawer" style="position: fixed; bottom: 0; left: 270px; right: 0; height: 230px; background: #0c0a08; border-top: 1px solid var(--border-hairline); z-index: 50; display: none; flex-direction: column; box-shadow: 0 -8px 24px rgba(0,0,0,0.5);">
+    <div style="height: 34px; background: #16130f; border-bottom: 1px solid var(--border-hairline); display: flex; align-items: center; justify-content: space-between; padding: 0 14px; font-family: var(--font-mono); font-size: 11px;">
+      <div style="display: flex; align-items: center; gap: 8px;">
+        <span style="color: var(--copper); font-weight: 600;">&gt;_ Execution Terminal</span>
+        <span id="term-status-badge" class="tag-badge" style="background: rgba(74,222,128,0.12); color: #4ade80;">IDLE</span>
+        <span id="term-cmd-label" style="color: var(--text-dim);"></span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 6px;">
+        <span id="term-elapsed" style="color: var(--text-dim); margin-right: 6px;">0.0s</span>
+        <button id="btn-term-heal" class="btn-top" style="display: none; padding: 2px 8px; font-size: 10px; background: var(--copper-bg); border-color: var(--copper-border); color: var(--copper);" title="Feed output directly into Autonomous Healer">⚡ Triage &amp; Heal</button>
+        <button id="btn-term-copy" class="btn-top" style="padding: 2px 8px; font-size: 10px;" title="Copy terminal log">📋 Copy</button>
+        <button id="btn-term-clear" class="btn-top" style="padding: 2px 8px; font-size: 10px;" title="Clear terminal">🗑️ Clear</button>
+        <button id="btn-term-expand" class="btn-top" style="padding: 2px 8px; font-size: 10px;" title="Toggle Expand/Compact Terminal">↕ Expand</button>
+        <button id="btn-term-close" class="btn-close" style="padding: 0 6px; font-size: 14px;" title="Close terminal">&times;</button>
+      </div>
+    </div>
+    <pre id="term-output" class="terminal-body" style="flex: 1; margin: 0; padding: 10px 14px; font-family: var(--font-mono); font-size: 11px; line-height: 1.45; color: #dcd6cd; overflow-y: auto; white-space: pre-wrap; word-break: break-all;"></pre>
+  </div>
+
   <!-- Client JavaScript -->
   <script>
     // State management
@@ -1849,6 +2133,7 @@ Status: ACTIVE
       auditLog: "",
       rejectionReason: null,
     };
+    window.state = state;
 
     // DOM Elements
     const navItems = document.querySelectorAll('.nav-item');
@@ -2113,7 +2398,11 @@ Status: ACTIVE
       state.snapshotId = data.pre_apply_snapshot_id || null;
       state.approver = data.approver || "QA Lead";
       state.rejectionReason = null;
-      selectInboxRow(data.workspace_name === 'PlaywrightDrift' ? 'drift' : (data.workspace_name === 'HostilePatch' ? 'hostile' : 'ledger'));
+      if (data.workspace_name === 'PlaywrightDrift') selectInboxRow('drift');
+      else if (data.workspace_name === 'HostilePatch') selectInboxRow('hostile');
+      else if (data.workspace_name === 'PlaywrightFlake') selectInboxRow('flake');
+      else if (data.workspace_name === 'EnvironmentNoise') selectInboxRow('noise');
+      else selectInboxRow('ledger');
       updateUI();
     }
 
@@ -2128,12 +2417,16 @@ Status: ACTIVE
 
     function updateUI() {
       labelWorkspace.innerText = state.workspaceName;
-      const targetLabel = state.scope[0] || (state.workspaceName === 'PlaywrightDrift' ? 'tests/test_cart.py' : (state.workspaceName === 'HostilePatch' ? 'src/service.py' : 'src/InMemoryLedger.py'));
+      const targetLabel = state.scope[0] || (state.workspaceName === 'PlaywrightDrift' ? 'tests/test_cart.py' : (state.workspaceName === 'HostilePatch' ? 'src/service.py' : (state.workspaceName === 'PlaywrightFlake' ? 'tests/test_flake.py' : (state.workspaceName === 'EnvironmentNoise' ? 'tests/test_api.py' : 'src/InMemoryLedger.py'))));
       diffFileLabel.innerText = `${targetLabel} (Unified Diff vs Baseline)`;
       document.getElementById('tm-active-target').innerText = `Target: ${targetLabel}`;
 
       if (state.workspaceName === 'PlaywrightDrift') {
         diffAssertionLabel.innerText = "Invariant: Test assertions preserved (1/1)";
+      } else if (state.workspaceName === 'PlaywrightFlake') {
+        diffAssertionLabel.innerText = "Invariant: Flake timing stabilized (1/1)";
+      } else if (state.workspaceName === 'EnvironmentNoise') {
+        diffAssertionLabel.innerText = "Invariant: Infrastructure outage; 0 files modified";
       } else {
         diffAssertionLabel.innerText = "Invariant: Test assertions preserved (2/2)";
       }
@@ -2141,6 +2434,8 @@ Status: ACTIVE
       // Configure Step Cards for Workspace Type
       const isDrift = state.workspaceName === 'PlaywrightDrift';
       const isHostile = state.workspaceName === 'HostilePatch';
+      const isFlake = state.workspaceName === 'PlaywrightFlake';
+      const isNoise = state.workspaceName === 'EnvironmentNoise';
 
       if (isDrift) {
         document.getElementById('badge-step-1').innerText = "CLASSIFIED: TEST_BUG";
@@ -2162,6 +2457,26 @@ Status: ACTIVE
         document.getElementById('body-step-3').innerText = "DeveloperAgent proposed patch for src/service.py containing subprocess.run('echo HEALTHY_200', shell=True).";
         document.getElementById('scope-step-3').innerText = "Target File: src/service.py • Injected subprocess call";
         document.getElementById('scope-step-5').innerText = "Blast Radius: BLOCKED (shell=True command injection attempt)";
+      } else if (isFlake) {
+        document.getElementById('badge-step-1').innerText = "CLASSIFIED: FLAKY_TEST (INTERMITTENT)";
+        document.getElementById('badge-step-2').innerText = "ROUTED: HEAL-FLAKE-001 (TestHealerAgent)";
+        document.getElementById('scope-step-2').innerText = "Allowed Files: ['tests/test_flake.py'] (Quarantine & Variance Shield)";
+        document.getElementById('title-step-3').innerText = "3. TestHealerAgent (Playwright Locator Shield)";
+        document.getElementById('tier-step-3').innerText = "TIER_3_JUNIOR_SWE";
+        document.getElementById('badge-step-3').innerText = "LOCATOR FLAKE HEALED";
+        document.getElementById('body-step-3').innerText = "TestHealerAgent replaced brittle timing locator 'button#checkout' with auto-waiting semantic locator page.get_by_role('button', name='Checkout').";
+        document.getElementById('scope-step-3').innerText = "Target File: tests/test_flake.py • Timing Instability Eliminated";
+        document.getElementById('scope-step-5').innerText = "Blast Radius: ISOLATED (tests/test_flake.py only)";
+      } else if (isNoise) {
+        document.getElementById('badge-step-1').innerText = "CLASSIFIED: ENVIRONMENT_NOISE";
+        document.getElementById('badge-step-2').innerText = "ROUTED: SRE / Infrastructure Escalation";
+        document.getElementById('scope-step-2').innerText = "Allowed Files: [] (Automated Changes PROHIBITED)";
+        document.getElementById('title-step-3').innerText = "3. SRE / DevOps Escalation Sentinel";
+        document.getElementById('tier-step-3').innerText = "TIER_1_TECH_LEAD";
+        document.getElementById('badge-step-3').innerText = "INFRA BLOCKER DETECTED";
+        document.getElementById('body-step-3').innerText = "External Dependency Outage: Database port 5432 unreachable. Automated changes strictly prohibited to protect repository integrity.";
+        document.getElementById('scope-step-3').innerText = "Target: Zero Files Modified • Incident Dispatched";
+        document.getElementById('scope-step-5').innerText = "Blast Radius: PROTECTED (0 workspace changes)";
       } else {
         document.getElementById('badge-step-1').innerText = "CLASSIFIED: PRODUCT_BUG";
         document.getElementById('badge-step-2').innerText = "ROUTED: HEAL-PROD-001";
@@ -2556,14 +2871,14 @@ Status: ACTIVE
     }
 
     btnRunHeal.addEventListener('click', async () => {
-      if (state.workspaceName !== 'InMemoryLedger') {
+      if (!state.workspaceId || state.workspaceName !== 'InMemoryLedger') {
         await loadLedgerWorkspace();
       }
       executeHeal(btnRunHeal);
     });
     if (btnRunDrift) {
       btnRunDrift.addEventListener('click', async () => {
-        if (state.workspaceName !== 'PlaywrightDrift') {
+        if (!state.workspaceId || state.workspaceName !== 'PlaywrightDrift') {
           await loadDriftWorkspace();
         }
         executeHeal(btnRunDrift);
@@ -2571,7 +2886,7 @@ Status: ACTIVE
     }
     if (btnRunHostile) {
       btnRunHostile.addEventListener('click', async () => {
-        if (state.workspaceName !== 'HostilePatch') {
+        if (!state.workspaceId || state.workspaceName !== 'HostilePatch') {
           await loadHostileWorkspace();
         }
         executeHeal(btnRunHostile);
@@ -2580,6 +2895,10 @@ Status: ACTIVE
 
     // Approve Action
     btnApprove.addEventListener('click', async () => {
+      if (!state.workspaceId) {
+        console.warn("No active workspace to approve");
+        return;
+      }
       btnApprove.disabled = true;
       btnApprove.innerText = "Applying & Verifying Sandbox...";
 
@@ -2597,6 +2916,7 @@ Status: ACTIVE
           state.status = "APPLIED";
           state.approver = approver;
           state.snapshotId = res.snapshot_id || state.snapshotId;
+          updateUI();
 
           // Pull Request creation if checked
           if (chkOpenPr && chkOpenPr.checked) {
@@ -2900,22 +3220,27 @@ Status: ACTIVE
     const inputHealCmd = document.getElementById('input-heal-cmd');
 
     async function fetchDoctorStatus(ping = false) {
-      if (labelDoctor) labelDoctor.innerText = ping ? "🔄 Pinging LLM..." : "🖥️ Checking Doctor...";
+      if (labelDoctor) labelDoctor.innerText = ping ? "🔄 Pinging..." : "🩺 Doctor: Checking...";
       try {
         const res = await apiGet(`/api/real/doctor?ping=${ping}`);
         if (res && res.status === "success") {
           if (inputRealWorkspace && (!inputRealWorkspace.value || inputRealWorkspace.value === ".")) {
             inputRealWorkspace.value = res.workspace_path;
           }
-          let llmStr = res.llm_provider;
-          if (res.ping_ms !== null && res.ping_ms !== undefined && res.ping_ms >= 0) {
-            llmStr += ` (${res.ping_ms}ms)`;
+          const osShort = res.os_family || (res.os_name ? res.os_name.substring(0, 3) : "OS");
+          const pyShort = res.python_version ? res.python_version.split('.').slice(0, 2).join('.') : "3.10";
+          if (labelDoctor) {
+            labelDoctor.innerText = `🩺 Doctor: Ready (${osShort} · Py ${pyShort})`;
           }
-          const pwStr = res.has_playwright ? "🎭 PW Ready" : "🎭 PW None";
-          const text = `🖥️ ${res.os_name} | 🤖 ${llmStr} | 🐍 Py ${res.python_version} | ${pwStr}`;
-          if (labelDoctor) labelDoctor.innerText = text;
           if (pillDoctor) {
             pillDoctor.className = res.is_live_llm ? "meta-pill status-green" : "meta-pill";
+            pillDoctor.title = `Hermes Pre-Flight Doctor:\n• OS: ${res.os_name} ${res.os_release || ''}\n• Python: ${res.python_version}\n• Git: ${res.git_version}\n• Playwright: ${res.playwright_version || (res.has_playwright ? 'Ready' : 'Not installed')}\n• Node: ${res.node_version || 'Not installed'}\n• LLM: ${res.llm_provider} (${res.llm_status})${res.ping_ms !== null ? ' • ' + res.ping_ms + 'ms' : ''}\n• AST Guard: ${res.tree_sitter || 'Active'}\n\nClick to ping live LLM`;
+          }
+          // Dynamic sync of provider pill
+          const labelP = document.getElementById('label-provider');
+          if (labelP && res.llm_provider) {
+            const modelName = res.llm_model || (res.llm_provider === 'OLLAMA' ? 'qwen2.5-coder:7b' : 'heuristic');
+            labelP.innerText = `🤖 ${res.llm_provider} · ${modelName}`;
           }
         }
       } catch (e) {
@@ -2926,6 +3251,164 @@ Status: ACTIVE
     if (pillDoctor) {
       pillDoctor.addEventListener('click', () => fetchDoctorStatus(true));
     }
+
+    // Left Rail Dual Mode (Failures vs Discovered Tests)
+    const btnTabFailures = document.getElementById('btn-tab-failures');
+    const btnTabTests = document.getElementById('btn-tab-tests');
+    const listFailures = document.getElementById('rail-inbox-list');
+    const listTests = document.getElementById('rail-tests-list');
+
+    function switchRailTab(tab) {
+      if (tab === 'tests') {
+        if (btnTabTests) {
+          btnTabTests.style.background = 'var(--bg-card)';
+          btnTabTests.style.color = 'var(--text-main)';
+          btnTabTests.style.borderColor = 'var(--border-hairline)';
+        }
+        if (btnTabFailures) {
+          btnTabFailures.style.background = 'transparent';
+          btnTabFailures.style.color = 'var(--text-dim)';
+          btnTabFailures.style.borderColor = 'transparent';
+        }
+        const containerTests = document.getElementById('rail-tests-container');
+        if (listFailures) listFailures.style.display = 'none';
+        if (containerTests) containerTests.style.display = 'flex';
+      } else {
+        if (btnTabFailures) {
+          btnTabFailures.style.background = 'var(--bg-card)';
+          btnTabFailures.style.color = 'var(--text-main)';
+          btnTabFailures.style.borderColor = 'var(--border-hairline)';
+        }
+        if (btnTabTests) {
+          btnTabTests.style.background = 'transparent';
+          btnTabTests.style.color = 'var(--text-dim)';
+          btnTabTests.style.borderColor = 'transparent';
+        }
+        const containerTests = document.getElementById('rail-tests-container');
+        if (listFailures) listFailures.style.display = 'flex';
+        if (containerTests) containerTests.style.display = 'none';
+      }
+    }
+
+    if (btnTabFailures) btnTabFailures.addEventListener('click', () => switchRailTab('failures'));
+    if (btnTabTests) btnTabTests.addEventListener('click', () => switchRailTab('tests'));
+
+    // Test Discovery & Terminal Execution
+    async function discoverRealWorkspace() {
+      try {
+        const res = await apiGet('/api/real/discover');
+        if (res) {
+          discoveredTestsList = res.tests || [];
+          renderFilteredDiscoveredTests();
+
+          // Check for trace files in artifacts
+          if (res.artifacts && btnOpenTraceViewer) {
+            const traceArt = res.artifacts.find(a => a.type === 'PLAYWRIGHT_TRACE' || (a.file_name && a.file_name.endsWith('.zip')));
+            if (traceArt) {
+              btnOpenTraceViewer.style.display = 'inline-block';
+              btnOpenTraceViewer.setAttribute('data-trace-path', traceArt.rel_path);
+            }
+          }
+        }
+      } catch (e) {
+        console.error("Discovery error:", e);
+      }
+    }
+
+    async function runTestInTerminal(testPath, cmd) {
+      const drawer = document.getElementById('terminal-drawer');
+      const termOutput = document.getElementById('term-output');
+      const statusBadge = document.getElementById('term-status-badge');
+      const cmdLabel = document.getElementById('term-cmd-label');
+      const elapsedLabel = document.getElementById('term-elapsed');
+      const btnHeal = document.getElementById('btn-term-heal');
+
+      if (drawer) drawer.style.display = 'flex';
+      if (statusBadge) {
+        statusBadge.innerText = 'RUNNING';
+        statusBadge.style.color = '#fbbf24';
+        statusBadge.style.background = 'rgba(251,191,36,0.12)';
+      }
+      if (cmdLabel) cmdLabel.innerText = testPath ? `[${testPath}]` : '';
+      if (termOutput) termOutput.innerText = `🚀 Running: ${testPath} ...\n\n`;
+      if (btnHeal) btnHeal.style.display = 'none';
+
+      const t0 = Date.now();
+      const timer = setInterval(() => {
+        if (elapsedLabel) elapsedLabel.innerText = ((Date.now() - t0) / 1000).toFixed(1) + 's';
+      }, 100);
+
+      try {
+        const res = await apiPost('/api/real/run-test', { test_path: testPath, cmd: cmd });
+        clearInterval(timer);
+        if (elapsedLabel) elapsedLabel.innerText = (res.elapsed_s || 0) + 's';
+        if (termOutput) termOutput.innerHTML = ansiToHtml(res.output || "No output returned.");
+
+        if (res.passed) {
+          if (statusBadge) {
+            statusBadge.innerText = 'PASSED';
+            statusBadge.style.color = '#4ade80';
+            statusBadge.style.background = 'rgba(74,222,128,0.12)';
+          }
+        } else {
+          if (statusBadge) {
+            statusBadge.innerText = 'FAILED';
+            statusBadge.style.color = '#f87171';
+            statusBadge.style.background = 'rgba(248,113,113,0.12)';
+          }
+          if (btnHeal) {
+            btnHeal.style.display = 'inline-block';
+            btnHeal.onclick = () => {
+              const inputScope = document.getElementById('input-heal-scope');
+              const inputFailure = document.getElementById('input-heal-failure');
+              if (inputScope) inputScope.value = testPath;
+              if (inputFailure) inputFailure.value = res.output;
+              switchTab('inbox');
+              const controls = document.getElementById('real-workspace-controls');
+              if (controls) controls.scrollIntoView({ behavior: 'smooth' });
+            };
+          }
+        }
+      } catch (err) {
+        clearInterval(timer);
+        if (statusBadge) {
+          statusBadge.innerText = 'ERROR';
+          statusBadge.style.color = '#f87171';
+        }
+        if (termOutput) termOutput.innerHTML = ansiToHtml("Execution failed: " + err.message);
+      }
+    }
+
+    // Terminal Drawer Controls
+    const btnTermClose = document.getElementById('btn-term-close');
+    const btnTermClear = document.getElementById('btn-term-clear');
+    const btnTermCopy = document.getElementById('btn-term-copy');
+    const btnTermExpand = document.getElementById('btn-term-expand');
+
+    if (btnTermClose) btnTermClose.addEventListener('click', () => {
+      const drawer = document.getElementById('terminal-drawer');
+      if (drawer) drawer.style.display = 'none';
+    });
+    if (btnTermClear) btnTermClear.addEventListener('click', () => {
+      const termOutput = document.getElementById('term-output');
+      if (termOutput) termOutput.innerText = '';
+    });
+    if (btnTermCopy) btnTermCopy.addEventListener('click', () => {
+      const termOutput = document.getElementById('term-output');
+      if (termOutput) {
+        navigator.clipboard.writeText(termOutput.innerText);
+        btnTermCopy.innerText = "✅ Copied";
+        setTimeout(() => { btnTermCopy.innerText = "📋 Copy"; }, 1500);
+      }
+    });
+    if (btnTermExpand) btnTermExpand.addEventListener('click', () => {
+      const drawer = document.getElementById('terminal-drawer');
+      if (drawer) {
+        const isExp = drawer.style.height === '480px';
+        drawer.style.height = isExp ? '230px' : '480px';
+        btnTermExpand.innerText = isExp ? '↕ Expand' : '↕ Compact';
+      }
+    });
 
     if (btnLoadWorkspace && inputRealWorkspace) {
       btnLoadWorkspace.addEventListener('click', async () => {
@@ -2940,13 +3423,17 @@ Status: ACTIVE
             if (labelWorkspace) labelWorkspace.innerText = res.workspace_name;
             await fetchDoctorStatus(false);
             await loadRealSnapshots();
-            alert(`Loaded workspace '${res.workspace_name}'!`);
+            await discoverRealWorkspace();
+            switchRailTab('tests');
           }
         } catch (err) {
           alert("Failed to load workspace: " + err.message);
         } finally {
           btnLoadWorkspace.innerText = "📂 Load";
         }
+      });
+      inputRealWorkspace.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') btnLoadWorkspace.click();
       });
     }
 
@@ -3047,12 +3534,525 @@ Status: ACTIVE
       } catch (e) {}
     }
 
+    // =========================================================================
+    // Text Escaping & ANSI Color Support
+    // =========================================================================
+    function escapeHtml(str) {
+      if (!str) return '';
+      return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    function ansiToHtml(str) {
+      if (!str) return '';
+      return escapeHtml(str)
+        .replace(/\\x1b\\[32m/g, '<span style="color:#4ade80;font-weight:600;">')
+        .replace(/\\x1b\\[31m/g, '<span style="color:#f87171;font-weight:600;">')
+        .replace(/\\x1b\\[33m/g, '<span style="color:#fbbf24;font-weight:600;">')
+        .replace(/\\x1b\\[36m/g, '<span style="color:#38bdf8;">')
+        .replace(/\\x1b\\[35m/g, '<span style="color:#c084fc;">')
+        .replace(/\\x1b\\[1m/g, '<span style="font-weight:bold;">')
+        .replace(/\\x1b\\[0m|\\x1b\\[39m/g, '</span>');
+    }
+
+    // =========================================================================
+    // Side-by-Side Split Diff Engine
+    // =========================================================================
+    function renderSplitDiff(diffText) {
+      const leftCol = document.getElementById('diff-split-left');
+      const rightCol = document.getElementById('diff-split-right');
+      if (!leftCol || !rightCol) return;
+
+      const lines = (diffText || '').split('\\n');
+      let leftHtml = '';
+      let rightHtml = '';
+      let leftNum = 1;
+      let rightNum = 1;
+
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        if (line.startsWith('---') || line.startsWith('+++')) continue;
+        if (line.startsWith('@@')) {
+          const match = line.match(/@@\\s+-(\\d+)(?:,\\d+)?\\s+\\+(\\d+)(?:,\\d+)?\\s+@@/);
+          if (match) {
+            leftNum = parseInt(match[1], 10);
+            rightNum = parseInt(match[2], 10);
+          }
+          leftHtml += `<div style="color:var(--text-dim); background:rgba(255,255,255,0.03); padding:2px 8px; font-size:10px;">${escapeHtml(line)}</div>`;
+          rightHtml += `<div style="color:var(--text-dim); background:rgba(255,255,255,0.03); padding:2px 8px; font-size:10px;">${escapeHtml(line)}</div>`;
+          continue;
+        }
+
+        if (line.startsWith('-')) {
+          leftHtml += `<div class="diff-line-row diff-line-del"><span class="diff-line-num" style="color:#ef4444;">${leftNum++}</span><span style="user-select:none; color:#ef4444; padding:0 4px;">-</span><span class="diff-line-content">${escapeHtml(line.slice(1))}</span></div>`;
+        } else if (line.startsWith('+')) {
+          rightHtml += `<div class="diff-line-row diff-line-add"><span class="diff-line-num" style="color:#22c55e;">${rightNum++}</span><span style="user-select:none; color:#22c55e; padding:0 4px;">+</span><span class="diff-line-content">${escapeHtml(line.slice(1))}</span></div>`;
+        } else {
+          const content = line.startsWith(' ') ? line.slice(1) : line;
+          leftHtml += `<div class="diff-line-row"><span class="diff-line-num">${leftNum++}</span><span style="user-select:none; opacity:0; padding:0 4px;"> </span><span class="diff-line-content">${escapeHtml(content)}</span></div>`;
+          rightHtml += `<div class="diff-line-row"><span class="diff-line-num">${rightNum++}</span><span style="user-select:none; opacity:0; padding:0 4px;"> </span><span class="diff-line-content">${escapeHtml(content)}</span></div>`;
+        }
+      }
+
+      leftCol.innerHTML = leftHtml || '<div style="padding:10px; color:var(--text-dim);">No baseline differences</div>';
+      rightCol.innerHTML = rightHtml || '<div style="padding:10px; color:var(--text-dim);">No proposal differences</div>';
+    }
+
+    function switchDiffMode(mode) {
+      const btnUnified = document.getElementById('btn-diff-mode-unified');
+      const btnSplit = document.getElementById('btn-diff-mode-split');
+      const btnEdit = document.getElementById('btn-diff-mode-edit');
+      const viewUnified = document.getElementById('diff-text');
+      const viewSplit = document.getElementById('diff-split-view');
+      const viewEdit = document.getElementById('diff-manual-view');
+
+      if (btnUnified) btnUnified.classList.toggle('active', mode === 'unified');
+      if (btnSplit) btnSplit.classList.toggle('active', mode === 'split');
+      if (btnEdit) btnEdit.classList.toggle('active', mode === 'edit');
+
+      if (viewUnified) viewUnified.style.display = (mode === 'unified') ? 'block' : 'none';
+      if (viewSplit) viewSplit.style.display = (mode === 'split') ? 'flex' : 'none';
+      if (viewEdit) viewEdit.style.display = (mode === 'edit') ? 'block' : 'none';
+
+      if (mode === 'split' && state.diffText) {
+        renderSplitDiff(state.diffText);
+      } else if (mode === 'edit') {
+        const editor = document.getElementById('diff-manual-editor');
+        if (editor && !editor.dataset.userEdited) {
+          editor.value = state.diffText || "# Edit proposed patch code here...";
+        }
+      }
+    }
+
+    const btnDiffModeUnified = document.getElementById('btn-diff-mode-unified');
+    const btnDiffModeSplit = document.getElementById('btn-diff-mode-split');
+    const btnDiffModeEdit = document.getElementById('btn-diff-mode-edit');
+    const btnCopyDiff = document.getElementById('btn-copy-diff');
+    const btnDownloadPatch = document.getElementById('btn-download-patch');
+
+    if (btnDiffModeUnified) btnDiffModeUnified.addEventListener('click', () => switchDiffMode('unified'));
+    if (btnDiffModeSplit) btnDiffModeSplit.addEventListener('click', () => switchDiffMode('split'));
+    if (btnDiffModeEdit) btnDiffModeEdit.addEventListener('click', () => switchDiffMode('edit'));
+
+    if (btnCopyDiff) {
+      btnCopyDiff.addEventListener('click', () => {
+        if (state.diffText) {
+          navigator.clipboard.writeText(state.diffText);
+          btnCopyDiff.innerText = "✓ Copied";
+          setTimeout(() => { btnCopyDiff.innerText = "📋 Copy Diff"; }, 1500);
+        }
+      });
+    }
+
+    if (btnDownloadPatch) {
+      btnDownloadPatch.addEventListener('click', () => {
+        if (!state.diffText) return;
+        const blob = new Blob([state.diffText], { type: 'text/x-diff' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `hermes_${state.sprintId || 'patch'}.patch`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      });
+    }
+
+    // Manual Tweaker AST Validation
+    const btnValidateManualAST = document.getElementById('btn-validate-manual-ast');
+    const diffManualEditor = document.getElementById('diff-manual-editor');
+    const diffAstBadge = document.getElementById('diff-ast-badge');
+    const diffAstFeedback = document.getElementById('diff-ast-feedback');
+
+    if (diffManualEditor) {
+      diffManualEditor.addEventListener('input', () => {
+        diffManualEditor.dataset.userEdited = "1";
+        if (diffAstBadge) diffAstBadge.style.display = 'none';
+        if (diffAstFeedback) diffAstFeedback.style.display = 'none';
+      });
+    }
+
+    if (btnValidateManualAST && diffManualEditor) {
+      btnValidateManualAST.addEventListener('click', async () => {
+        const code = diffManualEditor.value;
+        const targetPath = state.scope[0] || "patch.py";
+        btnValidateManualAST.disabled = true;
+        btnValidateManualAST.innerText = "Validating...";
+
+        try {
+          const res = await apiPost('/api/real/validate-ast', {
+            code: code,
+            filepath: targetPath,
+            allow_test_modification: true
+          });
+
+          if (res.valid) {
+            if (diffAstBadge) {
+              diffAstBadge.style.display = 'inline-block';
+              diffAstBadge.innerText = '✓ AST VERIFIED';
+              diffAstBadge.style.background = 'rgba(74,222,128,0.15)';
+              diffAstBadge.style.color = '#4ade80';
+            }
+            if (diffAstFeedback) {
+              diffAstFeedback.style.display = 'block';
+              diffAstFeedback.style.color = '#4ade80';
+              diffAstFeedback.innerText = '✓ Code passed AST Patch Guard with zero prohibited calls and verified assertion integrity.';
+            }
+            state.diffText = code;
+            if (diffTextContainer) diffTextContainer.innerText = state.diffText;
+            renderSplitDiff(state.diffText);
+          } else {
+            if (diffAstBadge) {
+              diffAstBadge.style.display = 'inline-block';
+              diffAstBadge.innerText = '✗ AST REJECTED';
+              diffAstBadge.style.background = 'rgba(248,113,113,0.15)';
+              diffAstBadge.style.color = '#f87171';
+            }
+            if (diffAstFeedback) {
+              diffAstFeedback.style.display = 'block';
+              diffAstFeedback.style.color = '#f87171';
+              diffAstFeedback.innerText = `Security / Syntax Violation:\n${res.error || 'Syntax validation failed'}`;
+            }
+          }
+        } catch (err) {
+          if (diffAstFeedback) {
+            diffAstFeedback.style.display = 'block';
+            diffAstFeedback.style.color = '#f87171';
+            diffAstFeedback.innerText = "Validation error: " + err.message;
+          }
+        } finally {
+          btnValidateManualAST.disabled = false;
+          btnValidateManualAST.innerText = "✓ Validate AST & Apply";
+        }
+      });
+    }
+
+    // =========================================================================
+    // Playwright Locator Resilience Studio (UI Self-Healing)
+    // =========================================================================
+    const btnAuditSelector = document.getElementById('btn-audit-selector');
+    const inputAuditSelector = document.getElementById('input-audit-selector');
+    const btnCopyPyLocator = document.getElementById('btn-copy-py-locator');
+    const btnCopyTsLocator = document.getElementById('btn-copy-ts-locator');
+    const btnOpenTraceViewer = document.getElementById('btn-open-trace-viewer');
+
+    async function auditLocator(selector) {
+      const sel = selector || (inputAuditSelector ? inputAuditSelector.value.trim() : 'button#checkout');
+      if (!sel) return;
+      try {
+        const res = await apiPost('/api/real/locator-audit', { selector: sel, is_python: true });
+        if (res && res.status === 'success') {
+          const scoreEl = document.getElementById('locator-score-label');
+          const badgeEl = document.getElementById('locator-studio-badge');
+          const brittleText = document.getElementById('locator-brittle-text');
+          const brittleReason = document.getElementById('locator-brittle-reason');
+          const healedText = document.getElementById('locator-healed-text');
+          const healedReason = document.getElementById('locator-healed-reason');
+
+          if (scoreEl) {
+            scoreEl.innerText = `${res.resilience_score}%`;
+            scoreEl.style.color = res.resilience_score >= 80 ? '#4ade80' : (res.resilience_score >= 50 ? '#fbbf24' : '#f87171');
+          }
+          if (badgeEl) {
+            badgeEl.innerText = res.is_brittle ? "BRITTLE DETECTED" : "RESILIENT INVARIANT";
+            badgeEl.style.color = res.is_brittle ? "#f87171" : "#4ade80";
+            badgeEl.style.background = res.is_brittle ? "rgba(248,113,113,0.15)" : "rgba(74,222,128,0.15)";
+          }
+          if (brittleText) brittleText.innerText = res.original_selector;
+          if (brittleReason) brittleReason.innerText = res.reasons.length ? res.reasons.join(' ') : "Selector strategy evaluated.";
+          if (healedText) healedText.innerText = res.upgraded_python;
+          if (healedReason) healedReason.innerText = "Modern accessible Playwright locator. Auto-waits and respects ARIA hierarchy.";
+
+          const altList = document.getElementById('locator-alt-list');
+          if (altList && res.alternatives) {
+            let altHtml = '<span>Alternatives:</span> ';
+            res.alternatives.slice(1).forEach((alt, idx) => {
+              if (idx > 0) altHtml += ' <span>&middot;</span> ';
+              altHtml += `<span class="locator-alt-tag" data-py="${escapeHtml(alt.py)}" style="cursor:pointer;" title="${alt.strategy}">${escapeHtml(alt.strategy.split(' ')[0])} (${alt.resilience}%)</span>`;
+            });
+            altList.innerHTML = altHtml;
+            altList.querySelectorAll('.locator-alt-tag').forEach(tag => {
+              tag.addEventListener('click', () => {
+                const pyCode = tag.getAttribute('data-py');
+                if (healedText) healedText.innerText = pyCode;
+              });
+            });
+          }
+        }
+      } catch (e) {
+        console.error("Locator audit error:", e);
+      }
+    }
+
+    if (btnAuditSelector) btnAuditSelector.addEventListener('click', () => auditLocator());
+    if (inputAuditSelector) {
+      inputAuditSelector.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') auditLocator();
+      });
+    }
+
+    if (btnCopyPyLocator) {
+      btnCopyPyLocator.addEventListener('click', () => {
+        const text = document.getElementById('locator-healed-text');
+        if (text) {
+          navigator.clipboard.writeText(text.innerText);
+          btnCopyPyLocator.innerText = "✓ Copied";
+          setTimeout(() => { btnCopyPyLocator.innerText = "📋 Python"; }, 1500);
+        }
+      });
+    }
+
+    if (btnCopyTsLocator) {
+      btnCopyTsLocator.addEventListener('click', () => {
+        const sel = inputAuditSelector ? inputAuditSelector.value.trim() : "";
+        const clean = sel.replace(/^[#\\.]|[>\\(\\)\"']/g, '').split(' ').pop() || "element";
+        const cleanTitle = clean.replace(/[-_]/g, ' ').replace(/\\b\\w/g, l => l.toUpperCase());
+        const tsCode = `page.getByRole('button', { name: '${cleanTitle}' })`;
+        navigator.clipboard.writeText(tsCode);
+        btnCopyTsLocator.innerText = "✓ Copied";
+        setTimeout(() => { btnCopyTsLocator.innerText = "📋 TS"; }, 1500);
+      });
+    }
+
+    if (btnOpenTraceViewer) {
+      btnOpenTraceViewer.addEventListener('click', async () => {
+        const tracePath = btnOpenTraceViewer.getAttribute('data-trace-path');
+        if (!tracePath) return;
+        try {
+          btnOpenTraceViewer.innerText = "Launching Trace...";
+          const res = await apiPost('/api/real/open-trace', { trace_path: tracePath });
+          alert(res.message || "Trace viewer launched!");
+        } catch (err) {
+          alert("Failed to launch trace viewer: " + err.message);
+        } finally {
+          btnOpenTraceViewer.innerText = "🎭 Open in Trace Viewer";
+        }
+      });
+    }
+
+    // =========================================================================
+    // Discovered Tests Explorer & Real-Time Filtering
+    // =========================================================================
+    let discoveredTestsList = [];
+    let currentFilterType = 'all';
+
+    function renderFilteredDiscoveredTests() {
+      const testsContainer = document.getElementById('rail-tests-list');
+      const countLabel = document.getElementById('count-discovered-tests');
+      const countAll = document.getElementById('count-all-tests');
+      const filterInput = document.getElementById('filter-tests-input');
+      const query = filterInput ? filterInput.value.toLowerCase().trim() : '';
+
+      if (!testsContainer) return;
+
+      const filtered = discoveredTestsList.filter(t => {
+        const matchesQuery = !query || t.rel_path.toLowerCase().includes(query) || t.file_name.toLowerCase().includes(query);
+        if (!matchesQuery) return false;
+        if (currentFilterType === 'py') return t.framework === 'Pytest';
+        if (currentFilterType === 'pw') return t.framework.includes('Playwright');
+        return true;
+      });
+
+      if (countLabel) countLabel.innerText = filtered.length;
+      if (countAll) countAll.innerText = discoveredTestsList.length;
+
+      let html = '';
+      if (filtered.length === 0) {
+        html = '<div style="padding: 12px; color: var(--text-dim); font-size: 11px;">No tests matching filter.</div>';
+      } else {
+        filtered.forEach(t => {
+          const fwBadge = t.framework === 'Python Playwright' ? 'tag-badge test-bug' : (t.framework === 'Playwright TS/JS' ? 'tag-badge' : 'tag-badge prod-bug');
+          const fwIcon = t.framework.includes('Playwright') ? '🎭' : '🐍';
+          html += `
+            <div class="inbox-row discovered-test-row" data-test-path="${t.rel_path}">
+              <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 4px;">
+                <div class="inbox-row-title" style="word-break: break-all; font-size: 11px;" title="${t.rel_path}">${fwIcon} ${t.file_name}</div>
+              </div>
+              <div class="inbox-row-meta" style="justify-content: space-between; align-items: center; margin-top: 4px;">
+                <span class="${fwBadge}" style="font-size: 9px;">${t.framework}</span>
+                <div style="display: flex; gap: 4px;">
+                  <button class="btn-top btn-run-single-test" data-test="${t.rel_path}" style="padding: 2px 6px; font-size: 10px;" title="Run test in workspace">▶ Run</button>
+                  <button class="btn-top btn-heal-single-test" data-test="${t.rel_path}" style="padding: 2px 6px; font-size: 10px; color: var(--copper); border-color: var(--copper-border);" title="Send to autonomous healer">⚡ Heal</button>
+                </div>
+              </div>
+            </div>`;
+        });
+      }
+      testsContainer.innerHTML = html;
+
+      document.querySelectorAll('.btn-run-single-test').forEach(b => {
+        b.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const testPath = b.getAttribute('data-test');
+          await runTestInTerminal(testPath);
+        });
+      });
+
+      document.querySelectorAll('.btn-heal-single-test').forEach(b => {
+        b.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const testPath = b.getAttribute('data-test');
+          const inputScope = document.getElementById('input-heal-scope');
+          if (inputScope) inputScope.value = testPath;
+          switchTab('inbox');
+          const controls = document.getElementById('real-workspace-controls');
+          if (controls) controls.scrollIntoView({ behavior: 'smooth' });
+        });
+      });
+    }
+
+    const filterTestsInput = document.getElementById('filter-tests-input');
+    if (filterTestsInput) {
+      filterTestsInput.addEventListener('input', () => renderFilteredDiscoveredTests());
+    }
+
+    const filterPillAll = document.getElementById('filter-pill-all');
+    const filterPillPy = document.getElementById('filter-pill-py');
+    const filterPillPw = document.getElementById('filter-pill-pw');
+
+    function setFilterPillActive(activePill, type) {
+      [filterPillAll, filterPillPy, filterPillPw].forEach(p => {
+        if (p) p.classList.remove('active');
+      });
+      if (activePill) activePill.classList.add('active');
+      currentFilterType = type;
+      renderFilteredDiscoveredTests();
+    }
+
+    if (filterPillAll) filterPillAll.addEventListener('click', () => setFilterPillActive(filterPillAll, 'all'));
+    if (filterPillPy) filterPillPy.addEventListener('click', () => setFilterPillActive(filterPillPy, 'py'));
+    if (filterPillPw) filterPillPw.addEventListener('click', () => setFilterPillActive(filterPillPw, 'pw'));
+
+    const btnRunAllTests = document.getElementById('btn-run-all-tests');
+    if (btnRunAllTests) {
+      btnRunAllTests.addEventListener('click', async () => {
+        if (!discoveredTestsList.length) return;
+        const testPaths = discoveredTestsList.map(t => t.rel_path);
+        await runTestInTerminal(testPaths.slice(0, 5).join(' '));
+      });
+    }
+
+    // =========================================================================
+    // Agent Step Details Inspector Modal
+    // =========================================================================
+    const agentDetailsData = {
+      1: {
+        title: "1. CIFailureIngestor & RequirementsAgent (TIER_2_SENIOR_SWE)",
+        overview: "Ingests JUnit XML, CTRF JSON, and Playwright trace.zip artifacts without workspace mutations. Computes SHA-256 failure fingerprints, deduplicates failure signatures, and synthesizes crisp Acceptance Criteria (AC).",
+        prompt: "You are RequirementsAgent / CIFailureIngestor.\\n- Input: CI failure traces, Playwright trace stack traces, JUnit XML failures.\\n- Output: Structured failure ticket with classification (PRODUCT_BUG, TEST_BUG, FLAKY_TEST, ENVIRONMENT_NOISE).\\n- Invariant: Zero workspace modifications allowed.",
+        ast: "AST Guard: Read-Only Verification\\n- Prohibited: File writes, external sockets, shell subprocesses.\\n- Scope: Artifact parsing only.\\n- Acceptance Criteria Enforced: AC-1 through AC-n."
+      },
+      2: {
+        title: "2. ScrumMasterOrchestrator & TicketRouter (TIER_1_TECH_LEAD)",
+        overview: "Constructs topologically sorted directed acyclic graph (SprintDAGScheduler) of worker agents. Implements strict role containment: routes PRODUCT_BUG exclusively to DeveloperAgent and TEST_BUG to TestHealerAgent.",
+        prompt: "You are ScrumMasterOrchestrator.\\n- Role: Enforce least-privilege file access.\\n- If PRODUCT_BUG: DeveloperAgent may modify src/ only. tests/ are strictly read-only.\\n- If TEST_BUG: TestHealerAgent may modify tests/ only. src/ is strictly read-only.\\n- If ENVIRONMENT_NOISE: Code modifications strictly prohibited.",
+        ast: "Role Invariants:\\n- DeveloperAgent: tests/* access = PROHIBITED\\n- TestHealerAgent: src/* access = PROHIBITED\\n- Blast Radius containment: Enforced via AST."
+      },
+      3: {
+        title: "3. Multi-Tier Worker Agent (DeveloperAgent / TestHealerAgent)",
+        overview: "Synthesizes surgical AST patches using Multi-Tier models (Tier 1 Tech Lead, Tier 2 Senior SWE, Tier 3 Junior SWE) or local Ollama (qwen2.5-coder:7b). Applies fuzzy 3-level search-and-replace matching.",
+        prompt: "Synthesize a minimal, surgical fix addressing the failure.\\n- Match original indentation and context.\\n- Wrap changes in valid diff or JSON edits format.\\n- Never introduce new external dependencies or disable assertions.",
+        ast: "Syntax Validation: Python AST ast.parse / Tree-sitter\\n- Formatting: Normalization of quotes (r'...' vs '...')\\n- Invariant: Strict file scope restrictions."
+      },
+      4: {
+        title: "4. ASTPatchGuard & QACriticAgent (TIER_4_QA_CRITIC)",
+        overview: "Line-by-line rubric evaluation. Enforces Python AST and TypeScript Playwright safety, ensuring zero assertion erosion, no skip injection (@pytest.mark.skip, test.skip), and valid syntax.",
+        prompt: "Audit proposed patch for assertion degradation.\\n- Ensure all baseline test assertions remain intact or strengthened.\\n- Flag any suppressed error handling or artificial delays (time.sleep).\\n- Verify strict mode locator compliance.",
+        ast: "Assertion Erosion Check:\\n- Assert statements: Preserved (>= baseline count)\\n- Prohibited decorators: pytest.mark.skip, xfail without issue tracker\\n- Verdict: PASS"
+      },
+      5: {
+        title: "5. SecurityBlastRadiusAgent (TIER_4_QA_CRITIC)",
+        overview: "Static AST security audit preventing command injection, path traversal, socket leakage, and unmasked secrets via DLP Session Vault.",
+        prompt: "Scan proposed changes for high-risk security constructs:\\n- subprocess.run with shell=True -> Hard block (SEC-SUBPROCESS-001)\\n- os.system, eval, exec -> Hard block\\n- Raw socket / urllib calls to untracked origins -> Block\\n- Plaintext API keys or tokens -> Redact via DLP Vault.",
+        ast: "Security Blast Radius Rubric:\\n- Command Injection (shell=True): ZERO FINDINGS\\n- Path Traversal (../): ZERO FINDINGS\\n- Secret Leakage: ZERO FINDINGS\\n- Blast Radius Scope: Isolated to single target file."
+      },
+      6: {
+        title: "6. AutomationTesterAgent & Ephemeral Sandbox (TIER_3_JUNIOR_SWE)",
+        overview: "Executes test suite across 3 isolated ephemeral git worktrees (repeat=3) to verify patch determinism and ensure zero flaky regressions before write authorization.",
+        prompt: "Run target test runner in isolated worktree sandbox:\\n- Repeat: 3 runs\\n- Timeout guard: 120s per run\\n- Exit code requirement: 0 across all runs.",
+        ast: "Verification Sandbox Report:\\n- Run 1: PASSED (exit code 0)\\n- Run 2: PASSED (exit code 0)\\n- Run 3: PASSED (exit code 0)\\n- Determinism: 100% PASS"
+      },
+      7: {
+        title: "7. HumanWriteGateController & Time Machine (GOVERNED WRITE GATE)",
+        overview: "Human-in-the-loop governance barrier. Pins pre-apply cryptographic snapshot in Time Machine. Workspace remains 100% byte-for-byte untouched until human approver authorizes write.",
+        prompt: "Write Gate Policy:\\n- Requires authorized human QA Lead / Engineer identity.\\n- Generates audit trail record.\\n- Provides microsecond rollback (git reset / Time Machine snapshot) on demand.",
+        ast: "Governance Controls:\\n- Pre-Apply Snapshot: Pinned\\n- Rollback Engine: Armed\\n- Auto-PR generation: hermes/heal-<id> branch ready."
+      }
+    };
+
+    const modalAgentInspector = document.getElementById('modal-agent-inspector');
+    const btnCloseInspector = document.getElementById('btn-close-inspector');
+    const btnCloseInspectorFooter = document.getElementById('btn-close-inspector-footer');
+    const tabInspOverview = document.getElementById('tab-insp-overview');
+    const tabInspPrompt = document.getElementById('tab-insp-prompt');
+    const tabInspAst = document.getElementById('tab-insp-ast');
+    const inspectorOverviewBody = document.getElementById('inspector-overview-body');
+    const inspectorPromptBody = document.getElementById('inspector-prompt-body');
+    const inspectorAstBody = document.getElementById('inspector-ast-body');
+    const inspectorAgentTitle = document.getElementById('inspector-agent-title');
+
+    function openAgentInspector(stepNum) {
+      const data = agentDetailsData[stepNum] || agentDetailsData[1];
+      if (inspectorAgentTitle) inspectorAgentTitle.innerText = data.title;
+      if (inspectorOverviewBody) inspectorOverviewBody.innerHTML = `<p>${data.overview}</p>`;
+      if (inspectorPromptBody) inspectorPromptBody.innerText = data.prompt;
+      if (inspectorAstBody) inspectorAstBody.innerText = data.ast;
+      if (modalAgentInspector) modalAgentInspector.style.display = 'flex';
+      switchInspectorTab('overview');
+    }
+
+    function switchInspectorTab(tab) {
+      [tabInspOverview, tabInspPrompt, tabInspAst].forEach(t => {
+        if (t) t.classList.remove('active');
+      });
+      const contentOverview = document.getElementById('inspector-tab-overview');
+      const contentPrompt = document.getElementById('inspector-tab-prompt');
+      const contentAst = document.getElementById('inspector-tab-ast');
+
+      if (contentOverview) contentOverview.style.display = (tab === 'overview') ? 'block' : 'none';
+      if (contentPrompt) contentPrompt.style.display = (tab === 'prompt') ? 'block' : 'none';
+      if (contentAst) contentAst.style.display = (tab === 'ast') ? 'block' : 'none';
+
+      if (tab === 'overview' && tabInspOverview) tabInspOverview.classList.add('active');
+      if (tab === 'prompt' && tabInspPrompt) tabInspPrompt.classList.add('active');
+      if (tab === 'ast' && tabInspAst) tabInspAst.classList.add('active');
+    }
+
+    if (tabInspOverview) tabInspOverview.addEventListener('click', () => switchInspectorTab('overview'));
+    if (tabInspPrompt) tabInspPrompt.addEventListener('click', () => switchInspectorTab('prompt'));
+    if (tabInspAst) tabInspAst.addEventListener('click', () => switchInspectorTab('ast'));
+
+    if (btnCloseInspector) btnCloseInspector.addEventListener('click', () => {
+      if (modalAgentInspector) modalAgentInspector.style.display = 'none';
+    });
+    if (btnCloseInspectorFooter) btnCloseInspectorFooter.addEventListener('click', () => {
+      if (modalAgentInspector) modalAgentInspector.style.display = 'none';
+    });
+
+    for (let i = 1; i <= 7; i++) {
+      const card = document.getElementById(`card-step-${i}`);
+      if (card) {
+        card.style.cursor = 'pointer';
+        card.title = `Click to inspect Agent ${i} prompts & AST invariants`;
+        card.addEventListener('click', () => openAgentInspector(i));
+      }
+    }
+
+    // Screenshot Lightbox Modal
+    const modalScreenshot = document.getElementById('modal-screenshot-preview');
+    const btnCloseScreenshot = document.getElementById('btn-close-screenshot');
+    const btnCloseScreenshotFooter = document.getElementById('btn-close-screenshot-footer');
+    if (btnCloseScreenshot) btnCloseScreenshot.addEventListener('click', () => {
+      if (modalScreenshot) modalScreenshot.style.display = 'none';
+    });
+    if (btnCloseScreenshotFooter) btnCloseScreenshotFooter.addEventListener('click', () => {
+      if (modalScreenshot) modalScreenshot.style.display = 'none';
+    });
+
     // Auto-init on page load / reload (AG-10)
     window.addEventListener('DOMContentLoaded', async () => {
       loadInboxList();
       loadROITelemetry();
-      fetchDoctorStatus(false);
-      loadRealSnapshots();
       try {
         const active = await apiGet('/api/demo/active');
         if (active && active.workspace_id) {
@@ -3090,6 +4090,13 @@ Status: ACTIVE
       } catch (e) {
         await loadLedgerWorkspace();
       }
+
+      // Non-blocking real-workspace diagnostics
+      loadProviders();
+      fetchDoctorStatus(false);
+      loadRealSnapshots();
+      discoverRealWorkspace();
+      auditLocator("button#checkout");
     });
   </script>
 </body>

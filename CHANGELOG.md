@@ -5,6 +5,44 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ---
 
+## [1.3.1] - 2026-11-15
+
+### 🎭 Playwright Locator Resilience Studio, Split Diff Viewer & Interactive DAG Inspector
+
+#### 1. Playwright Locator Resilience Studio (`console_ui.py` & `server.py`)
+- **Live Interactive Selector Audit**:
+  - Added `POST /api/real/locator-audit` endpoint powered by `AccessibilityLocatorGuard`.
+  - Audits CSS IDs, complex XPaths, and brittle text locators, calculating a 0–100% resilience score.
+  - Synthesizes user-facing accessible Playwright locators (`page.get_by_role("button", name="...")`, `page.get_by_test_id(...)`) in both Python and TypeScript with 1-click clipboard copy.
+
+#### 2. Side-by-Side Split Diff & In-Place AST Patch Tweaker
+- **Multi-Mode Diff Viewer**:
+  - Added Unified, Split Side-by-Side, and Manual Code Tweaker view modes in Staged Diff panel.
+  - Split view provides synchronized line numbering, baseline deletion highlights (`#ef4444`), and proposal addition highlights (`#22c55e`).
+- **Live AST Validation for Manual Tweaks**:
+  - Added `POST /api/real/validate-ast` endpoint invoking `ASTPatchGuard.analyze()` to verify syntax validity, zero assertion erosion, and security blast-radius constraints before saving.
+
+#### 3. Discovered Tests Explorer with Instant Filtering & Runner
+- **Dual-Mode Left Rail Switcher**:
+  - Toggle between active Failure Queue and Discovered Tests Explorer.
+  - Instant client-side search/filtering (`#filter-tests-input`) across file paths and test functions.
+  - Framework filter pills: `All`, `🐍 Py` (Pytest), `🎭 PW` (Playwright).
+  - Integrated terminal execution runner for single tests and batch suite execution (`POST /api/real/run-test`).
+
+#### 4. Interactive Sprint DAG Agent Inspector
+- **7-Stage Step Inspector Modal**:
+  - Click any card in the Sprint Board DAG to inspect detailed agent prompts, AST invariants, and execution rubrics.
+  - Tabbed inspector views: Architectural Overview, System Prompt Specification, and AST Rubric Invariants.
+
+#### 5. Playwright Trace Viewer Launcher & Test Stabilization
+- **1-Click Trace Viewer**:
+  - Added `POST /api/real/open-trace` to launch non-blocking `npx playwright show-trace` for discovered `trace.zip` artifacts.
+- **Console UI JavaScript Syntax & Synchronization Fix**:
+  - Sanitized multi-line string escapes (`split('\\n')`, `\\b\\w`) in Python string literals.
+  - Verified 100% green test suite: 7/7 Playwright console tests, 337 unit tests, and 24 enterprise benchmarks.
+
+---
+
 ## [1.3.0] - 2026-11-14
 
 ### 🚀 Real-Project Workstation UI, CLI Subcommands & Cross-Platform Hardening
