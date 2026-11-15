@@ -2,7 +2,7 @@
 
 [![CI Suite](https://github.com/Prasad-PingFederate/hermes-rerun-agents/actions/workflows/ci.yml/badge.svg)](https://github.com/Prasad-PingFederate/hermes-rerun-agents/actions/workflows/ci.yml)
 [![Hermes Healer](https://github.com/Prasad-PingFederate/hermes-rerun-agents/actions/workflows/hermes-heal.yml/badge.svg)](https://github.com/Prasad-PingFederate/hermes-rerun-agents/actions/workflows/hermes-heal.yml)
-[![Tests](https://img.shields.io/badge/unit%20tests-333%20passed%20(100%25)-brightgreen.svg)](https://github.com/Prasad-PingFederate/hermes-rerun-agents/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/badge/unit%20tests-337%20passed%20(100%25)-brightgreen.svg)](https://github.com/Prasad-PingFederate/hermes-rerun-agents/actions/workflows/ci.yml)
 [![Playwright E2E](https://img.shields.io/badge/console%20e2e-7%20passed%20(100%25)-brightgreen.svg)](https://github.com/Prasad-PingFederate/hermes-rerun-agents/actions/workflows/ci.yml)
 [![Benchmark](https://img.shields.io/badge/evals%20benchmark-24%2F24%20(100%25%20Pass%401)-brightgreen.svg)](#-enterprise-self-healing-benchmark-evals)
 [![Syntax Guard](https://img.shields.io/badge/syntax%20guard-204%2F204%20Python%203.10%20passed-success.svg)](scripts/syntax_guard.py)
@@ -206,6 +206,11 @@ Hermes includes a developer console styled in dark copper (`#14120e` / `#c9854a`
 * **Live SSE Stage Streaming**: Real-time Stage 1–6 execution events with live status badges, stage latencies, and instant Stop/Cancel Sprint control.
 * **Collapsible Thinking & Reasoning Drawer**: Real-time token counter, elapsed seconds timer, and streaming reasoning traces (`delta.reasoning` / `<think>`).
 * **Multi-Artifact Drag-and-Drop Dropzone**: Ingests JUnit XML, CTRF JSON, Playwright `trace.zip`, or failure screenshots directly to spawn triage & healing.
+* **🎭 Playwright Locator Resilience Studio**: Live selector auditing, resilience scoring (0–100%), and automatic conversion of brittle CSS/XPaths into semantic `get_by_role` / `get_by_test_id` locators with 1-click Python & TS copy.
+* **📑 Side-by-Side (Split) Diff & In-Place AST Patch Tweaker**: Switch between Unified diff and Split side-by-side view with synchronized line numbers, or edit code directly with real-time AST Patch Guard validation (`POST /api/real/validate-ast`).
+* **🔍 Discovered Tests Explorer & Runner**: Dual-mode sidebar rail to browse and filter test suites (Pytest, Playwright Python & TS) with real-time search and 1-click terminal execution.
+* **⚡ Interactive Sprint DAG Inspector**: Click any stage on the DAG to view system prompts, AST invariants, and execution rubrics across all 7 agents.
+* **🎭 1-Click Playwright Trace Viewer**: Launch `npx playwright show-trace` directly from the workstation for discovered `trace.zip` failure artifacts.
 * **Switchable Multi-Tier Proposals**: Compare proposals from Tier 3 (Junior SWE / Local Ollama), Tier 2 (Senior SWE), and Tier 1 (Tech Lead) with live unified diffs, accompanied by steered prompt re-synthesis with custom instructions.
 * **Mermaid Sprint DAG Visualizer**: Interactive client-rendered dependency graph of the active sprint pipeline.
 * **1-Click DLP-Scrubbed ZIP Audit Bundle**: Export complete cryptographic audit trail (`audit_trail.md`, SARIF v2.1.0 `report.sarif`, `telemetry.json`, `staged_patch.diff`, `verification_verdicts.json`, `sprint_manifest.json`).
@@ -326,9 +331,9 @@ Every commit to Hermes is validated against strict verification gates:
 python scripts/syntax_guard.py
 # Output: ✅ [SYNTAX GUARD PASSED] All 203 files are 100% Python 3.10 compatible with clean root shims.
 
-# 2. Complete Unit Test Suite (328 tests)
+# 2. Complete Unit Test Suite (337 tests)
 python -m pytest tests/ -q
-# Output: 328 passed
+# Output: 337 passed
 
 # 3. Playwright Console E2E Suite (7 specifications)
 python -m pytest console_tests/ -v
