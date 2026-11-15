@@ -165,6 +165,20 @@ def get_doctor_diagnostics(workspace: Path) -> Dict[str, Any]:
         except Exception:
             pass
 
+    # If npm playwright is not present globally, check Python Playwright
+    if not pw_ver:
+        try:
+            import importlib.metadata
+            pw_ver = f"python-playwright {importlib.metadata.version('playwright')}"
+        except Exception:
+            try:
+                import subprocess
+                py_pw = subprocess.run([sys.executable, "-m", "playwright", "--version"], capture_output=True, text=True)
+                if py_pw.returncode == 0:
+                    pw_ver = py_pw.stdout.strip()
+            except Exception:
+                pass
+
     # Tree-sitter
     tree_sitter_status = "Python Native AST"
     try:

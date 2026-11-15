@@ -3229,8 +3229,9 @@ Status: ACTIVE
           }
           const osShort = res.os_family || (res.os_name ? res.os_name.substring(0, 3) : "OS");
           const pyShort = res.python_version ? res.python_version.split('.').slice(0, 2).join('.') : "3.10";
+          const pwVer = res.playwright_version ? res.playwright_version.replace(/^(Version|python-playwright|Version\\s+)/i, '').trim().split(' ')[0] : (res.has_playwright ? 'Ready' : 'None');
           if (labelDoctor) {
-            labelDoctor.innerText = `🩺 Doctor: Ready (${osShort} · Py ${pyShort})`;
+            labelDoctor.innerText = `🩺 ${osShort} · Py ${pyShort} · PW ${pwVer}`;
           }
           if (pillDoctor) {
             pillDoctor.className = res.is_live_llm ? "meta-pill status-green" : "meta-pill";
