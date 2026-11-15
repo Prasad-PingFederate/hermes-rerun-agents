@@ -1424,6 +1424,38 @@ CONSOLE_HTML = """<!DOCTYPE html>
             </div>
             <button id="btn-open-trace-viewer" class="btn-top" style="display: none; padding: 3px 8px; font-size: 10px; color: #60a5fa; border-color: rgba(96,165,250,0.3);" title="Open Playwright Trace Viewer">🎭 Open in Trace Viewer</button>
           </div>
+
+          <!-- Interactive DOM & Strict-Mode Playground -->
+          <div style="margin-top: 10px; border-top: 1px dashed var(--border-hairline); padding-top: 10px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+              <div style="font-size: 11px; font-weight: 600; font-family: var(--font-mono); color: var(--text-dim); display: flex; align-items: center; gap: 6px;">
+                <span>🧪 SELECTOR PLAYGROUND &amp; STRICT-MODE VALIDATOR</span>
+                <span id="playground-status-badge" style="font-size: 10px; padding: 1px 6px; border-radius: 3px; background: rgba(74,222,128,0.1); color: #4ade80;">READY</span>
+              </div>
+              <div style="display: flex; gap: 6px;">
+                <button id="btn-playground-load-sample" class="btn-top" style="padding: 2px 8px; font-size: 10px;" title="Load sample e-commerce checkout DOM snippet">Sample DOM</button>
+                <button id="btn-playground-toggle" class="btn-top" style="padding: 2px 8px; font-size: 10px;" title="Toggle DOM playground view">↕ Toggle</button>
+              </div>
+            </div>
+
+            <div id="playground-container" style="display: none; flex-direction: column; gap: 8px; margin-top: 8px;">
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+                <div>
+                  <div style="font-size: 10px; font-family: var(--font-mono); color: var(--text-dim); margin-bottom: 3px;">Page DOM / Aria Snapshot:</div>
+                  <textarea id="playground-dom" rows="5" style="width: 100%; box-sizing: border-box; background: #0f0d0b; border: 1px solid #42382f; color: #f0e6df; font-family: var(--font-mono); font-size: 11px; padding: 6px; border-radius: 4px; resize: vertical;" placeholder="Paste HTML DOM or Aria snapshot here..."></textarea>
+                </div>
+                <div>
+                  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 3px;">
+                    <div style="font-size: 10px; font-family: var(--font-mono); color: var(--text-dim);">Live Matched Elements:</div>
+                    <span id="playground-match-count" style="font-size: 10px; font-family: var(--font-mono); color: var(--copper); font-weight: 600;">0 matched</span>
+                  </div>
+                  <div id="playground-preview" style="height: 95px; overflow-y: auto; background: #0f0d0b; border: 1px solid #42382f; border-radius: 4px; padding: 6px; font-family: var(--font-mono); font-size: 11px; color: #f0e6df;">
+                    <div style="color: var(--text-dim); font-size: 10px;">Matched elements will appear here in real-time...</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
 
         <div style="display: flex; flex-direction: column; gap: 12px;">
@@ -1866,12 +1898,15 @@ graph LR
               <div class="audit-approval-line" id="audit-approval-line" data-testid="audit-approval-line"></div>
             </div>
 
-            <div style="display: flex; gap: 10px;">
+            <div style="display: flex; gap: 10px; flex-wrap: wrap;">
               <button class="btn-action-success" id="btn-approve" data-testid="btn-approve">
                 ✓ Approve &amp; Verify (Sandbox)
               </button>
               <button class="btn-action-rewind" id="btn-rewind" data-testid="btn-rewind">
                 ↺ Rewind Workspace (TimeMachine)
+              </button>
+              <button class="btn-top" id="btn-create-branch" data-testid="btn-create-branch" style="background: rgba(96,165,250,0.12); color: #60a5fa; border: 1px solid rgba(96,165,250,0.3); padding: 8px 14px; font-size: 12px; font-weight: 600; border-radius: 4px; display: inline-flex; align-items: center; gap: 6px;" title="Commit verified patch to new Git branch">
+                🌿 Commit to Branch / PR
               </button>
             </div>
           </div>
@@ -3339,6 +3374,108 @@ Status: ACTIVE
         if (elapsedLabel) elapsedLabel.innerText = ((Date.now() - t0) / 1000).toFixed(1) + 's';
       }, 100);
 
+      let accumulated = "";
+      let sseFinished = false;
+
+      // Try Live Streaming via SSE first
+      if (window.EventSource) {
+        const streamUrl = `/api/real/run-test-stream?test_path=${encodeURIComponent(testPath)}${cmd ? '&cmd=' + encodeURIComponent(cmd) : ''}`;
+        const es = new EventSource(streamUrl);
+
+        es.addEventListener('line', (e) => {
+          try {
+            const data = JSON.parse(e.data);
+            accumulated += data.text;
+            if (termOutput) {
+              termOutput.innerHTML = ansiToHtml(accumulated);
+              termOutput.scrollTop = termOutput.scrollHeight;
+            }
+          } catch (_) {}
+        });
+
+        es.addEventListener('exit', (e) => {
+          sseFinished = true;
+          clearInterval(timer);
+          es.close();
+          try {
+            const res = JSON.parse(e.data);
+            if (elapsedLabel) elapsedLabel.innerText = (res.elapsed_s || 0) + 's';
+            if (res.passed) {
+              if (statusBadge) {
+                statusBadge.innerText = 'PASSED';
+                statusBadge.style.color = '#4ade80';
+                statusBadge.style.background = 'rgba(74,222,128,0.12)';
+              }
+            } else {
+              if (statusBadge) {
+                statusBadge.innerText = 'FAILED';
+                statusBadge.style.color = '#f87171';
+                statusBadge.style.background = 'rgba(248,113,113,0.12)';
+              }
+              if (btnHeal) {
+                btnHeal.style.display = 'inline-block';
+                btnHeal.onclick = () => {
+                  const inputScope = document.getElementById('input-heal-scope');
+                  const inputFailure = document.getElementById('input-heal-failure');
+                  if (inputScope) inputScope.value = testPath;
+                  if (inputFailure) inputFailure.value = res.output || accumulated;
+                  switchTab('inbox');
+                  const controls = document.getElementById('real-workspace-controls');
+                  if (controls) controls.scrollIntoView({ behavior: 'smooth' });
+                };
+              }
+            }
+          } catch (_) {}
+        });
+
+        es.onerror = async () => {
+          es.close();
+          if (sseFinished) return;
+          // Clean fallback to standard POST endpoint
+          try {
+            const res = await apiPost('/api/real/run-test', { test_path: testPath, cmd: cmd });
+            clearInterval(timer);
+            if (elapsedLabel) elapsedLabel.innerText = (res.elapsed_s || 0) + 's';
+            if (termOutput) termOutput.innerHTML = ansiToHtml(res.output || "No output returned.");
+
+            if (res.passed) {
+              if (statusBadge) {
+                statusBadge.innerText = 'PASSED';
+                statusBadge.style.color = '#4ade80';
+                statusBadge.style.background = 'rgba(74,222,128,0.12)';
+              }
+            } else {
+              if (statusBadge) {
+                statusBadge.innerText = 'FAILED';
+                statusBadge.style.color = '#f87171';
+                statusBadge.style.background = 'rgba(248,113,113,0.12)';
+              }
+              if (btnHeal) {
+                btnHeal.style.display = 'inline-block';
+                btnHeal.onclick = () => {
+                  const inputScope = document.getElementById('input-heal-scope');
+                  const inputFailure = document.getElementById('input-heal-failure');
+                  if (inputScope) inputScope.value = testPath;
+                  if (inputFailure) inputFailure.value = res.output;
+                  switchTab('inbox');
+                  const controls = document.getElementById('real-workspace-controls');
+                  if (controls) controls.scrollIntoView({ behavior: 'smooth' });
+                };
+              }
+            }
+          } catch (err) {
+            clearInterval(timer);
+            if (statusBadge) {
+              statusBadge.innerText = 'ERROR';
+              statusBadge.style.color = '#f87171';
+            }
+            if (termOutput) termOutput.innerHTML = ansiToHtml("Execution failed: " + err.message);
+          }
+        };
+        return;
+      }
+
+      // Synchronous fallback if EventSource is unavailable
       try {
         const res = await apiPost('/api/real/run-test', { test_path: testPath, cmd: cmd });
         clearInterval(timer);
@@ -3827,6 +3964,132 @@ Status: ACTIVE
           alert("Failed to launch trace viewer: " + err.message);
         } finally {
           btnOpenTraceViewer.innerText = "🎭 Open in Trace Viewer";
+        }
+      });
+    }
+
+    // =========================================================================
+    // Interactive DOM & Selector Strict-Mode Validator
+    // =========================================================================
+    const btnPlaygroundToggle = document.getElementById('btn-playground-toggle');
+    const playgroundContainer = document.getElementById('playground-container');
+    const btnPlaygroundSample = document.getElementById('btn-playground-load-sample');
+    const playgroundDom = document.getElementById('playground-dom');
+    const playgroundPreview = document.getElementById('playground-preview');
+    const playgroundMatchCount = document.getElementById('playground-match-count');
+    const playgroundStatusBadge = document.getElementById('playground-status-badge');
+
+    if (btnPlaygroundToggle && playgroundContainer) {
+      btnPlaygroundToggle.addEventListener('click', () => {
+        const isHidden = playgroundContainer.style.display === 'none';
+        playgroundContainer.style.display = isHidden ? 'flex' : 'none';
+        btnPlaygroundToggle.innerText = isHidden ? '▲ Hide' : '↕ Toggle';
+      });
+    }
+
+    const sampleHtmlSnippet = `<div class="checkout-container" id="checkout-view">\n  <h2>Shopping Cart & Checkout</h2>\n  <div class="cart-items">\n    <div class="item" data-testid="cart-item-1">Item A - $29.99</div>\n  </div>\n  <div class="actions">\n    <button id="checkout" class="btn btn-primary" data-testid="checkout-btn" aria-label="Proceed to checkout">Checkout</button>\n    <button class="btn btn-secondary" data-testid="cancel-btn">Cancel</button>\n  </div>\n</div>`;
+
+    if (btnPlaygroundSample && playgroundDom) {
+      btnPlaygroundSample.addEventListener('click', () => {
+        playgroundDom.value = sampleHtmlSnippet;
+        if (playgroundContainer) playgroundContainer.style.display = 'flex';
+        if (btnPlaygroundToggle) btnPlaygroundToggle.innerText = '▲ Hide';
+        evaluatePlaygroundSelector();
+      });
+    }
+
+    function evaluatePlaygroundSelector() {
+      if (!playgroundDom || !playgroundPreview) return;
+      const html = playgroundDom.value.trim();
+      const sel = (inputAuditSelector ? inputAuditSelector.value.trim() : '');
+      if (!html) {
+        playgroundPreview.innerHTML = '<div style="color: var(--text-dim); font-size: 10px;">Paste DOM HTML or click Sample DOM to evaluate...</div>';
+        if (playgroundMatchCount) playgroundMatchCount.innerText = '0 matched';
+        return;
+      }
+      try {
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(html, 'text/html');
+        let matchedElements = [];
+
+        if (sel.startsWith('//') || sel.startsWith('(')) {
+          const xpathResult = doc.evaluate(sel, doc.body, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+          for (let i = 0; i < xpathResult.snapshotLength; i++) {
+            matchedElements.push(xpathResult.snapshotItem(i));
+          }
+        } else {
+          const cleanCss = sel.replace(/:has-text\\([^)]+\\)/g, '').trim();
+          if (cleanCss) {
+            matchedElements = Array.from(doc.querySelectorAll(cleanCss));
+          }
+        }
+
+        const count = matchedElements.length;
+        if (playgroundMatchCount) {
+          playgroundMatchCount.innerText = count + (count === 1 ? ' element' : ' elements');
+        }
+
+        if (playgroundStatusBadge) {
+          if (count === 1) {
+            playgroundStatusBadge.innerText = 'STRICT PASS ✅';
+            playgroundStatusBadge.style.color = '#4ade80';
+            playgroundStatusBadge.style.background = 'rgba(74,222,128,0.15)';
+          } else if (count > 1) {
+            playgroundStatusBadge.innerText = 'VIOLATION ⚠️ (' + count + ')';
+            playgroundStatusBadge.style.color = '#f87171';
+            playgroundStatusBadge.style.background = 'rgba(248,113,113,0.15)';
+          } else {
+            playgroundStatusBadge.innerText = 'NO MATCH ❌';
+            playgroundStatusBadge.style.color = '#fbbf24';
+            playgroundStatusBadge.style.background = 'rgba(251,191,36,0.15)';
+          }
+        }
+
+        if (count === 0) {
+          playgroundPreview.innerHTML = '<div style="color: #f87171; font-size: 11px;">No elements match selector <code>' + escapeHtml(sel) + '</code>.</div>';
+        } else {
+          let outHtml = '<div style="color: #4ade80; font-size: 10px; margin-bottom: 4px;">Found ' + count + ' matching node(s):</div>';
+          matchedElements.forEach((el, idx) => {
+            const tag = el.tagName ? el.tagName.toLowerCase() : 'node';
+            const idAttr = el.id ? ' id="' + el.id + '"' : '';
+            const classAttr = el.className ? ' class="' + el.className + '"' : '';
+            const testId = el.getAttribute('data-testid') ? ' data-testid="' + el.getAttribute('data-testid') + '"' : '';
+            const text = (el.innerText || el.textContent || '').trim().substring(0, 30);
+            outHtml += '<div style="background: rgba(74,222,128,0.08); border-left: 2px solid #4ade80; padding: 2px 6px; margin-bottom: 3px; font-size: 10px;">' +
+              '<strong>#' + (idx + 1) + '</strong> &lt;' + tag + idAttr + classAttr + testId + '&gt; ' + escapeHtml(text) +
+            '</div>';
+          });
+          playgroundPreview.innerHTML = outHtml;
+        }
+      } catch (err) {
+        if (playgroundPreview) {
+          playgroundPreview.innerHTML = '<div style="color: #f87171; font-size: 10px;">Selector Evaluation Error: ' + escapeHtml(err.message) + '</div>';
+        }
+      }
+    }
+
+    if (playgroundDom) playgroundDom.addEventListener('input', evaluatePlaygroundSelector);
+    if (inputAuditSelector) inputAuditSelector.addEventListener('input', evaluatePlaygroundSelector);
+
+    // 1-Click Commit to Git Branch
+    const btnCreateBranch = document.getElementById('btn-create-branch');
+    if (btnCreateBranch) {
+      btnCreateBranch.addEventListener('click', async () => {
+        const origText = btnCreateBranch.innerHTML;
+        try {
+          btnCreateBranch.innerText = "Creating Branch...";
+          const res = await apiPost('/api/real/create-git-branch', {});
+          if (res && res.status === 'success') {
+            alert('✅ Branch Created & Changes Committed Successfully!\\n\\n• Branch: ' + res.branch + '\\n• Commit: ' + res.commit_sha + '\\n\\n' + res.message);
+            btnCreateBranch.innerHTML = '🌿 ' + res.branch;
+            setTimeout(() => { btnCreateBranch.innerHTML = origText; }, 4000);
+          }
+        } catch (err) {
+          alert("Branch Creation Failed: " + err.message);
+        } finally {
+          if (btnCreateBranch.innerText === "Creating Branch...") {
+            btnCreateBranch.innerHTML = origText;
+          }
         }
       });
     }
