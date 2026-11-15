@@ -1175,7 +1175,8 @@ CONSOLE_HTML = """<!DOCTYPE html>
         <span id="label-workspace">InMemoryLedger</span>
       </div>
       <div class="workspace-selector" style="display: inline-flex; align-items: center; gap: 6px; margin-left: 8px;">
-        <input type="text" id="input-real-workspace" placeholder="Target workspace path..." style="background: #1c1815; border: 1px solid #42382f; color: #f0e6df; padding: 5px 10px; border-radius: 4px; font-size: 11px; font-family: var(--font-mono); width: 280px;" title="Target project workspace path" />
+        <input type="text" id="input-real-workspace" list="recent-workspaces-list" placeholder="Target workspace path..." style="background: #1c1815; border: 1px solid #42382f; color: #f0e6df; padding: 5px 10px; border-radius: 4px; font-size: 11px; font-family: var(--font-mono); width: 280px;" title="Target project workspace path (Double-click or type to view recent)" autocomplete="off" />
+        <datalist id="recent-workspaces-list"></datalist>
         <button id="btn-load-workspace" class="btn-top" style="padding: 5px 10px; font-size: 11px;" title="Load local repository workspace">📂 Load</button>
       </div>
     </div>
@@ -1312,10 +1313,11 @@ CONSOLE_HTML = """<!DOCTYPE html>
           <div style="padding: 6px 8px; border-bottom: 1px solid var(--border-hairline); display: flex; flex-direction: column; gap: 6px; background: rgba(0,0,0,0.15);">
             <input type="text" id="filter-tests-input" placeholder="🔍 Filter tests..." style="width: 100%; background: #1c1815; border: 1px solid #42382f; color: #f0e6df; padding: 4px 8px; border-radius: 4px; font-size: 10px; font-family: var(--font-mono);" />
             <div style="display: flex; justify-content: space-between; align-items: center;">
-              <div style="display: flex; gap: 4px; font-size: 9px; font-family: var(--font-mono);">
+              <div style="display: flex; gap: 4px; font-size: 9px; font-family: var(--font-mono); flex-wrap: wrap;">
                 <button id="filter-pill-all" class="filter-type-pill active" style="background: var(--bg-card); border: 1px solid var(--border-hairline); color: var(--text-main); padding: 2px 5px; border-radius: 3px; cursor: pointer;">All (<span id="count-all-tests">0</span>)</button>
                 <button id="filter-pill-py" class="filter-type-pill" style="background: transparent; border: 1px solid transparent; color: var(--text-dim); padding: 2px 5px; border-radius: 3px; cursor: pointer;">🐍 Py</button>
                 <button id="filter-pill-pw" class="filter-type-pill" style="background: transparent; border: 1px solid transparent; color: var(--text-dim); padding: 2px 5px; border-radius: 3px; cursor: pointer;">🎭 PW</button>
+                <button id="filter-pill-art" class="filter-type-pill" style="background: transparent; border: 1px solid transparent; color: var(--text-dim); padding: 2px 5px; border-radius: 3px; cursor: pointer;">🖼️ Artifacts (<span id="count-artifacts">0</span>)</button>
               </div>
               <button id="btn-run-all-tests" class="btn-top" style="padding: 2px 6px; font-size: 9px;" title="Execute entire test suite in workspace">▶ Run All</button>
             </div>
@@ -2081,6 +2083,23 @@ Status: ACTIVE
         <div id="roi-breakdown-details" style="font-size: 11px;">
           <!-- Dynamically populated from /api/telemetry/roi -->
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Failure Screenshot Lightbox -->
+  <div class="modal-overlay" id="modal-screenshot-lightbox" style="display: none; z-index: 9999;">
+    <div class="modal-box" style="max-width: 900px; width: 90%;">
+      <div class="drawer-header" style="margin-bottom: 8px;">
+        <div class="drawer-title" id="lightbox-title" style="word-break: break-all;">🖼️ Failure Screenshot Preview</div>
+        <button class="btn-top" id="btn-close-lightbox">✕ Close</button>
+      </div>
+      <div style="max-height: 70vh; overflow: auto; text-align: center; background: #000; border-radius: 4px; padding: 10px;">
+        <img id="lightbox-img" src="" alt="Failure Screenshot" style="max-width: 100%; height: auto; border-radius: 4px; box-shadow: 0 4px 20px rgba(0,0,0,0.5);" />
+      </div>
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 10px;">
+        <span id="lightbox-path" style="font-size: 11px; font-family: var(--font-mono); color: var(--text-dim);"></span>
+        <a id="lightbox-download-link" href="#" target="_blank" class="btn-top" style="padding: 4px 10px; font-size: 11px; text-decoration: none;">💾 Open in Tab</a>
       </div>
     </div>
   </div>
@@ -3335,6 +3354,9 @@ Status: ACTIVE
         const res = await apiGet('/api/real/discover');
         if (res) {
           discoveredTestsList = res.tests || [];
+          discoveredArtifactsList = res.artifacts || [];
+          const countArt = document.getElementById('count-artifacts');
+          if (countArt) countArt.innerText = discoveredArtifactsList.length;
           renderFilteredDiscoveredTests();
 
           // Check for trace files in artifacts
@@ -4095,10 +4117,48 @@ Status: ACTIVE
     }
 
     // =========================================================================
-    // Discovered Tests Explorer & Real-Time Filtering
+    // Discovered Tests & Artifacts Explorer & Real-Time Filtering
     // =========================================================================
     let discoveredTestsList = [];
+    let discoveredArtifactsList = [];
     let currentFilterType = 'all';
+
+    const filterPillAll = document.getElementById('filter-pill-all');
+    const filterPillPy = document.getElementById('filter-pill-py');
+    const filterPillPw = document.getElementById('filter-pill-pw');
+    const filterPillArt = document.getElementById('filter-pill-art');
+    const countArtifacts = document.getElementById('count-artifacts');
+
+    // Screenshot Lightbox Elements
+    const modalLightbox = document.getElementById('modal-screenshot-lightbox');
+    const lightboxImg = document.getElementById('lightbox-img');
+    const lightboxTitle = document.getElementById('lightbox-title');
+    const lightboxPath = document.getElementById('lightbox-path');
+    const lightboxDownload = document.getElementById('lightbox-download-link');
+    const btnCloseLightbox = document.getElementById('btn-close-lightbox');
+
+    function openScreenshotLightbox(relPath) {
+      if (!modalLightbox || !lightboxImg) return;
+      const fileUrl = `/api/real/artifact-file?path=${encodeURIComponent(relPath)}`;
+      lightboxImg.src = fileUrl;
+      if (lightboxTitle) lightboxTitle.innerText = `🖼️ Failure Screenshot: ${relPath.split('/').pop()}`;
+      if (lightboxPath) lightboxPath.innerText = relPath;
+      if (lightboxDownload) lightboxDownload.href = fileUrl;
+      modalLightbox.style.display = 'flex';
+    }
+
+    if (btnCloseLightbox && modalLightbox) {
+      btnCloseLightbox.addEventListener('click', () => {
+        modalLightbox.style.display = 'none';
+        if (lightboxImg) lightboxImg.src = '';
+      });
+      modalLightbox.addEventListener('click', (e) => {
+        if (e.target === modalLightbox) {
+          modalLightbox.style.display = 'none';
+          if (lightboxImg) lightboxImg.src = '';
+        }
+      });
+    }
 
     function renderFilteredDiscoveredTests() {
       const testsContainer = document.getElementById('rail-tests-list');
@@ -4108,6 +4168,83 @@ Status: ACTIVE
       const query = filterInput ? filterInput.value.toLowerCase().trim() : '';
 
       if (!testsContainer) return;
+
+      if (countArtifacts) countArtifacts.innerText = discoveredArtifactsList.length;
+
+      // Handle Artifacts view
+      if (currentFilterType === 'art') {
+        const filteredArt = discoveredArtifactsList.filter(a => {
+          return !query || a.rel_path.toLowerCase().includes(query) || a.file_name.toLowerCase().includes(query);
+        });
+        if (countLabel) countLabel.innerText = filteredArt.length;
+        if (countAll) countAll.innerText = discoveredTestsList.length;
+
+        let html = '';
+        if (!filteredArt.length) {
+          html = '<div style="padding: 12px; color: var(--text-dim); font-size: 11px;">No failure artifacts found.</div>';
+        } else {
+          filteredArt.forEach(a => {
+            let icon = '📋';
+            let badgeClass = 'tag-badge';
+            let actionBtn = '';
+            if (a.type === 'FAILURE_SCREENSHOT') {
+              icon = '🖼️';
+              badgeClass = 'tag-badge test-bug';
+              actionBtn = `<button class="btn-top btn-view-screenshot" data-rel="${escapeHtml(a.rel_path)}" style="padding: 2px 6px; font-size: 10px; color: #60a5fa; border-color: rgba(96,165,250,0.3);" title="Preview failure screenshot">👁️ View</button>`;
+            } else if (a.type === 'PLAYWRIGHT_TRACE') {
+              icon = '🎭';
+              badgeClass = 'tag-badge prod-bug';
+              actionBtn = `<button class="btn-top btn-open-trace-art" data-rel="${escapeHtml(a.rel_path)}" style="padding: 2px 6px; font-size: 10px; color: #c084fc; border-color: rgba(192,132,252,0.3);" title="Launch trace viewer">🎭 Trace</button>`;
+            } else {
+              icon = '📊';
+              badgeClass = 'tag-badge';
+              actionBtn = `<button class="btn-top btn-ingest-art" data-rel="${escapeHtml(a.rel_path)}" style="padding: 2px 6px; font-size: 10px; color: var(--copper); border-color: var(--copper-border);" title="Ingest into Healer Inbox">⚡ Triage</button>`;
+            }
+            html += `
+              <div class="inbox-row artifact-row" style="cursor: default;">
+                <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 4px;">
+                  <div class="inbox-row-title" style="word-break: break-all; font-size: 11px;" title="${escapeHtml(a.rel_path)}">${icon} ${escapeHtml(a.file_name)}</div>
+                </div>
+                <div class="inbox-row-meta" style="justify-content: space-between; align-items: center; margin-top: 4px;">
+                  <span class="${badgeClass}" style="font-size: 9px;">${a.type}</span>
+                  <div style="display: flex; gap: 4px;">
+                    ${actionBtn}
+                  </div>
+                </div>
+              </div>`;
+          });
+        }
+        testsContainer.innerHTML = html;
+
+        document.querySelectorAll('.btn-view-screenshot').forEach(b => {
+          b.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const rel = b.getAttribute('data-rel');
+            openScreenshotLightbox(rel);
+          });
+        });
+        document.querySelectorAll('.btn-open-trace-art').forEach(b => {
+          b.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const rel = b.getAttribute('data-rel');
+            await apiPost('/api/real/open-trace', { trace_path: rel });
+          });
+        });
+        document.querySelectorAll('.btn-ingest-art').forEach(b => {
+          b.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const rel = b.getAttribute('data-rel');
+            try {
+              const res = await apiPost('/api/real/ingest-artifact', { artifact_rel_path: rel });
+              alert('Ingested ' + (res.tickets_found || 0) + ' failure ticket(s) from ' + rel + '!');
+              switchTab('inbox');
+            } catch (err) {
+              alert('Ingestion error: ' + err.message);
+            }
+          });
+        });
+        return;
+      }
 
       const filtered = discoveredTestsList.filter(t => {
         const matchesQuery = !query || t.rel_path.toLowerCase().includes(query) || t.file_name.toLowerCase().includes(query);
@@ -4170,12 +4307,8 @@ Status: ACTIVE
       filterTestsInput.addEventListener('input', () => renderFilteredDiscoveredTests());
     }
 
-    const filterPillAll = document.getElementById('filter-pill-all');
-    const filterPillPy = document.getElementById('filter-pill-py');
-    const filterPillPw = document.getElementById('filter-pill-pw');
-
     function setFilterPillActive(activePill, type) {
-      [filterPillAll, filterPillPy, filterPillPw].forEach(p => {
+      [filterPillAll, filterPillPy, filterPillPw, filterPillArt].forEach(p => {
         if (p) p.classList.remove('active');
       });
       if (activePill) activePill.classList.add('active');
@@ -4186,6 +4319,22 @@ Status: ACTIVE
     if (filterPillAll) filterPillAll.addEventListener('click', () => setFilterPillActive(filterPillAll, 'all'));
     if (filterPillPy) filterPillPy.addEventListener('click', () => setFilterPillActive(filterPillPy, 'py'));
     if (filterPillPw) filterPillPw.addEventListener('click', () => setFilterPillActive(filterPillPw, 'pw'));
+    if (filterPillArt) filterPillArt.addEventListener('click', () => setFilterPillActive(filterPillArt, 'art'));
+
+    function updateRecentWorkspacesDropdown(newPath) {
+      try {
+        let recents = JSON.parse(localStorage.getItem('hermes_recent_workspaces') || '[]');
+        if (newPath) {
+          recents = [newPath, ...recents.filter(p => p !== newPath)].slice(0, 8);
+          localStorage.setItem('hermes_recent_workspaces', JSON.stringify(recents));
+        }
+        const dl = document.getElementById('recent-workspaces-list');
+        if (dl) {
+          dl.innerHTML = recents.map(p => `<option value="${escapeHtml(p)}"></option>`).join('');
+        }
+      } catch (_) {}
+    }
+    updateRecentWorkspacesDropdown();
 
     const btnRunAllTests = document.getElementById('btn-run-all-tests');
     if (btnRunAllTests) {

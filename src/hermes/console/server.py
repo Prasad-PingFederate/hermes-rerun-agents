@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
 from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, Request, Response, UploadFile
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 
 from hermes.agents.ci_detective import CIDetectiveAgent
@@ -2362,6 +2362,22 @@ def ingest_real_artifact_endpoint(req: IngestArtifactRequest):
         "tickets_found": len(tickets),
         "tickets": [t.__dict__ if hasattr(t, "__dict__") else t for t in tickets],
     }
+
+
+@app.get("/api/real/artifact-file", dependencies=[Depends(verify_hermes_token)])
+def get_artifact_file_endpoint(path: str):
+    """Safely stream/serve an artifact file (e.g. failure screenshot, report) from workspace."""
+    ws_path = get_active_workspace_path().resolve()
+    target_path = (ws_path / path).resolve()
+
+    # Prevent directory traversal attacks
+    if not str(target_path).startswith(str(ws_path)):
+        raise HTTPException(status_code=403, detail="Access denied: Path escapes workspace root")
+
+    if not target_path.exists() or not target_path.is_file():
+        raise HTTPException(status_code=404, detail=f"File not found: {path}")
+
+    return FileResponse(str(target_path))
 
 
 @app.post("/api/real/validate-ast", dependencies=[Depends(verify_hermes_token)])

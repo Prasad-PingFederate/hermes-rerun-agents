@@ -286,6 +286,55 @@ class TestV130Features(unittest.TestCase):
                 self.assertEqual(data["status"], "success")
                 self.assertTrue(mock_popen.called)
 
+    def test_10_real_workspace_create_git_branch_endpoint(self):
+        """Verifies POST /api/real/create-git-branch creates a branch and commits staged files."""
+        with tempfile.TemporaryDirectory() as td:
+            ws = Path(td).resolve()
+            # Initialize git repo
+            is_win = (os.name == "nt")
+            subprocess.run(["git", "init"], cwd=str(ws), capture_output=True, shell=is_win)
+            subprocess.run(["git", "config", "user.email", "ci@hermes.test"], cwd=str(ws), capture_output=True, shell=is_win)
+            subprocess.run(["git", "config", "user.name", "Hermes CI"], cwd=str(ws), capture_output=True, shell=is_win)
+            (ws / "file.txt").write_text("initial", encoding="utf-8")
+            subprocess.run(["git", "add", "file.txt"], cwd=str(ws), capture_output=True, shell=is_win)
+            subprocess.run(["git", "commit", "-m", "init"], cwd=str(ws), capture_output=True, shell=is_win)
+
+            # Stage a modification
+            (ws / "file.txt").write_text("healed content", encoding="utf-8")
+
+            self.client.post("/api/real/workspace", json={"workspace": str(ws)}, headers=self.headers)
+
+            res = self.client.post(
+                "/api/real/create-git-branch",
+                json={"branch_name": "hermes/test-branch", "commit_msg": "fix: self-healed test"},
+                headers=self.headers,
+            )
+            self.assertEqual(res.status_code, 200)
+            data = res.json()
+            self.assertEqual(data["status"], "success")
+            self.assertEqual(data["branch"], "hermes/test-branch")
+            self.assertTrue(len(data["commit_sha"]) > 0)
+
+    def test_11_real_workspace_run_test_stream_endpoint(self):
+        """Verifies GET /api/real/run-test-stream streams SSE test execution events."""
+        with tempfile.TemporaryDirectory() as td:
+            ws = Path(td).resolve()
+            test_file = ws / "test_quick.py"
+            test_file.write_text("def test_ok():\n    assert True\n", encoding="utf-8")
+
+            self.client.post("/api/real/workspace", json={"workspace": str(ws)}, headers=self.headers)
+
+            res = self.client.get(
+                "/api/real/run-test-stream?test_path=test_quick.py",
+                headers=self.headers,
+            )
+            self.assertEqual(res.status_code, 200)
+            self.assertIn("text/event-stream", res.headers.get("content-type", ""))
+            content = res.text
+            self.assertIn("event: start", content)
+            self.assertIn("event: exit", content)
+            self.assertIn("passed", content)
+
 
 if __name__ == "__main__":
     unittest.main()
