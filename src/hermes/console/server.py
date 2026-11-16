@@ -1961,11 +1961,11 @@ def get_real_doctor_endpoint(ping: bool = False):
     diag = get_doctor_diagnostics(ws_path)
     ping_ms = None
     if ping and diag["llm_provider"] != "OFFLINE_HEURISTIC":
-        from hermes.execution.llm_provider_adapter import resolve_provider, _call_openai_chat
+        from hermes.execution.llm_provider_adapter import HermesLLMAdapter
         t0 = time.time()
         try:
-            prov = resolve_provider()
-            _call_openai_chat(prov, [{"role": "user", "content": "ping"}], timeout=5)
+            adapter = HermesLLMAdapter(workspace_path=ws_path)
+            adapter.complete("ping", max_tokens=5)
             ping_ms = int((time.time() - t0) * 1000)
         except Exception:
             ping_ms = -1
