@@ -2353,14 +2353,18 @@ def ingest_real_artifact_endpoint(req: IngestArtifactRequest):
     if not art_file.exists():
         raise HTTPException(status_code=404, detail=f"Artifact not found: {req.artifact_rel_path}")
 
-    from hermes.agents.ci_failure_ingestor import CIFailureIngestor
+    from hermes.ingestion.ci_failure_ingestor import CIFailureIngestor
     ingestor = CIFailureIngestor(ws_path)
-    tickets = ingestor.ingest([str(art_file)])
+    res = ingestor.ingest_artifacts(str(art_file))
+    tickets = res.get("tickets", [])
     return {
         "status": "success",
         "artifact": req.artifact_rel_path,
         "tickets_found": len(tickets),
         "tickets": [t.__dict__ if hasattr(t, "__dict__") else t for t in tickets],
+        "allowed_files": res.get("allowed_files", []),
+        "summary": res.get("summary", ""),
+        "classification": tickets[0].get("classification") if (tickets and isinstance(tickets[0], dict)) else "UNKNOWN",
     }
 
 
