@@ -1581,7 +1581,7 @@ def export_demo_audit_zip_endpoint(workspace_id: str):
     }
 
     manifest_data = {
-        "hermes_version": "1.2.0",
+        "hermes_version": "1.3.2",
         "exported_at": time.time(),
         "workspace_id": ws.workspace_id,
         "workspace_name": ws.workspace_name,

@@ -204,13 +204,18 @@ MTTR Compression % = ((4.2h Baseline - Autonomous Duration) / 4.2h) × 100%
 Hermes includes a developer console styled in dark copper (`#14120e` / `#c9854a`), free of heavy dependencies:
 
 * **Live SSE Stage Streaming**: Real-time Stage 1–6 execution events with live status badges, stage latencies, and instant Stop/Cancel Sprint control.
+* **⚡ Live SSE Terminal Streaming**: Real-time line-by-line test execution streaming directly into the workstation drawer with ANSI color formatting and elapsed execution timer.
 * **Collapsible Thinking & Reasoning Drawer**: Real-time token counter, elapsed seconds timer, and streaming reasoning traces (`delta.reasoning` / `<think>`).
 * **Multi-Artifact Drag-and-Drop Dropzone**: Ingests JUnit XML, CTRF JSON, Playwright `trace.zip`, or failure screenshots directly to spawn triage & healing.
 * **🎭 Playwright Locator Resilience Studio**: Live selector auditing, resilience scoring (0–100%), and automatic conversion of brittle CSS/XPaths into semantic `get_by_role` / `get_by_test_id` locators with 1-click Python & TS copy.
+* **🧪 Interactive Strict-Mode DOM Selector Playground**: In-browser DOM sandbox to test CSS and XPath selectors against parsed DOM/Aria snapshots, instantly flagging strict-mode violations (`count > 1`) or missing elements before execution.
+* **🖼️ Failure Screenshot Lightbox**: Embedded modal preview for Playwright failure screenshots (`.png`, `.jpg`) with high-res zoom, file metadata, and 1-click browser tab opening.
+* **🌿 1-Click Git Branch & PR Automation**: Automatically creates an isolated Git branch (`hermes/heal-...`), stages patched files, and commits with cryptographically verifiable AST invariant signatures.
+* **📁 Workspace Recent History Quick-Switcher**: Instant switching across multiple test projects with persistent `localStorage` memory and native `<datalist>` auto-complete.
 * **📑 Side-by-Side (Split) Diff & In-Place AST Patch Tweaker**: Switch between Unified diff and Split side-by-side view with synchronized line numbers, or edit code directly with real-time AST Patch Guard validation (`POST /api/real/validate-ast`).
-* **🔍 Discovered Tests Explorer & Runner**: Dual-mode sidebar rail to browse and filter test suites (Pytest, Playwright Python & TS) with real-time search and 1-click terminal execution.
+* **🔍 Discovered Tests & Artifacts Explorer**: Dual-mode sidebar rail to browse, filter, and run test suites (Pytest, Playwright Python & TS) and inspect discovered failure artifacts with 1-click triage.
 * **⚡ Interactive Sprint DAG Inspector**: Click any stage on the DAG to view system prompts, AST invariants, and execution rubrics across all 7 agents.
-* **🎭 1-Click Playwright Trace Viewer**: Launch `npx playwright show-trace` directly from the workstation for discovered `trace.zip` failure artifacts.
+* **🎭 1-Click Playwright Trace Viewer**: Launch `npx playwright show-trace` (or `python -m playwright show-trace`) directly from the workstation for discovered `trace.zip` failure artifacts.
 * **Switchable Multi-Tier Proposals**: Compare proposals from Tier 3 (Junior SWE / Local Ollama), Tier 2 (Senior SWE), and Tier 1 (Tech Lead) with live unified diffs, accompanied by steered prompt re-synthesis with custom instructions.
 * **Mermaid Sprint DAG Visualizer**: Interactive client-rendered dependency graph of the active sprint pipeline.
 * **1-Click DLP-Scrubbed ZIP Audit Bundle**: Export complete cryptographic audit trail (`audit_trail.md`, SARIF v2.1.0 `report.sarif`, `telemetry.json`, `staged_patch.diff`, `verification_verdicts.json`, `sprint_manifest.json`).

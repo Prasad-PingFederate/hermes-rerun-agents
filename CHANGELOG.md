@@ -5,6 +5,32 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ---
 
+## [1.3.2] - 2026-11-16
+
+### ⚡ Live SSE Terminal Streaming, Screenshot Lightbox, Strict-Mode Playground & 1-Click Git Branching
+
+#### 1. Live SSE Subprocess Terminal Streaming (`server.py` & `console_ui.py`)
+- Added `GET /api/real/run-test-stream` endpoint streaming stdout/stderr line-by-line via Server-Sent Events (SSE).
+- Terminal drawer renders ANSI colorized outputs in real-time with millisecond execution counter and auto-scroll.
+
+#### 2. Interactive DOM & Strict-Mode Selector Playground
+- Added in-browser DOM simulator inside Locator Resilience Studio.
+- Evaluates CSS and XPath selectors live against pasted HTML or sample checkout DOM trees.
+- Instantly flags strict-mode violations (`count > 1`), missing elements (`count == 0`), or strict pass (`count == 1`).
+
+#### 3. Failure Screenshot Lightbox Viewer
+- Added `GET /api/real/artifact-file` safely serving workspace screenshot assets without path traversal risk.
+- Embedded high-res lightbox modal displaying discovered `.png`/`.jpg` failure screenshots with 1-click external tab preview.
+
+#### 4. 1-Click Git Branch & PR Automation
+- Added `POST /api/real/create-git-branch` endpoint creating isolated branches (`hermes/heal-<timestamp>`) and committing verified patches with signed AST invariant certificates.
+
+#### 5. Workspace Recent History & Artifacts Explorer
+- Native `<datalist>` auto-complete memory for recently accessed repositories stored in `localStorage`.
+- Added `🖼️ Artifacts` filter tab in Discovered Tests rail to view, trace, and triage CI artifacts in one click.
+
+---
+
 ## [1.3.1] - 2026-11-15
 
 ### 🎭 Playwright Locator Resilience Studio, Split Diff Viewer & Interactive DAG Inspector
