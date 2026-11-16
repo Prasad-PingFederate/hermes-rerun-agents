@@ -1174,10 +1174,10 @@ CONSOLE_HTML = """<!DOCTYPE html>
         <span class="dot"></span>
         <span id="label-workspace">InMemoryLedger</span>
       </div>
-      <div class="workspace-selector" style="display: inline-flex; align-items: center; gap: 6px; margin-left: 8px;">
-        <input type="text" id="input-real-workspace" list="recent-workspaces-list" placeholder="Target workspace path..." style="background: #1c1815; border: 1px solid #42382f; color: #f0e6df; padding: 5px 10px; border-radius: 4px; font-size: 11px; font-family: var(--font-mono); width: 280px;" title="Target project workspace path (Double-click or type to view recent)" autocomplete="off" />
+      <div class="workspace-selector" style="display: inline-flex; align-items: center; gap: 6px; margin-left: 8px; flex: 1; max-width: 520px;">
+        <input type="text" id="input-real-workspace" list="recent-workspaces-list" placeholder="Target workspace path..." style="background: #1c1815; border: 1px solid #42382f; color: #f0e6df; padding: 5px 10px; border-radius: 4px; font-size: 11px; font-family: var(--font-mono); width: 100%; min-width: 280px; max-width: 480px; transition: all 0.2s ease;" title="Target project workspace path (Double-click or type to view recent)" autocomplete="off" />
         <datalist id="recent-workspaces-list"></datalist>
-        <button id="btn-load-workspace" class="btn-top" style="padding: 5px 10px; font-size: 11px;" title="Load local repository workspace">📂 Load</button>
+        <button id="btn-load-workspace" class="btn-top" style="padding: 5px 10px; font-size: 11px; white-space: nowrap;" title="Load local repository workspace">📂 Load</button>
       </div>
     </div>
 
@@ -2144,6 +2144,50 @@ Status: ACTIVE
       <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 10px;">
         <span id="screenshot-preview-caption" style="font-family: var(--font-mono); font-size: 11px; color: var(--text-dim);"></span>
         <button class="btn-top" id="btn-close-screenshot-footer">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Pre-Flight Doctor & AI Diagnostics -->
+  <div class="modal-overlay" id="modal-doctor-diagnostics" style="display: none;">
+    <div class="modal-box" style="width: 640px; max-width: 95vw; background: #0c0a08; border: 1px solid var(--border-hairline);">
+      <div class="drawer-header" style="margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center;">
+        <div class="drawer-title" style="font-size: 14px; font-weight: 600; color: #f0e6df;">🩺 Hermes Pre-Flight Doctor &amp; AI Engine</div>
+        <button class="btn-close" id="btn-close-doctor" style="background: none; border: none; color: var(--text-dim); font-size: 18px; cursor: pointer;">&times;</button>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 12px; font-size: 12px;">
+        <div style="background: #14120e; padding: 12px; border-radius: 6px; border: 1px solid #2a241e;">
+          <div style="color: var(--copper); font-weight: 600; margin-bottom: 6px; text-transform: uppercase; font-size: 10px; letter-spacing: 0.5px;">Environment &amp; Runners</div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+            <div><strong>OS:</strong> <span id="doc-os">Loading...</span></div>
+            <div><strong>Python:</strong> <span id="doc-py">Loading...</span></div>
+            <div><strong>Playwright:</strong> <span id="doc-pw" style="color: #4ade80;">Loading...</span></div>
+            <div><strong>Tree-sitter / AST:</strong> <span id="doc-ast">Native Python AST</span></div>
+          </div>
+        </div>
+        <div style="background: #14120e; padding: 12px; border-radius: 6px; border: 1px solid #2a241e;">
+          <div style="color: var(--copper); font-weight: 600; margin-bottom: 6px; text-transform: uppercase; font-size: 10px; letter-spacing: 0.5px;">LLM Provider &amp; Model</div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+            <div><strong>Provider:</strong> <span id="doc-provider">OLLAMA</span></div>
+            <div><strong>Model:</strong> <span id="doc-model">qwen2.5-coder:7b</span></div>
+            <div><strong>Status:</strong> <span id="doc-status" style="color: #4ade80;">ONLINE</span></div>
+            <div><strong>Latency:</strong> <span id="doc-latency">--</span></div>
+          </div>
+          <div style="margin-top: 10px; display: flex; gap: 8px; align-items: center;">
+            <button id="btn-doc-ping" class="btn-top" style="padding: 4px 10px; font-size: 11px; color: var(--copper); border-color: var(--copper-border);">🔄 Test Handshake</button>
+            <span id="doc-ping-msg" style="color: var(--text-dim); font-size: 11px;"></span>
+          </div>
+        </div>
+        <div style="background: #14120e; padding: 12px; border-radius: 6px; border: 1px solid #2a241e;">
+          <div style="color: var(--copper); font-weight: 600; margin-bottom: 6px; text-transform: uppercase; font-size: 10px; letter-spacing: 0.5px;">Active Workspace</div>
+          <div style="font-family: var(--font-mono); font-size: 11px; color: #f0e6df; word-break: break-all;" id="doc-ws-path">Loading...</div>
+          <div style="margin-top: 6px; color: var(--text-dim); font-size: 11px;">
+            Discovered: <strong id="doc-tests-count" style="color: #f0e6df;">0</strong> test suites · <strong id="doc-artifacts-count" style="color: #f0e6df;">0</strong> failure artifacts
+          </div>
+        </div>
+      </div>
+      <div style="margin-top: 14px; text-align: right;">
+        <button class="btn-top" id="btn-close-doctor-footer" style="padding: 4px 12px; font-size: 11px;">Close</button>
       </div>
     </div>
   </div>
@@ -3291,6 +3335,31 @@ Status: ACTIVE
             pillDoctor.className = res.is_live_llm ? "meta-pill status-green" : "meta-pill";
             pillDoctor.title = `Hermes Pre-Flight Doctor:\n• OS: ${res.os_name} ${res.os_release || ''}\n• Python: ${res.python_version}\n• Git: ${res.git_version}\n• Playwright: ${res.playwright_version || (res.has_playwright ? 'Ready' : 'Not installed')}\n• Node: ${res.node_version || 'Not installed'}\n• LLM: ${res.llm_provider} (${res.llm_status})${res.ping_ms !== null ? ' • ' + res.ping_ms + 'ms' : ''}\n• AST Guard: ${res.tree_sitter || 'Active'}\n\nClick to ping live LLM`;
           }
+          // Populate Doctor modal fields
+          const docOs = document.getElementById('doc-os');
+          if (docOs) docOs.innerText = `${res.os_name} ${res.os_release || ''}`;
+          const docPy = document.getElementById('doc-py');
+          if (docPy) docPy.innerText = res.python_version || 'Unknown';
+          const docPw = document.getElementById('doc-pw');
+          if (docPw) docPw.innerText = res.playwright_version || (res.has_playwright ? 'Ready' : 'Not installed');
+          const docProvider = document.getElementById('doc-provider');
+          if (docProvider) docProvider.innerText = res.llm_provider || 'Deterministic';
+          const docModel = document.getElementById('doc-model');
+          if (docModel) docModel.innerText = res.llm_model || 'qwen2.5-coder:7b';
+          const docStatus = document.getElementById('doc-status');
+          if (docStatus) {
+            docStatus.innerText = res.llm_status || 'ONLINE';
+            docStatus.style.color = res.is_live_llm ? '#4ade80' : '#f59e0b';
+          }
+          const docLatency = document.getElementById('doc-latency');
+          if (docLatency) docLatency.innerText = (res.ping_ms !== null && res.ping_ms !== undefined) ? `${res.ping_ms} ms` : 'Not pinged';
+          const docWsPath = document.getElementById('doc-ws-path');
+          if (docWsPath) docWsPath.innerText = res.workspace_path || '-';
+          const docTestsCount = document.getElementById('doc-tests-count');
+          if (docTestsCount) docTestsCount.innerText = discoveredTestsList.length;
+          const docArtifactsCount = document.getElementById('doc-artifacts-count');
+          if (docArtifactsCount) docArtifactsCount.innerText = discoveredArtifactsList.length;
+
           // Dynamic sync of provider pill
           const labelP = document.getElementById('label-provider');
           if (labelP && res.llm_provider) {
@@ -3303,8 +3372,30 @@ Status: ACTIVE
       }
     }
 
+    const modalDoctor = document.getElementById('modal-doctor-diagnostics');
+    const btnCloseDoctor = document.getElementById('btn-close-doctor');
+    const btnCloseDoctorFooter = document.getElementById('btn-close-doctor-footer');
+    const btnDocPing = document.getElementById('btn-doc-ping');
+    const docPingMsg = document.getElementById('doc-ping-msg');
+
     if (pillDoctor) {
-      pillDoctor.addEventListener('click', () => fetchDoctorStatus(true));
+      pillDoctor.addEventListener('click', () => {
+        if (modalDoctor) modalDoctor.style.display = 'flex';
+        fetchDoctorStatus(false);
+      });
+    }
+    if (btnCloseDoctor) btnCloseDoctor.addEventListener('click', () => {
+      if (modalDoctor) modalDoctor.style.display = 'none';
+    });
+    if (btnCloseDoctorFooter) btnCloseDoctorFooter.addEventListener('click', () => {
+      if (modalDoctor) modalDoctor.style.display = 'none';
+    });
+    if (btnDocPing) {
+      btnDocPing.addEventListener('click', async () => {
+        if (docPingMsg) docPingMsg.innerText = '🔄 Pinging...';
+        await fetchDoctorStatus(true);
+        if (docPingMsg) docPingMsg.innerText = '✅ Live Handshake OK';
+      });
     }
 
     // Left Rail Dual Mode (Failures vs Discovered Tests)
