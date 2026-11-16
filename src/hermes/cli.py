@@ -136,6 +136,7 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 
 def cmd_run(args: argparse.Namespace) -> int:
+    os.environ.setdefault("HERMES_LIVE_PROGRESS", "1")
     workspace = Path(getattr(args, "workspace", ".")).resolve()
     story = getattr(args, "story", None)
     artifact_path = getattr(args, "artifact_path", None)
@@ -202,6 +203,7 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 
 def cmd_heal(args: argparse.Namespace) -> int:
+    os.environ.setdefault("HERMES_LIVE_PROGRESS", "1")
     workspace = Path(getattr(args, "workspace", ".")).resolve()
     artifact_path = getattr(args, "artifact_path", None)
     auto_approve = getattr(args, "auto_approve", False)
