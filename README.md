@@ -2,10 +2,10 @@
 
 [![CI Suite](https://github.com/Prasad-PingFederate/hermes-rerun-agents/actions/workflows/ci.yml/badge.svg)](https://github.com/Prasad-PingFederate/hermes-rerun-agents/actions/workflows/ci.yml)
 [![Hermes Healer](https://github.com/Prasad-PingFederate/hermes-rerun-agents/actions/workflows/hermes-heal.yml/badge.svg)](https://github.com/Prasad-PingFederate/hermes-rerun-agents/actions/workflows/hermes-heal.yml)
-[![Tests](https://img.shields.io/badge/unit%20tests-337%20passed%20(100%25)-brightgreen.svg)](https://github.com/Prasad-PingFederate/hermes-rerun-agents/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/badge/unit%20tests-361%20passed%20(100%25)-brightgreen.svg)](https://github.com/Prasad-PingFederate/hermes-rerun-agents/actions/workflows/ci.yml)
 [![Playwright E2E](https://img.shields.io/badge/console%20e2e-7%20passed%20(100%25)-brightgreen.svg)](https://github.com/Prasad-PingFederate/hermes-rerun-agents/actions/workflows/ci.yml)
 [![Benchmark](https://img.shields.io/badge/evals%20benchmark-24%2F24%20(100%25%20Pass%401)-brightgreen.svg)](#-enterprise-self-healing-benchmark-evals)
-[![Syntax Guard](https://img.shields.io/badge/syntax%20guard-204%2F204%20Python%203.10%20passed-success.svg)](scripts/syntax_guard.py)
+[![Syntax Guard](https://img.shields.io/badge/syntax%20guard-214%2F214%20Python%203.10%20passed-success.svg)](scripts/syntax_guard.py)
 [![Python Matrix](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue.svg)](pyproject.toml)
 [![Governance](https://img.shields.io/badge/governance-Zero%20Assertion%20Erosion-orange.svg)](#-deterministic-5-stage-verification--healing-pipeline)
 [![Security](https://img.shields.io/badge/security-Deterministic%20Delta--SAST-blue.svg)](docs/SECURITY_ARCHITECTURE.md)
@@ -349,6 +349,34 @@ python evals/run_benchmarks.py
 
 ---
 
+## 📁 Repository & Package Layout Architecture
+
+Hermes follows a standard PEP 517/518 package layout with explicit backwards-compatibility shims:
+
+```
+hermes-rerun-agents/
+├── src/hermes/                     # Canonical Package Source (Single Source of Truth)
+│   ├── agents/                     # Specialized reasoning agents (CIDetective, TestHealerAgent, etc.)
+│   ├── core/                       # Core engine (TimeMachine, events, LLM, verification)
+│   ├── console/                    # Tester Console FastAPI backend, WebSocket/SSE & HTML UI
+│   ├── execution/                  # Execution harnesses (SandboxExecutor, DockerSandbox, patch applier)
+│   ├── guards/                     # Security & safety guards (diff review gate, AST, SAST, write gate)
+│   ├── ingestion/                  # Artifact ingestion (JUnit, CTRF, Playwright traces, context slicer)
+│   └── orchestration/              # Sprint scheduling, AutofixThread, DAG & state persistence
+├── core/                           # Backwards-compatibility import shim -> src/hermes/core/
+├── agents/                         # Backwards-compatibility import shim -> src/hermes/agents/
+├── *.py (19 root modules)          # Root compatibility import shims (hermes_cli.py, server.py, etc.)
+├── tests/                          # 361 unit tests covering all gates, shims, and pipelines
+├── console_tests/                  # 7 Playwright browser E2E test specifications
+├── evals/                          # 24 enterprise benchmark evaluation scenarios
+└── scripts/                        # Automated CI validation utilities (syntax_guard.py, etc.)
+```
+
+> [!NOTE]
+> **Single Source of Truth Invariant**: All implementation logic resides exclusively within `src/hermes/`. The 19 `.py` files at the root (such as `hermes_cli.py`, `scrum_master_orchestrator.py`, `write_gate_controller.py`) and root directories `core/` and `agents/` are lightweight, zero-logic import shims maintained for backwards compatibility with legacy automation scripts. This invariant is continuously enforced by `tests/test_packaging_integrity.py` (which guarantees 0 duplicate class definitions in root files).
+
+---
+
 ## 🧪 Comprehensive Verification Suite
 
 Every commit to Hermes is validated against strict verification gates:
@@ -356,11 +384,11 @@ Every commit to Hermes is validated against strict verification gates:
 ```bash
 # 1. Syntax Guard: 100% Python 3.10 syntax compatibility
 python scripts/syntax_guard.py
-# Output: ✅ [SYNTAX GUARD PASSED] All 203 files are 100% Python 3.10 compatible with clean root shims.
+# Output: ✅ [SYNTAX GUARD PASSED] All 214 files are 100% Python 3.10 compatible with clean root shims.
 
-# 2. Complete Unit Test Suite (337 tests)
+# 2. Complete Unit Test Suite (361 tests)
 python -m pytest tests/ -q
-# Output: 337 passed
+# Output: 361 passed
 
 # 3. Playwright Console E2E Suite (7 specifications)
 python -m pytest console_tests/ -v

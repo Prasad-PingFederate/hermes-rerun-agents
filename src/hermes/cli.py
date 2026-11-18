@@ -27,6 +27,19 @@ import webbrowser
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+# Ensure UTF-8 output encoding across Windows cp1252 consoles and CI runners
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+if hasattr(sys.stderr, "reconfigure"):
+    try:
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
+
 from hermes.guards.ast_patch_guard import ASTPatchGuard
 from hermes.ingestion.ci_failure_ingestor import CIFailureIngestor
 from hermes.core.time_machine.engine import TimeMachineEngine

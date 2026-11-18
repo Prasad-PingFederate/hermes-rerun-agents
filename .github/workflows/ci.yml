@@ -9,6 +9,9 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PYTHONIOENCODING: "utf-8"
     strategy:
       fail-fast: false
       matrix:
@@ -55,6 +58,9 @@ jobs:
 
   cross-platform-smoke:
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    env:
+      PYTHONIOENCODING: "utf-8"
     strategy:
       fail-fast: false
       matrix:
@@ -88,10 +94,13 @@ jobs:
     needs: [test, cross-platform-smoke]
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
       id-token: write
       attestations: write
+    env:
+      PYTHONIOENCODING: "utf-8"
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4

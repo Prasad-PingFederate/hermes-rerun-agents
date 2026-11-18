@@ -16,6 +16,9 @@ permissions:
 jobs:
   hermes-shadow-heal:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PYTHONIOENCODING: "utf-8"
     steps:
       - name: Checkout Codebase
         uses: actions/checkout@v4
