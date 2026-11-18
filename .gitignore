@@ -41,3 +41,5 @@ playwright-report/
 .DS_Store
 Thumbs.db
 *.egg-info/
+release_notes_*.md
+
