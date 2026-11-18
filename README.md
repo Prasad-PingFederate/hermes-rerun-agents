@@ -16,6 +16,28 @@
 
 ---
 
+## 🏢 Enterprise-Grade Autonomous Architecture (Inspired by OpenHands & Playwright)
+
+Hermes pairs **deterministic enterprise safety gates** with **modern autonomous agent execution**:
+
+1. **Dual Sandboxing Engine**:
+   - **Native Ephemeral Git Worktrees**: Zero-overhead, sub-millisecond isolated worktrees on host filesystem.
+   - **Enterprise Docker Sandbox (`DockerSandboxExecutor`)**: Full containerized microVM isolation with memory constraints (`--memory 4g`), CPU limits (`--cpus 2.0`), and safe read-only mounts.
+2. **Interactive Live Browser Explorer (`LiveBrowserExplorerAgent`)**:
+   - Multimodal Chromium driver (inspired by OpenHands / BrowserGym) that explores live web applications, probes form states, tracks console & GraphQL errors, and derives resilient locator strategies.
+3. **Frontend Companion Repository Inspection (`FrontendCompanionInspector`)**:
+   - Auto-discovers companion frontend codebases (e.g. `b4igo-frontend-predev`), searches React/Next.js/Vue component files, and extracts form inputs, directives, and submit handlers.
+4. **Backend Network Forensics & Error ID Extraction**:
+   - Detects backend GraphQL mutation rejections, Error IDs (`[Error ID: 9405-XK0R]`), UI toast alerts, and Playwright strict-mode violations, converting them into structured Acceptance Criteria.
+5. **Event-Sourced Audit Stream (`EventStreamBus`)**:
+   - Append-only event bus streaming typed actions, observations, AST checks, and verification telemetry persisted to `.rerun_tasks/event_stream.jsonl`.
+6. **Strict Quality & Non-Destructive Boundaries**:
+   - **Zero Assertion Erosion Guard**: Strictly forbids deleting assertions or injecting `@pytest.mark.skip` / `pytest.xfail`.
+   - **`ASTPatchGuard`**: Validates syntax and AST structure before writing to disk.
+   - **Deterministic Delta-SAST**: Scans for credential leaks, SQL injection, and command injection.
+
+---
+
 ## ⚡ 60-Second Install with GitHub Actions
 
 Hermes installs into any repository—Python, TypeScript/Node, Java, Go, C#, or Rust—with zero dependency collisions. The Action is **100% self-bootstrapping**: it creates an isolated runtime environment (`${{ runner.temp }}/hermes_env`) and installs its requirements into it, completely bypassing the target repo's dependencies.

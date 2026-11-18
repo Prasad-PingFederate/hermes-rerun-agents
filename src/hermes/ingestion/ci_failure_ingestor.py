@@ -54,6 +54,11 @@ class DOMLocatorHints:
     dom_snippet: Optional[str] = None
     aka_locator: Optional[str] = None
     all_candidates: List[str] = field(default_factory=list)
+    backend_error_ids: List[str] = field(default_factory=list)
+    toast_messages: List[str] = field(default_factory=list)
+    graphql_operations: List[str] = field(default_factory=list)
+    strict_mode_violations: Optional[str] = None
+    companion_forensics: Optional[str] = None
 
     def to_prompt_str(self) -> str:
         lines = []
@@ -63,10 +68,22 @@ class DOMLocatorHints:
             lines.append(f"Recommended Updated Locator: {self.candidate_selector}")
         if self.aka_locator:
             lines.append(f"Playwright Alternative Suggestion: {self.aka_locator}")
+        if self.strict_mode_violations:
+            lines.append(f"Playwright Strict-Mode Violation: {self.strict_mode_violations}")
+            lines.append("Remediation Rule: Add .first or scope locator inside parent container/modal.")
+        if self.backend_error_ids:
+            lines.append(f"Backend Rejection Error IDs: {', '.join(self.backend_error_ids)}")
+            lines.append("Domain Guidance: Backend mutation rejected submission. Ensure required form controls (e.g. directive options, checkboxes) are checked before submit.")
+        if self.toast_messages:
+            lines.append(f"UI Toasts Captured: {', '.join(self.toast_messages)}")
+        if self.graphql_operations:
+            lines.append(f"GraphQL Mutations / Queries: {', '.join(self.graphql_operations)}")
         if self.all_candidates:
             lines.append(f"Available DOM Elements / TestIds: {', '.join(self.all_candidates)}")
         if self.dom_snippet:
             lines.append(f"DOM Snapshot Excerpt:\n{self.dom_snippet}")
+        if self.companion_forensics:
+            lines.append(f"\n{self.companion_forensics}")
         return "\n".join(lines)
 
 
@@ -118,12 +135,37 @@ class DOMLocatorForensicsExtractor:
                     cand_sel = c
                     break
 
+        # 4. Extract backend error IDs (e.g. [Error ID: 9405-XK0R])
+        error_ids = list(dict.fromkeys(re.findall(r"\[Error ID:\s*([A-Za-z0-9\-]+)\]", text, re.IGNORECASE)))
+
+        # 5. Extract UI toasts (e.g. Toasts seen after submit: ['Error...'])
+        toasts = []
+        m_toasts = re.search(r"(?:Toasts seen after submit|Toasts):\s*(\[[^\]]+\])", text, re.IGNORECASE)
+        if m_toasts:
+            toasts = [m_toasts.group(1)[:250]]
+
+        # 6. Extract GraphQL operations
+        gql_ops = list(dict.fromkeys(re.findall(r"\b(?:mutation|query)\s+([A-Za-z0-9_]+)", text, re.IGNORECASE)))
+        for common_op in ("AssignSubscriber", "UpdateCommunitySharedModules", "CreateRecord", "PublishVault"):
+            if common_op in text and common_op not in gql_ops:
+                gql_ops.append(common_op)
+
+        # 7. Extract strict mode violations
+        strict_viol = None
+        m_strict = re.search(r"strict mode violation:\s*locator\([^)]+\)\s*resolved to \d+ elements", text, re.IGNORECASE)
+        if m_strict:
+            strict_viol = m_strict.group(0)
+
         return DOMLocatorHints(
             failed_selector=failed_sel,
             candidate_selector=cand_sel or (candidates[0] if candidates else None),
             dom_snippet=dom_excerpt,
             aka_locator=aka_loc,
             all_candidates=candidates,
+            backend_error_ids=error_ids,
+            toast_messages=toasts,
+            graphql_operations=gql_ops,
+            strict_mode_violations=strict_viol,
         )
 
 
@@ -399,6 +441,15 @@ class CIFailureIngestor:
         if not allowed_files:
             allowed_files.add("tests/test_calc.py")
 
+        # Extract companion frontend forensics if companion repository is present
+        try:
+            from hermes.ingestion.frontend_companion_inspector import FrontendCompanionInspector
+            comp_hints = FrontendCompanionInspector.build_companion_hints(self.workspace_root, output_or_xml)
+            if comp_hints:
+                dom_hints.companion_forensics = comp_hints
+        except Exception:
+            pass
+
         # Decompose into Acceptance Criteria and Edge Cases
         acs = [
             f"AC-1: Resolve {f.exception_type} in {f.test_node_id} ({f.error_message[:60]})"
@@ -409,6 +460,16 @@ class CIFailureIngestor:
         if dom_hints.failed_selector and dom_hints.candidate_selector:
             acs.append(
                 f"AC-3: Update drifted locator '{dom_hints.failed_selector}' to target '{dom_hints.candidate_selector}'."
+            )
+
+        if dom_hints.backend_error_ids:
+            acs.append(
+                f"AC-4: Handle backend error rejection {', '.join(dom_hints.backend_error_ids)}: ensure required form radio/checkbox directives are selected prior to submission."
+            )
+
+        if dom_hints.strict_mode_violations:
+            acs.append(
+                "AC-5: Resolve Playwright strict-mode violation by adding .first or scoping locator to parent container/modal."
             )
 
         ecs = [

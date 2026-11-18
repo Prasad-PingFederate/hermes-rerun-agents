@@ -863,12 +863,18 @@ class ScrumMasterOrchestrator:
                 return v_proc.returncode == 0
             try:
                 is_win = (os.name == "nt")
-                npx_bin = shutil.which("npx")
-                if npx_bin:
-                    n_proc = subprocess.run([npx_bin, "--no-install", "playwright", "--version"], capture_output=True, text=True, shell=is_win)
-                    if n_proc.returncode == 0:
-                        v_proc = subprocess.run([npx_bin, "playwright", "test"], cwd=str(self.workspace_path), capture_output=True, text=True, shell=is_win)
-                        return v_proc.returncode == 0
+                has_node_pw = (
+                    (self.workspace_path / "package.json").is_file()
+                    or (self.workspace_path / "playwright.config.ts").is_file()
+                    or (self.workspace_path / "playwright.config.js").is_file()
+                )
+                if has_node_pw:
+                    npx_bin = shutil.which("npx")
+                    if npx_bin:
+                        n_proc = subprocess.run([npx_bin, "--no-install", "playwright", "--version"], capture_output=True, text=True, shell=is_win)
+                        if n_proc.returncode == 0:
+                            v_proc = subprocess.run([npx_bin, "playwright", "test"], cwd=str(self.workspace_path), capture_output=True, text=True, shell=is_win)
+                            return v_proc.returncode == 0
             except Exception:
                 pass
             return True

@@ -109,6 +109,20 @@ class SandboxExecutor:
         self.default_timeout_seconds = default_timeout_seconds
         self.is_untrusted_fork = is_untrusted_fork or os.environ.get("HERMES_IS_FORK_PR", "").lower() in ("true", "1")
 
+    def run_in_docker_sandbox(
+        self,
+        command: List[str],
+        image: Optional[str] = None,
+        timeout: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Executes the test command inside an enterprise isolated Docker container."""
+        from hermes.execution.docker_sandbox import DockerSandboxExecutor
+        if not DockerSandboxExecutor.is_docker_available():
+            raise RuntimeError("Docker daemon is not reachable on the host.")
+        executor = DockerSandboxExecutor(self.workspace_path, image=image)
+        sanitized_env = self.sanitize_subprocess_env()
+        return executor.execute_in_container(command, env_vars=sanitized_env, timeout=timeout or self.default_timeout_seconds)
+
     def is_git_repo(self) -> bool:
         """Check if workspace is inside an initialized git repository with at least one commit."""
         try:

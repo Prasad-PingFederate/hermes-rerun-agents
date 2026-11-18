@@ -153,6 +153,39 @@ class CIDetectiveAgent:
         }
 
     @classmethod
+    def sync_upstream_repository(
+        cls,
+        workspace_path: Optional[Union[Path, str]] = None,
+        remote: str = "origin",
+        timeout: int = 8,
+    ) -> Dict[str, Any]:
+        """Safely fetches latest commits from upstream git remote and logs branch status."""
+        ws = Path(workspace_path).resolve() if workspace_path else Path.cwd()
+        info: Dict[str, Any] = {"synced": False, "branch": "unknown", "head_commit": "", "diff_summary": ""}
+        if not (ws / ".git").exists():
+            return info
+
+        try:
+            # Detect branch
+            b_proc = subprocess.run(["git", "branch", "--show-current"], cwd=str(ws), capture_output=True, text=True, timeout=timeout)
+            if b_proc.returncode == 0:
+                info["branch"] = b_proc.stdout.strip()
+
+            # Run git fetch
+            fetch_proc = subprocess.run(["git", "fetch", remote], cwd=str(ws), capture_output=True, text=True, timeout=timeout)
+            if fetch_proc.returncode == 0:
+                info["synced"] = True
+
+            # Get head commit
+            c_proc = subprocess.run(["git", "log", "-n", "1", "--oneline"], cwd=str(ws), capture_output=True, text=True, timeout=timeout)
+            if c_proc.returncode == 0:
+                info["head_commit"] = c_proc.stdout.strip()
+        except Exception as exc:
+            info["error"] = str(exc)
+
+        return info
+
+    @classmethod
     def classify_failure_with_intent(
         cls,
         combined_output: str,

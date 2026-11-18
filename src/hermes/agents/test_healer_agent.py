@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from hermes.core.healer.gemini_flash import GeminiFlashHealer
+from hermes.guards.diff_review_gate import DefaultDiffCritic, review_diff
 from hermes.orchestration.scrum_master_orchestrator import ScrumMasterOrchestrator
 from hermes.core.rerun_bridge.orchestrator import RerunOrchestrator
 from hermes.core.sandbox.runner import SandboxRunner
@@ -192,7 +193,7 @@ class TestHealerAgent:
             "task_id": task_id,
         }
 
-    def apply_task(self, task_id: str) -> Dict[str, Any]:
+    def apply_task(self, task_id: str, critic: Optional[Any] = None) -> Dict[str, Any]:
         """Explicit apply: Applies proposed patch to workspace only after task is AWAITING_APPROVAL or APPROVED."""
         task = self.orchestrator.get_task(task_id)
         if not task:
@@ -270,6 +271,77 @@ class TestHealerAgent:
         # Validate every target file path in proposed changes using workspace path validator
         for rel_file in files_to_apply:
             self.tm._validate_safe_workspace_path(rel_file, allow_missing=True)
+
+        # --- Diff Review Gate Validation (OpenQodex-style) ---
+        review_diff_text = ""
+        review_files_dict: Dict[str, str] = {}
+        import difflib
+
+        if sandbox_copy and Path(sandbox_copy).is_dir():
+            copy_dir = Path(sandbox_copy)
+            if (copy_dir / ".git").is_dir():
+                diff_proc = subprocess.run(
+                    ["git", "diff", "HEAD"],
+                    cwd=str(copy_dir),
+                    capture_output=True,
+                    text=True,
+                )
+                if diff_proc.returncode == 0:
+                    review_diff_text = diff_proc.stdout
+
+            if not review_diff_text:
+                diff_chunks: List[str] = []
+                for rel_f in files_to_apply:
+                    src_f = copy_dir / rel_f
+                    orig_f = self.workspace_path / rel_f
+                    orig_lines = orig_f.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True) if orig_f.is_file() else []
+                    new_lines = src_f.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True) if src_f.is_file() else []
+                    clean_rel = rel_f.replace("\\", "/")
+                    chunk = "".join(difflib.unified_diff(orig_lines, new_lines, fromfile="a/" + clean_rel, tofile="b/" + clean_rel))
+                    if chunk:
+                        diff_chunks.append(chunk)
+                review_diff_text = "\n".join(diff_chunks)
+
+            for rel_f in files_to_apply:
+                clean_rel = rel_f.replace("\\", "/")
+                src_f = copy_dir / rel_f
+                if src_f.is_file():
+                    review_files_dict[clean_rel] = src_f.read_text(encoding="utf-8", errors="replace")
+                elif (self.workspace_path / rel_f).is_file():
+                    review_files_dict[clean_rel] = (self.workspace_path / rel_f).read_text(encoding="utf-8", errors="replace")
+        elif proposed_patch:
+            review_diff_text = proposed_patch
+            for rel_f in files_to_apply:
+                clean_rel = rel_f.replace("\\", "/")
+                orig_f = self.workspace_path / rel_f
+                orig_text = orig_f.read_text(encoding="utf-8", errors="replace") if orig_f.is_file() else ""
+                if not proposed_patch.startswith("diff --git") and not proposed_patch.startswith("---"):
+                    review_files_dict[clean_rel] = proposed_patch
+                    orig_lines = orig_text.splitlines(keepends=True)
+                    new_lines = proposed_patch.splitlines(keepends=True)
+                    review_diff_text = "".join(difflib.unified_diff(orig_lines, new_lines, fromfile="a/" + clean_rel, tofile="b/" + clean_rel))
+                else:
+                    review_files_dict[clean_rel] = orig_text
+
+        critic_to_use = critic or task.details.get("critic") or DefaultDiffCritic(workspace=self.workspace_path)
+        candidate_findings = task.details.get("candidate_findings")
+
+        gate_res = review_diff(
+            diff_text=review_diff_text,
+            files=review_files_dict,
+            critic=critic_to_use,
+            candidate_findings=candidate_findings,
+            workspace=self.workspace_path,
+        )
+
+        if not gate_res.get("allow_apply", False):
+            # If allow_apply is false, do not snapshot, do not copy, do not mark the task COMPLETED.
+            # Leave the task in AWAITING_APPROVAL.
+            self.orchestrator.update_task_status(task_id, "AWAITING_APPROVAL")
+            report_p = gate_res.get("report_path", "")
+            confirmed_titles = gate_res.get("confirmed_majors", [])
+            titles_msg = ", ".join(confirmed_titles) if confirmed_titles else "unresolved major findings or incomplete review"
+            raise ValueError(f"Diff review gate rejected patch: report={report_p}, confirmed_majors=[{titles_msg}]")
 
         # Take a snapshot via TimeMachine before writing files
         pre_apply_snap = self.tm.create_snapshot(

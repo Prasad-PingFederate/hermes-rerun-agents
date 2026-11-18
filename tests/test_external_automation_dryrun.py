@@ -32,6 +32,16 @@ from hermes.orchestration.sprint_state_store import SprintStateStore
 class TestExternalAutomationDryRun(unittest.TestCase):
     """End-to-end field readiness tests for external automation repositories."""
 
+    def setUp(self):
+        self._orig_prov = os.environ.get("HERMES_LLM_PROVIDER")
+        os.environ["HERMES_LLM_PROVIDER"] = "none"
+
+    def tearDown(self):
+        if self._orig_prov is not None:
+            os.environ["HERMES_LLM_PROVIDER"] = self._orig_prov
+        else:
+            os.environ.pop("HERMES_LLM_PROVIDER", None)
+
     def _init_git_repo(self, path: Path) -> None:
         subprocess.run(["git", "init"], cwd=str(path), check=True, capture_output=True)
         subprocess.run(["git", "config", "user.email", "ci@hermes-rerun.ai"], cwd=str(path), check=True, capture_output=True)

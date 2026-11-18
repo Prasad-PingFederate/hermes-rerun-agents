@@ -29,6 +29,7 @@ playwright-report/
 .rerun_tasks/
 .hermes/
 .hermes_artifacts/
+.openqodex/
 *.db
 *.sqlite
 *.sqlite3

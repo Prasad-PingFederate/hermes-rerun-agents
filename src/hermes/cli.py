@@ -6,6 +6,8 @@ Commands:
 - hermes_cli.py agents: Prints the 8-Agent Role, Tier, Skills & Boundaries table.
 - hermes_cli.py run --story "..." --scope "src/..." [--auto-approve]: Runs full proactive sprint.
 - hermes_cli.py heal --pytest-cmd "pytest -q" [--auto-approve]: End-to-end test failure triage and healing.
+- hermes_cli.py autofix --test <test-path> [--base <branch>]: Autonomous autofix thread (one red test in, one branch out).
+- hermes_cli.py review --diff <path-to-unified-diff>: OpenQodex-style diff review gate evaluation.
 - hermes_cli.py status: Displays active/paused sprints, snapshots, and audit records.
 - hermes_cli.py approve --sprint-id <id>: Approves staged write-gate proposal.
 - hermes_cli.py rollback --snapshot-id <id>: Rolls back workspace to specified snapshot.
@@ -145,6 +147,12 @@ def cmd_run(args: argparse.Namespace) -> int:
     auto_approve = getattr(args, "auto_approve", False)
     shadow = getattr(args, "shadow", False)
 
+    if getattr(args, "sync_git", False):
+        from hermes.agents.ci_detective import CIDetectiveAgent
+        sync_res = CIDetectiveAgent.sync_upstream_repository(workspace)
+        if sync_res.get("synced"):
+            print(f"🔄 [Hermes Git Sync] Fetched latest commits from origin for branch: {sync_res.get('branch')} ({sync_res.get('head_commit')})")
+
     if not story and not artifact_path and not raw_pytest:
         print("❌ Error: Must specify --story, --artifact-path, or --pytest-cmd.")
         return 1
@@ -209,6 +217,12 @@ def cmd_heal(args: argparse.Namespace) -> int:
     auto_approve = getattr(args, "auto_approve", False)
     shadow = getattr(args, "shadow", False)
 
+    if getattr(args, "sync_git", False):
+        from hermes.agents.ci_detective import CIDetectiveAgent
+        sync_res = CIDetectiveAgent.sync_upstream_repository(workspace)
+        if sync_res.get("synced"):
+            print(f"🔄 [Hermes Git Sync] Fetched latest commits from origin for branch: {sync_res.get('branch')} ({sync_res.get('head_commit')})")
+
     pytest_cmd = None
     if getattr(args, "pytest_cmd", None):
         raw_cmd = args.pytest_cmd.split() if isinstance(args.pytest_cmd, str) else list(args.pytest_cmd)
@@ -245,6 +259,61 @@ def cmd_heal(args: argparse.Namespace) -> int:
     else:
         print(f"❌ Heal failed: {res.get('error', res.get('status'))}")
         return 1
+
+
+def cmd_autofix(args: argparse.Namespace) -> int:
+    """Execute autonomous autofix thread: one red test in, one branch out, no merge."""
+    workspace = Path(getattr(args, "workspace", ".")).resolve()
+    test_path = args.test
+    base = getattr(args, "base", None)
+
+    from hermes.orchestration.autofix_thread import AutofixThread
+
+    thread = AutofixThread(workspace=workspace, base_branch=base)
+    res = thread.run(test_path=test_path)
+
+    status = res.get("status")
+    if status in ("READY_FOR_REVIEW", "PASSED"):
+        return 0
+    return 1
+
+
+def cmd_review(args: argparse.Namespace) -> int:
+    """Evaluate a unified diff against the diff review gate."""
+    diff_path = Path(args.diff).resolve()
+    if not diff_path.exists():
+        print(f"❌ Error: Diff file not found at {diff_path}")
+        return 2
+
+    diff_text = diff_path.read_text(encoding="utf-8")
+    workspace = Path(getattr(args, "workspace", ".")).resolve()
+
+    from hermes.guards.diff_review_gate import DefaultDiffCritic, parse_unified_diff, review_diff
+
+    parsed = parse_unified_diff(diff_text)
+    files: Dict[str, str] = {}
+    for rel_file in parsed.keys():
+        target_path = workspace / rel_file
+        if target_path.exists() and target_path.is_file():
+            try:
+                files[rel_file] = target_path.read_text(encoding="utf-8")
+            except Exception:
+                files[rel_file] = ""
+        else:
+            files[rel_file] = ""
+
+    critic = DefaultDiffCritic(str(workspace))
+    result = review_diff(diff_text, files, critic=critic, workspace=str(workspace))
+
+    verdict = result.get("verdict", "INCOMPLETE")
+    report_path = result.get("report_path", "")
+
+    print(f"Verdict: {verdict}")
+    print(f"Report: {report_path}")
+
+    if verdict == "ALLOWED":
+        return 0
+    return 2
 
 
 def cmd_approve(args: argparse.Namespace) -> int:
@@ -458,6 +527,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_p.add_argument("--scope", default="", help="Comma-separated allowed files scope")
     run_p.add_argument("--auto-approve", action="store_true", help="Auto-approve without CLI prompt")
     run_p.add_argument("--shadow", action="store_true", help="Run in shadow mode (dry run)")
+    run_p.add_argument("--sync-git", action="store_true", help="Fetch latest upstream git commits before running")
 
     # heal
     heal_p = subparsers.add_parser("heal", help="Triage and heal failing pytest tests or CI artifacts")
@@ -466,6 +536,18 @@ def build_parser() -> argparse.ArgumentParser:
     heal_p.add_argument("--artifact-path", default=None, help="Path or glob pattern for CI failure artifacts")
     heal_p.add_argument("--auto-approve", action="store_true", help="Auto-approve verified patch")
     heal_p.add_argument("--shadow", action="store_true", help="Run in shadow mode (dry run)")
+    heal_p.add_argument("--sync-git", action="store_true", help="Fetch latest upstream git commits before healing")
+
+    # autofix
+    af_p = subparsers.add_parser("autofix", help="Autofix thread: one red test in, one branch out, no merge")
+    af_p.add_argument("--test", required=True, help="Test path or selector to execute and heal")
+    af_p.add_argument("--base", default=None, help="Base branch (default: current branch)")
+    af_p.add_argument("--workspace", default=".", help="Target workspace path")
+
+    # review
+    rev_p = subparsers.add_parser("review", help="Review a unified diff using the diff review gate")
+    rev_p.add_argument("--diff", required=True, help="Path to unified diff file")
+    rev_p.add_argument("--workspace", default=".", help="Target workspace path")
 
     # approve
     app_p = subparsers.add_parser("approve", help="Approve paused sprint at write-gate")
@@ -562,6 +644,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         "status": cmd_status,
         "run": cmd_run,
         "heal": cmd_heal,
+        "autofix": cmd_autofix,
+        "review": cmd_review,
         "approve": cmd_approve,
         "rollback": cmd_rollback,
         "console": cmd_console,
