@@ -90,3 +90,18 @@ audit:
   # OTLP/HTTP collector endpoint (defaults to env var OTEL_EXPORTER_OTLP_ENDPOINT)
   # otel_endpoint: "https://otlp.datadoghq.com"
 
+
+cost_governance:
+  enabled: true
+  per_run_usd_cap: 1.50
+  per_pr_usd_cap: 5.00
+  daily_org_usd_cap: 50.00
+  max_tokens_per_run: 120000
+  soft_threshold_ratio: 0.70
+  fallback_model_chain:
+    - gpt-4o-mini
+    - gemini-2.5-flash
+  circuit_breaker_window_seconds: 900
+  circuit_breaker_unique_prs_threshold: 5
+  circuit_breaker_cooldown_seconds: 1800
+  ledger_path: .rerun_tasks/cost_ledger.json
